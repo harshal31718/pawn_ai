@@ -1,14 +1,15 @@
 # PAWN — Current State
 
-Last updated: [date of last step]
-Active step: Step 1 — Create the repo
+Last updated: 2026-06-15
+Active step: Step 2 — Claude Code config (already done in scaffolding; next is Step 2.5)
 Phase: Phase 1 — Foundation
 
 ---
 
 ## What's Built
 
-Nothing yet. Starting from scratch.
+- Step 1: repo directory structure — `backend/app/`, `backend/tests/`, `frontend/src/`, `.gitignore`, `.dockerignore`, `secrets/.gitkeep`
+- Step 2: `.claude/` config — CLAUDE.md, AGENTS.md, rules (4), agents (5), skills/build-step, settings.json with hooks
 
 ---
 

@@ -14,19 +14,19 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1 — Foundation
-**Active step:** Not started
-**Last completed:** —
-**Branch:** main
+**Active step:** Step 2.5 — Docker scaffolding
+**Last completed:** Step 2 — Claude Code config
+**Branch:** dev
 
 ---
 
 ## Phase 1 — Foundation
 *Plan reference: `plan/04-phase1-foundation.md`*
 
-- [ ] **Step 1 — Create the repo**
+- [x] **Step 1 — Create the repo**
   Folder structure, `.gitignore`, first commit. Demo: `git log` shows one commit.
 
-- [ ] **Step 2 — Claude Code config**
+- [x] **Step 2 — Claude Code config**
   `.claude/` wired: CLAUDE.md, rules, agents, skills, settings.json with hook.
   Demo: `claude` in the repo; rules load; hook blocks secret touches.
 
