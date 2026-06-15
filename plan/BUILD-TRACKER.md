@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1 — Foundation
-**Active step:** Step 4 — FastAPI backend
-**Last completed:** Step 3 — Chat UI
+**Active step:** Step 5 — Connect frontend to backend
+**Last completed:** Step 4 — FastAPI backend
 **Branch:** dev
 
 ---
@@ -38,7 +38,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   React + Vite + TS + Tailwind. Components: ChatWindow, MessageInput, Message.
   Demo: type a message; it appears as a bubble.
 
-- [ ] **Step 4 — FastAPI backend**
+- [x] **Step 4 — FastAPI backend**
   Health check, middleware stack (security headers, timeout, gzip).
   Demo: `curl http://localhost:8000/health` → `{"status":"ok"}`.
 

@@ -50,4 +50,12 @@ This becomes your interview script and project history.
 **Tests:** `npm run build` passes clean (tsc + vite build, 0 type errors, 0 vulns).
 **Commit:** feat: static chat UI — message list, input, bubbles
 
+### 2026-06-15 — Step 4: FastAPI Backend
+
+**Built:** `main.py` (FastAPI + middleware stack), `middleware/security.py` (SecurityHeadersMiddleware: X-Frame-Options, CSP, X-Content-Type-Options, Referrer-Policy), `middleware/timeout.py` (45s timeout, SSE paths exempt), `exceptions.py` (ProviderError, NoEndpointError, HTTP handlers), `tests/test_health.py` (2 tests).
+**Decisions:** Used `httpx2` instead of `httpx` to silence Starlette deprecation warning in TestClient. Exception handlers registered in `main.py` even though no provider routes exist yet — establishes the pattern for Step 6+.
+**Issues:** `httpx` deprecation warning from Starlette TestClient — fixed by swapping to `httpx2`.
+**Tests:** 2 passed (health returns ok, security headers present). Ran inside Docker container.
+**Commit:** feat: fastapi backend — health check, middleware stack
+
 (entries added here as steps complete)
