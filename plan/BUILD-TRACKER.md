@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1 — Foundation
-**Active step:** Step 3 — Chat UI
-**Last completed:** Step 2.5 — Docker scaffolding
+**Active step:** Step 4 — FastAPI backend
+**Last completed:** Step 3 — Chat UI
 **Branch:** dev
 
 ---
@@ -34,7 +34,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `constants.py`, `config.py`, `docker-compose.yml`, secrets pattern.
   Demo: `docker compose config` validates.
 
-- [ ] **Step 3 — Chat UI**
+- [x] **Step 3 — Chat UI**
   React + Vite + TS + Tailwind. Components: ChatWindow, MessageInput, Message.
   Demo: type a message; it appears as a bubble.
 

@@ -42,4 +42,12 @@ This becomes your interview script and project history.
 **Tests:** `docker compose config` validates cleanly; secrets mount at `/run/secrets/*`.
 **Commit:** chore: docker scaffolding — compose, secrets-as-files, constants, config loader
 
+### 2026-06-15 — Step 3: Static Chat UI
+
+**Built:** React + Vite 8 + TypeScript + Tailwind v4 frontend. Components: `ChatWindow` (scrollable, auto-scroll to bottom), `MessageInput` (Enter sends, Shift+Enter newline), `Message` (user bubble right/dark, assistant left/light). `src/types.ts` defines `Message` and `ChatState`. Messages echo locally — no API calls yet.
+**Decisions:** Used Tailwind v4 CSS-first setup (`@import "tailwindcss"` + `@tailwindcss/vite` plugin) — no config file needed. Upgraded Vite 6→8 to resolve esbuild high-severity vuln (0 vulns after fix). Module counter (`nextId`) is file-scoped to avoid state management overhead at this stage.
+**Issues:** esbuild vuln in Vite 6 — fixed by upgrading to Vite 8 + @vitejs/plugin-react 6.
+**Tests:** `npm run build` passes clean (tsc + vite build, 0 type errors, 0 vulns).
+**Commit:** feat: static chat UI — message list, input, bubbles
+
 (entries added here as steps complete)
