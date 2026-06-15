@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-15
-Active step: Step 2 — Claude Code config (already done in scaffolding; next is Step 2.5)
+Active step: Step 3 — Chat UI
 Phase: Phase 1 — Foundation
 
 ---
@@ -10,6 +10,7 @@ Phase: Phase 1 — Foundation
 
 - Step 1: repo directory structure — `backend/app/`, `backend/tests/`, `frontend/src/`, `.gitignore`, `.dockerignore`, `secrets/.gitkeep`
 - Step 2: `.claude/` config — CLAUDE.md, AGENTS.md, rules (4), agents (5), skills/build-step, settings.json with hooks
+- Step 2.5: Docker scaffolding — `docker-compose.yml`, `constants.py`, `config.py`, secrets-as-files pattern, `backend/Dockerfile`, `backend/requirements.txt`, `frontend/Dockerfile`, 5 `secrets/*.example` files
 
 ---
 

@@ -34,4 +34,12 @@ This becomes your interview script and project history.
 **Tests:** N/A.
 **Commit:** chore: project scaffolding — .claude config, docs/, secrets pattern
 
+### 2026-06-15 — Step 2.5: Docker Scaffolding
+
+**Built:** `docker-compose.yml` with secrets block, `constants.py` (all paths from `DATA_DIR`), `config.py` (`read_secret()` checks `/run/secrets/` first then env var fallback), `backend/Dockerfile`, `backend/requirements.txt`, `frontend/Dockerfile`, 5 `secrets/*.example` files, empty gitignored placeholder secret files.
+**Decisions:** Placeholder secret files created locally (gitignored) so `docker compose config` resolves without real keys. Dockerfiles are minimal stubs — full content in Steps 3 and 4.
+**Issues:** None.
+**Tests:** `docker compose config` validates cleanly; secrets mount at `/run/secrets/*`.
+**Commit:** chore: docker scaffolding — compose, secrets-as-files, constants, config loader
+
 (entries added here as steps complete)

@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1 — Foundation
-**Active step:** Step 2.5 — Docker scaffolding
-**Last completed:** Step 2 — Claude Code config
+**Active step:** Step 3 — Chat UI
+**Last completed:** Step 2.5 — Docker scaffolding
 **Branch:** dev
 
 ---
@@ -30,7 +30,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `.claude/` wired: CLAUDE.md, rules, agents, skills, settings.json with hook.
   Demo: `claude` in the repo; rules load; hook blocks secret touches.
 
-- [ ] **Step 2.5 — Docker scaffolding**
+- [x] **Step 2.5 — Docker scaffolding**
   `constants.py`, `config.py`, `docker-compose.yml`, secrets pattern.
   Demo: `docker compose config` validates.
 
