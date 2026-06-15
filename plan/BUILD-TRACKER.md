@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1 — Foundation
-**Active step:** Step 6 — First real AI response
-**Last completed:** Step 5 — Connect frontend to backend
+**Active step:** Step 7 — Typed SSE events
+**Last completed:** Step 6 — First real AI response
 **Branch:** dev
 
 ---
@@ -46,7 +46,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `api/client.ts`, health check on mount.
   Demo: console logs `{status: ok}` from live backend.
 
-- [ ] **Step 6 — First real AI response**
+- [x] **Step 6 — First real AI response**
   `llm_core.py` minimal, Gemini 2.5 Flash via OAI-compat endpoint.
   Demo: type "hello", get a real Gemini reply streaming.
 

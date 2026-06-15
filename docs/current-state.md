@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-15
-Active step: Step 6 — First real AI response
+Active step: Step 7 — Typed SSE events
 Phase: Phase 1 — Foundation
 
 ---
@@ -14,6 +14,7 @@ Phase: Phase 1 — Foundation
 - Step 3: Static chat UI — React + Vite 8 + TypeScript + Tailwind v4; `ChatWindow`, `MessageInput`, `Message` components; `types.ts`; messages echo locally; `npm run build` passes clean
 - Step 4: FastAPI backend — `main.py` with full middleware stack (GZip, Timeout, SecurityHeaders, CORS), `exceptions.py` (ProviderError, NoEndpointError + handlers), `middleware/security.py`, `middleware/timeout.py`; `GET /health` → `{"status":"ok"}`; 2 tests passing
 - Step 5: Frontend ↔ backend connected — `src/api/client.ts` with `healthCheck()` (VITE_API_URL, res.ok check), `App.tsx` calls it on mount with `.then(console.log).catch(console.error)`; `.env` gitignored; `npm run build` passes
+- Step 6: First real AI response — `llm_core.py` (stream_llm async generator, OAI-compat SSE parsing, shared httpx client with lifespan shutdown), `routes/chat.py` (ChatMessage schema, POST /chat SSE), `streamChat()` in client.ts, streaming state + token accumulation in App.tsx; 4 tests passing
 
 ---
 

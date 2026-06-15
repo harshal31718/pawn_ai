@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -9,8 +10,17 @@ from app.exceptions import (
     provider_error_handler,
     no_endpoint_error_handler,
 )
+from app.routes.chat import router as chat_router
+from app.core.llm_core import close_client
 
-app = FastAPI(title="PAWN")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await close_client()
+
+
+app = FastAPI(title="PAWN", lifespan=lifespan)
 
 app.add_exception_handler(ProviderError, provider_error_handler)
 app.add_exception_handler(NoEndpointError, no_endpoint_error_handler)
@@ -24,6 +34,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(chat_router)
 
 
 @app.get("/health")

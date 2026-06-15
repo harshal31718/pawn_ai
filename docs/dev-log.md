@@ -66,4 +66,12 @@ This becomes your interview script and project history.
 **Tests:** `npm run build` passes (tsc + vite, 0 errors, 20 modules). Backend: 2/2 passing.
 **Commit:** feat: frontend api client + health check wired
 
+### 2026-06-15 — Step 6: First Real AI Response
+
+**Built:** `backend/app/core/llm_core.py` (shared `httpx.AsyncClient`, `_detect_provider`, `_provider_headers`, `_format_upstream_error`, `close_client`, `stream_llm` async generator parsing OAI-compat SSE). `backend/app/routes/chat.py` (typed `ChatMessage` schema with `role: Literal[...]`, `POST /chat` SSE endpoint). `backend/app/main.py` chat router wired + lifespan for async client shutdown. `frontend/src/api/client.ts` `streamChat()` via fetch + ReadableStream. `frontend/src/App.tsx` `isStreaming` state, streaming assistant placeholder, token accumulation.
+**Decisions:** Module-level `httpx.AsyncClient` singleton is a planned deviation; Step 9 refactors to `initialize_managers()` DI. Direct `llm_core` import in `chat.py` (bypassing `normalize.py`) is also planned; `normalize.py` arrives in Step 9. Messages schema typed as `ChatMessage(role: Literal, content: str)` to reject malformed upstream payloads. `close_client()` wired into FastAPI lifespan so the async client shuts down cleanly.
+**Issues:** Test used `resp.text` on a streaming response — `httpx2` raises `ResponseNotRead`; fixed to `resp.read().decode()` inside the stream context manager. Code reviewer flagged bare `except Exception` leaking `str(exc)` to SSE stream — fixed to catch only `ProviderError` using sanitized `exc.message`.
+**Tests:** 4 passed (test_chat_streams_tokens, test_chat_empty_messages, test_health_returns_ok, test_health_has_security_headers).
+**Commit:** feat: first real AI response — llm_core, /chat SSE route, streamChat frontend
+
 (entries added here as steps complete)
