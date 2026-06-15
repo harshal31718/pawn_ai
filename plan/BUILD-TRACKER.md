@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1 — Foundation
-**Active step:** Step 5 — Connect frontend to backend
-**Last completed:** Step 4 — FastAPI backend
+**Active step:** Step 6 — First real AI response
+**Last completed:** Step 5 — Connect frontend to backend
 **Branch:** dev
 
 ---
@@ -42,7 +42,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   Health check, middleware stack (security headers, timeout, gzip).
   Demo: `curl http://localhost:8000/health` → `{"status":"ok"}`.
 
-- [ ] **Step 5 — Connect frontend to backend**
+- [x] **Step 5 — Connect frontend to backend**
   `api/client.ts`, health check on mount.
   Demo: console logs `{status: ok}` from live backend.
 
