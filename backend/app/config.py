@@ -5,7 +5,7 @@ from pathlib import Path
 def read_secret(name: str) -> str | None:
     path = Path(f"/run/secrets/{name}")
     if path.exists():
-        return path.read_text().strip()
+        return path.read_text(encoding="utf-8-sig").strip()
     return os.getenv(name.upper())
 
 

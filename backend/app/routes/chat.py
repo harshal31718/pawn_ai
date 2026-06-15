@@ -10,7 +10,7 @@ from app.exceptions import ProviderError
 router = APIRouter()
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
-GEMINI_MODEL = "gemini-2.5-flash-preview-05-20"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 class ChatMessage(BaseModel):
