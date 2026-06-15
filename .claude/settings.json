@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose *)",
+      "Bash(docker build *)",
+      "Bash(pytest *)",
+      "Bash(npm run *)",
+      "Bash(npm install *)",
+      "Bash(git status)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git checkout *)",
+      "Bash(git branch *)",
+      "Bash(uvicorn *)",
+      "Bash(python -m pytest *)",
+      "Bash(npx *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; if($p.tool_input.command -match 'secrets/[^.\\n]*[\\r\\n]|\\.env[^.]|git +push +.*--force'){Write-Error 'BLOCKED: touches secrets or force-push'; exit 2} else {exit 0}\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; $f=$p.tool_input.file_path; if($f -match 'secrets/' -and $f -notmatch '\\.example$' -and $f -notmatch '\\.gitkeep$'){Write-Error 'BLOCKED: writing to secrets/'; exit 2} else {exit 0}\""
+          }
+        ]
+      }
+    ]
+  }
+}

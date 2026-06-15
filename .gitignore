@@ -1,0 +1,25 @@
+# secrets — never commit real key files
+secrets/*
+!secrets/.gitkeep
+!secrets/*.example
+
+# data — personal conversation and memory files
+data/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# node
+node_modules/
+dist/
+.vite/
+
+# claude local settings
+.claude/settings.local.json
+
+# os
+.DS_Store
+Thumbs.db

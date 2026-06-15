@@ -1,0 +1,29 @@
+# secrets — never in Docker build context
+secrets/*
+!secrets/.gitkeep
+!secrets/*.example
+
+# data — personal files; mounted as a volume, not copied
+data/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# node
+node_modules/
+dist/
+.vite/
+*.log
+
+# dev tools
+.claude/
+.git/
+docs/
+
+# os
+.DS_Store
+Thumbs.db
