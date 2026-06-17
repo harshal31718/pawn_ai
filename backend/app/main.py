@@ -11,6 +11,7 @@ from app.exceptions import (
     no_endpoint_error_handler,
 )
 from app.routes.chat import router as chat_router
+from app.routes.upload import router as upload_router
 from app.core.llm_core import close_client
 
 
@@ -37,6 +38,7 @@ app.add_middleware(
 
 
 app.include_router(chat_router)
+app.include_router(upload_router)
 
 
 @app.get("/health")

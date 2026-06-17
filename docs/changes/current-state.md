@@ -1,8 +1,8 @@
 # PAWN — Current State
 
 Last updated: 2026-06-17
-Active step: Step 8 — Conversation history
-Phase: Phase 1 — Foundation
+Active step: Step 12 — Multi-chat persistence
+Phase: Phase 1.5 — Memory & Agent
 
 ---
 
@@ -14,18 +14,24 @@ Phase: Phase 1 — Foundation
 - Step 3: Static chat UI — React + Vite 8 + TypeScript + Tailwind v4; `ChatWindow`, `MessageInput`, `Message` components; `types.ts`; messages echo locally; `npm run build` passes clean
 - Step 4: FastAPI backend — `main.py` with full middleware stack (GZip, Timeout, SecurityHeaders, CORS), `exceptions.py` (ProviderError, NoEndpointError + handlers), `middleware/security.py`, `middleware/timeout.py`; `GET /health` → `{"status":"ok"}`; 2 tests passing
 - Step 5: Frontend ↔ backend connected — `src/api/client.ts` with `healthCheck()` (VITE_API_URL, res.ok check), `App.tsx` calls it on mount with `.then(console.log).catch(console.error)`; `.env` gitignored; `npm run build` passes
+- Step 6: First real AI response — Gemini 2.5 streaming and `llm_core.py` integration.
 - Step 7: Typed SSE events — `backend/app/events.py` (7 builder functions: token, done, error, provider_switch, step, memory_hit, model_call); `routes/chat.py` uses events module, emits typed JSON, adds `X-Accel-Buffering: no` header; `frontend/src/api/client.ts` refactored to `StreamChatCallbacks` object with `switch(type)` dispatch; 6 tests passing
+- Step 8: Conversation history — Backend forwards full chat history array to upstream models; verified with history routing tests.
+- Step 9: Multi-provider support — `backend/app/core/normalize.py` handles model/provider normalization. Added support for Groq and Cerebras.
+- Step 10: Model switcher UI — Grouped provider/model switcher component integrated in React frontend.
+- Step 11: Document upload — `backend/app/routes/upload.py` accepts PDF/TXT files, extracts text via `pdfplumber`, and stores it in-memory to inject as system message context in `/chat`. Added attachment UI in the input field.
 
 ---
 
 ## What's Working
 
-- [ ] Docker stack running
-- [ ] Backend health check
-- [ ] Frontend serving
-- [ ] Gemini streaming
-- [ ] Cerebras streaming
-- [ ] Model switcher
+- [ ] Docker stack running (validated compose configuration)
+- [x] Backend health check
+- [x] Frontend serving
+- [x] Gemini streaming
+- [x] Cerebras streaming
+- [x] Model switcher
+- [x] Document upload (Basic RAG context injection)
 - [ ] Conversation persistence
 - [ ] Memory RAG
 - [ ] LangGraph agent
@@ -40,13 +46,12 @@ Phase: Phase 1 — Foundation
 - Backend entry: `backend/app/main.py`
 - Provider routing: `backend/app/core/normalize.py`
 - LLM core: `backend/app/core/llm_core.py`
-- Rate limiter: `backend/app/core/rate_limiter.py`
-- Resolver: `backend/app/resolver/resolver.py`
-- Registry loader: `backend/app/registry/loader.py`
-- Constants (all paths): `backend/app/constants.py`
-- Config (secrets): `backend/app/config.py`
 - SSE events: `backend/app/events.py`
 - Frontend API client: `frontend/src/api/client.ts`
+- Model Switcher UI: `frontend/src/components/ModelSwitcher.tsx`
+- App layout: `frontend/src/App.tsx`
+- Constants (all paths): `backend/app/constants.py`
+- Config (secrets): `backend/app/config.py`
 
 ---
 

@@ -5,3 +5,5 @@ httpx
 httpx2
 pytest
 pytest-asyncio
+pdfplumber
+python-multipart

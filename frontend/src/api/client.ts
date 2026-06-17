@@ -7,16 +7,37 @@ export async function healthCheck(): Promise<{ status: string }> {
   return res.json()
 }
 
+/**
+ * Typed SSE event callbacks.
+ * All are optional — wired progressively as each step lands.
+ */
+export interface StreamChatCallbacks {
+  onToken: (delta: string) => void
+  onDone: (viaProvider: string) => void
+  onError: (message: string) => void
+  onStep?: (label: string, detail: string) => void
+  onMemoryHit?: (summary: string) => void
+  onModelCall?: (model: string, purpose: string) => void
+  onProviderSwitch?: (from: string, to: string) => void
+}
+
 export async function streamChat(
   messages: Array<{ role: string; content: string }>,
-  onToken: (token: string) => void,
-  onDone: () => void,
-  onError: (err: string) => void,
+  callbacks: StreamChatCallbacks,
+  provider?: string,
+  docId?: string,
 ): Promise<void> {
+  const { onToken, onDone, onError, onStep, onMemoryHit, onModelCall, onProviderSwitch } =
+    callbacks
+
   const res = await fetch(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({
+      messages,
+      ...(provider ? { provider } : {}),
+      ...(docId ? { doc_id: docId } : {}),
+    }),
   })
 
   if (!res.ok) {
@@ -44,21 +65,74 @@ export async function streamChat(
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue
-        const data = line.slice(6)
-        if (data === '[DONE]') {
-          onDone()
-          return
+        const raw = line.slice(6).trim()
+        if (!raw) continue
+
+        // Parse the typed JSON event
+        let event: Record<string, string>
+        try {
+          event = JSON.parse(raw)
+        } catch {
+          // Not JSON — ignore (should not happen with typed events)
+          continue
         }
-        if (data.startsWith('ERROR: ')) {
-          onError(data.slice(7))
-          return
+
+        switch (event.type) {
+          case 'token':
+            onToken(event.delta ?? '')
+            break
+          case 'done':
+            onDone(event.via_provider ?? '')
+            return
+          case 'error':
+            onError(event.message ?? 'Unknown error')
+            return
+          case 'step':
+            onStep?.(event.label ?? '', event.detail ?? '')
+            break
+          case 'memory_hit':
+            onMemoryHit?.(event.summary ?? '')
+            break
+          case 'model_call':
+            onModelCall?.(event.model ?? '', event.purpose ?? '')
+            break
+          case 'provider_switch':
+            onProviderSwitch?.(event.from ?? '', event.to ?? '')
+            break
+          default:
+            // Unknown event type — ignore silently
+            break
         }
-        onToken(data)
       }
     }
   } finally {
     reader.releaseLock()
   }
 
-  onDone()
+  onDone('')
 }
+
+export async function uploadDoc(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const res = await fetch(`${BASE_URL}/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!res.ok) {
+    let errorDetail = 'Upload failed'
+    try {
+      const data = await res.json()
+      if (data.detail) errorDetail = data.detail
+    } catch {
+      // ignore JSON parse error
+    }
+    throw new Error(errorDetail)
+  }
+
+  const data = await res.json()
+  return data.doc_id
+}
+

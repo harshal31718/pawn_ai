@@ -1,16 +1,17 @@
 from typing import Literal
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core import llm_core
-from app.config import GEMINI_API_KEY
+from app.core.normalize import chat_stream, PROVIDERS
 from app.exceptions import ProviderError
+from app import events
+from app.storage.documents import load_doc
 
 router = APIRouter()
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
-GEMINI_MODEL = "gemini-2.5-flash"
+# Default provider when none is specified (fastest free tier)
+DEFAULT_PROVIDER = "gemini"
 
 
 class ChatMessage(BaseModel):
@@ -20,23 +21,52 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
+    provider: str = DEFAULT_PROVIDER   # e.g. "groq", "cerebras", "gemini"
+    model: str | None = None           # override the provider's default model
+    doc_id: str | None = None          # optional uploaded document ID
 
 
 @router.post("/chat")
 async def chat(req: ChatRequest):
-    headers = {"Authorization": f"Bearer {GEMINI_API_KEY or ''}"}
+    # Retrieve messages from request
+    messages = [m.model_dump() for m in req.messages]
+    
+    # If doc_id is provided, look up and prepend its text
+    if req.doc_id:
+        doc_text = load_doc(req.doc_id)
+        if doc_text is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document with ID {req.doc_id} not found."
+            )
+        
+        system_content = (
+            f"Context from uploaded document:\n"
+            f"====================\n"
+            f"{doc_text}\n"
+            f"====================\n"
+            f"Answer the user's questions using only the above context."
+        )
+        # Prepend to message history as a system prompt
+        messages.insert(0, {"role": "system", "content": system_content})
 
     async def generate():
         try:
-            async for token in llm_core.stream_llm(
-                GEMINI_URL,
-                GEMINI_MODEL,
-                [m.model_dump() for m in req.messages],
-                headers,
+            async for token in chat_stream(
+                req.provider,
+                messages,
+                model=req.model,
             ):
-                yield f"data: {token}\n\n"
+                yield events.token_event(token)
         except ProviderError as exc:
-            yield f"data: ERROR: {exc.message}\n\n"
-        yield "data: [DONE]\n\n"
+            yield events.error_event(exc.message)
+        yield events.done_event(via_provider=req.provider)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -52,7 +52,7 @@ This becomes your interview script and project history.
 
 ### 2026-06-15 — Step 4: FastAPI Backend
 
-**Built:** `main.py` (FastAPI + middleware stack), `middleware/security.py` (SecurityHeadersMiddleware: X-Frame-Options, CSP, X-Content-Type-Options, Referrer-Policy), `middleware/timeout.py` (45s timeout, SSE paths exempt), `exceptions.py` (ProviderError, NoEndpointError, HTTP handlers), `tests/test_health.py` (2 tests).
+**Built:** `main.py` (FastAPI + middleware stack), `middleware/security.py` (SecurityHeadersMiddleware: X-Frame-Options, CSP, X-Content-Type-Options, Referrer-Policy), `middleware/timeout.py` (45s timeout, SSE paths exempt), `exceptions.py` (ProviderError, NoEndpointError + handlers), `tests/test_health.py` (2 tests).
 **Decisions:** Used `httpx2` instead of `httpx` to silence Starlette deprecation warning in TestClient. Exception handlers registered in `main.py` even though no provider routes exist yet — establishes the pattern for Step 6+.
 **Issues:** `httpx` deprecation warning from Starlette TestClient — fixed by swapping to `httpx2`.
 **Tests:** 2 passed (health returns ok, security headers present). Ran inside Docker container.
@@ -89,4 +89,28 @@ This becomes your interview script and project history.
 **Issues:** None.
 **Tests:** 7 passed (1 new: `test_chat_forwards_full_history`; 6 from Step 7 unchanged).
 **Commit:** test: assert full conversation history forwarded to LLM provider
+
+### 2026-06-17 — Step 9: Multi-Provider (normalize.py)
+
+**Built:** `backend/app/core/normalize.py` implementing a 6-provider layout (Groq, Cerebras, Gemini, HuggingFace, GitHub Models, OpenRouter) and unified model routing. Added `groq_api_key` secrets files and Docker secrets mounting. Refactored `chat.py` and backend tests.
+**Decisions:** Groq selected as top priority due to 800+ tok/s speed. Normalizer maps abstract providers to correct baseUrl, default model, and authorization headers.
+**Issues:** Mock patching targets in pytest (must patch `app.core.normalize.stream_llm` instead of `app.core.llm_core.stream_llm`).
+**Tests:** 12 passed (5 new provider routing tests).
+**Commit:** feat: multi-provider model routing with groq support
+
+### 2026-06-17 — Step 10: Model Switcher UI
+
+**Built:** `frontend/src/components/ModelSwitcher.tsx` featuring grouped capability selector (Fast, Balanced, Research). Passed provider state to backend via `streamChat` body payload.
+**Decisions:** Switcher disabled during streaming to avoid mid-stream provider changes that can mess up state logic.
+**Issues:** None.
+**Tests:** 12 passed; frontend builds cleanly with 0 TypeScript issues.
+**Commit:** feat: model switcher UI for selecting providers
+
+### 2026-06-17 — Step 11: Document Upload (pdfplumber)
+
+**Built:** Added `pdfplumber` and `python-multipart` to `backend/requirements.txt`. Implemented `backend/app/storage/documents.py` for in-memory text storage and `backend/app/routes/upload.py` to handle document uploads, extracting content from `.txt` and `.pdf` files. Updated `backend/app/routes/chat.py` to accept `doc_id` and inject the document text as a system message. Added paperclip button and file attachment preview chip in the React frontend (`MessageInput.tsx` and `App.tsx`). Added 6 new integration tests in `backend/tests/test_upload.py`.
+**Decisions:** Use `pdfplumber` for text extraction to handle complex multi-column layouts accurately. Store document text in-memory globally in a backend module to facilitate seamless context injection for stateless chat queries.
+**Issues:** Encountered FastAPI runtime error due to missing `python-multipart` dependency for form parsing; resolved by installing `python-multipart`.
+**Tests:** 18 passed (6 new: upload text, upload PDF mock, unsupported types, empty validation, system message injection, 404 handler). Frontend typechecks and builds cleanly.
+**Commit:** feat: document upload text extraction and system prompt injection
 

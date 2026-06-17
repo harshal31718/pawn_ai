@@ -13,9 +13,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase 1 — Foundation
-**Active step:** Step 7 — Typed SSE events
-**Last completed:** Step 6 — First real AI response
+**Active phase:** Phase 1.5 — Memory & Agent
+**Active step:** Step 12 — Multi-chat persistence
+**Last completed:** Step 11 — Document Upload (pdfplumber)
 **Branch:** dev
 
 ---
@@ -50,23 +50,24 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `llm_core.py` minimal, Gemini 2.5 Flash via OAI-compat endpoint.
   Demo: type "hello", get a real Gemini reply streaming.
 
-- [ ] **Step 7 — Typed SSE events**
-  `events.py` builder functions. All event types wired.
-  Demo: Network tab shows `{"type": "token", "delta": "..."}`.
+- [x] **Step 7 — Typed SSE events**
+  `events.py` builder functions. All event types wired. `StreamChatCallbacks` object in client.ts.
+  Demo: Network tab shows `{"type": "token", "delta": "..."}`. 6 tests passing.
 
-- [ ] **Step 8 — Conversation history**
+- [x] **Step 8 — Conversation history**
   Full message array forwarded per request.
-  Demo: say a name, later ask what it is — AI knows.
+  Test: `test_chat_forwards_full_history` verifies all turns reach the LLM. 7 tests passing.
 
-- [ ] **Step 9 — Multi-provider**
-  Add Cerebras. URL-routing shape in `normalize.py`.
-  Demo: both Gemini and Cerebras stream real replies.
+- [x] **Step 9 — Multi-provider (normalize.py)**
+  `core/normalize.py` with 6-provider PROVIDERS map (Groq, Cerebras, Gemini, HuggingFace, GitHub, OpenRouter).
+  `chat.py` routes through normalize; accepts `provider` field in request.
+  Groq secret added. 12 tests passing.
 
-- [ ] **Step 10 — Model switcher UI**
+- [x] **Step 10 — Model switcher UI**
   Hardcoded dropdown, provider sent per message.
   Demo: switch mid-conversation, context intact.
 
-- [ ] **Step 11 — Basic RAG**
+- [x] **Step 11 — Basic RAG**
   `POST /upload`, whole-doc injection, attach button in UI.
   Demo: upload a doc, ask about it — AI answers from it.
 
