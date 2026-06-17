@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-17
-Active step: Step 15 — RAG over memory
+Active step: Step 16 — LangGraph agent
 Phase: Phase 1.5 — Memory & Agent
 
 ---
@@ -23,6 +23,7 @@ Phase: Phase 1.5 — Memory & Agent
 - Step 12: Multi-chat persistence — Built disk-based conversation serialization (`meta.json` + append-only `messages.jsonl`), REST backend CRUD endpoints, auto-titling background tasks, and a dual-pane layout in React featuring inline renaming and thread deletion.
 - Step 13: Complete typed SSE events — Wired `onStep`, `onMemoryHit`, `onModelCall`, and `onProviderSwitch` callbacks in `App.tsx` and updated `types.ts` message interfaces to store active trace sequences dynamically.
 - Step 14: Per-chat memory summaries — Built context memory window truncation (saving last 10 messages only in active upstream calls), system prompt prepending of rolling context summaries, and enqueued `summarize_conversation_task` on threshold triggers.
+- Step 15: RAG over memory — Integrated hybrid vector-keyword retrieval with `sqlite-vec` (sqlite database with virtual `vec0` + standard metadata table + `FTS5` table + triggers). Linked embeddings to Gemini's `text-embedding-004` (Ollama fallback). Wired retrieval and SSE memory_hit event streams into `/chat`.
 
 ---
 
@@ -36,7 +37,7 @@ Phase: Phase 1.5 — Memory & Agent
 - [x] Model switcher
 - [x] Document upload (Basic RAG context injection)
 - [x] Conversation persistence
-- [ ] Memory RAG
+- [x] Memory RAG
 - [ ] LangGraph agent
 - [ ] Rate-limit failover
 - [ ] Google Drive storage

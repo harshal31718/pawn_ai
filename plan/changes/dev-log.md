@@ -144,7 +144,7 @@ This becomes your interview script and project history.
 **Decisions:** Request a candidate count multiplier of `top_k * 4` during candidate generation before filtering out the active conversation ID, ensuring we retain a sufficient candidate pool.
 **Issues:** None.
 **Tests:** 29 passed (4 new RAG integration tests verifying vector search similarity, active thread filtering, FTS5 fallback, and SSE memory hit streams). Frontend typechecks and builds cleanly.
-**Commit:** feat: hybrid vector FTS RAG over memories with sqlite-vec
+**Commit:** `0b7ac54` (feat: hybrid vector FTS RAG over memories with sqlite-vec)
 
 
 
