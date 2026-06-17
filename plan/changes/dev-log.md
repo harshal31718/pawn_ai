@@ -161,3 +161,11 @@ This becomes your interview script and project history.
 **Issues:** None.
 **Tests:** 41 passing.
 **Commit:** `6b51bcc` (feat: model registry foundation with json data endpoints (step R1))
+
+### 2026-06-17 — Step R2: Rate Limiter
+
+**Built:** Implemented in-memory EndpointRateLimiter class that tracks rolling RPM/RPD limits, filters out endpoints exceeding a 90% threshold, handles custom cooldowns for live 429s, and triggers dead-host locks after consecutive failures. Registered limiter in app_initializer lifespan managers and stored on app.state.
+**Decisions:** Extended EndpointEntry schema limits in schemas.py to default to None for cleaner instantiation in unit tests.
+**Issues:** None.
+**Tests:** 47 passing (6 new rate limiter tests).
+**Commit:** `da568f4` (feat: endpoint rate limiter with 90% soft-wall and cooldowns (step R2))
