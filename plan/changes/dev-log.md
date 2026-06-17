@@ -130,5 +130,14 @@ This becomes your interview script and project history.
 **Tests:** 21 passed; frontend typechecks and builds cleanly.
 **Commit:** feat: wire up all remaining typed SSE trace callbacks in frontend state
 
+### 2026-06-17 — Step 14: Per-Chat Memory Summaries
+
+**Built:** Created `backend/app/memory/summarize.py` implementing bullet-point summarization (`summarize_history`) using the fastest LLM and a disk-write task (`summarize_conversation_task`). Added `load_summary` and `save_summary` in `conversations.py`. Integrated context memory window truncation (to the last 10 messages) in `routes/chat.py` and enqueued background summarization triggers whenever the conversation turn count hits multiples of 20.
+**Decisions:** Truncate context memory to last 10 messages to avoid context window inflation while keeping recent message turns intact. Prepend `summary.md` inside a dedicated system prompt.
+**Issues:** Cleaned up duplicated return statements in the chat router route handler.
+**Tests:** 25 passed (4 new: direct summarizer test, context window truncation verify, summary prepend, and background threshold task trigger). Frontend typechecks and builds cleanly.
+**Commit:** feat: rolling conversation summaries with context memory truncation
+
+
 
 

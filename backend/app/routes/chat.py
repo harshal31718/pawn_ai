@@ -8,6 +8,7 @@ from app.exceptions import ProviderError
 from app import events
 from app.storage.documents import load_doc
 from app.storage import conversations as storage
+from app.memory.summarize import summarize_conversation_task
 
 router = APIRouter()
 
@@ -85,7 +86,24 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
             )
         
         user_msg_dict = req.messages[-1].model_dump()
-        messages_to_send = history + [user_msg_dict]
+        
+        # Keep only the last 10 messages from history in prompt context
+        raw_messages = history[-10:] if len(history) > 10 else history
+        messages_to_send = raw_messages + [user_msg_dict]
+        
+        # Prepend the summary as system message if it exists
+        summary = storage.load_summary(req.conversation_id)
+        if summary:
+            summary_system = {
+                "role": "system",
+                "content": (
+                    f"Summary of earlier part of this conversation:\n"
+                    f"====================\n"
+                    f"{summary}\n"
+                    f"===================="
+                )
+            }
+            messages_to_send.insert(0, summary_system)
     else:
         # Stateless execution: use req.messages as is
         messages_to_send = [m.model_dump() for m in req.messages]
@@ -135,14 +153,22 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 [user_msg_dict, assistant_msg_dict]
             )
             
-            # Trigger auto-title if it is the first turn
+            # Check meta properties post-append
             meta = storage.get_conversation_meta(req.conversation_id)
-            if meta and meta.get("title") == "New Chat" and meta.get("message_count") == 2:
-                background_tasks.add_task(
-                    auto_title_background_task,
-                    req.conversation_id,
-                    user_msg_dict["content"]
-                )
+            if meta:
+                msg_count = meta.get("message_count", 0)
+                if meta.get("title") == "New Chat" and msg_count == 2:
+                    background_tasks.add_task(
+                        auto_title_background_task,
+                        req.conversation_id,
+                        user_msg_dict["content"]
+                    )
+                # Trigger summarization background task every 20 messages
+                if msg_count >= 20 and msg_count % 20 == 0:
+                    background_tasks.add_task(
+                        summarize_conversation_task,
+                        req.conversation_id
+                    )
 
     return StreamingResponse(
         generate(),
@@ -152,3 +178,4 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
             "X-Accel-Buffering": "no",
         },
     )
+

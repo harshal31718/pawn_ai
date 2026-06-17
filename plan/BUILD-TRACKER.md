@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1.5 — Memory & Agent
-**Active step:** Step 14 — Per-chat memory summaries
-**Last completed:** Step 13 — Complete typed SSE events
+**Active step:** Step 15 — RAG over memory
+**Last completed:** Step 14 — Per-chat memory summaries
 **Branch:** dev
 
 ---
@@ -84,11 +84,11 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   All event types dispatched and routed in `streamChat`. Frontend callbacks wired.
   Demo: all event types appear in Network tab; UI handles each.
 
-- [ ] **Step 14 — Per-chat memory summaries**
+- [x] **Step 14 — Per-chat memory summaries**
   Rolling `summary.md` per conversation. Threshold-triggered summarization.
-  Demo: 30-message chat stays coherent; `summary.md` written to disk.
+  Demo: 30-message chat coherent; `summary.md` written to disk.
 
-- [ ] **Step 15 — RAG over memory**
+- [~] **Step 15 — RAG over memory**
   `data/memory/index.json`. `text-embedding-004` embed interface. Brute-force cosine.
   Demo: fact from chat A surfaces in chat B via retrieval.
 

@@ -163,3 +163,26 @@ def delete_conversation(conv_id: str) -> None:
     conv_dir = _get_conv_dir(conv_id)
     if conv_dir.exists() and conv_dir.is_dir():
         shutil.rmtree(conv_dir)
+
+def load_summary(conv_id: str) -> Optional[str]:
+    """
+    Loads the summary.md content for a conversation. Returns None if it doesn't exist.
+    """
+    summary_file = _get_conv_dir(conv_id) / "summary.md"
+    if not summary_file.exists():
+        return None
+    try:
+        return summary_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+def save_summary(conv_id: str, summary_text: str) -> None:
+    """
+    Saves the summary.md text for a conversation.
+    """
+    conv_dir = _get_conv_dir(conv_id)
+    if not conv_dir.exists():
+        create_conversation(conv_id=conv_id)
+    summary_file = conv_dir / "summary.md"
+    summary_file.write_text(summary_text, encoding="utf-8")
+
