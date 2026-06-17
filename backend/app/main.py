@@ -13,13 +13,19 @@ from app.exceptions import (
 from app.routes.chat import router as chat_router
 from app.routes.upload import router as upload_router
 from app.routes.conversations import router as conversations_router
+from app.app_initializer import initialize_managers
 from app.core.llm_core import close_client
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
+    async with initialize_managers() as deps:
+        app.state.graph = deps["graph"]
+        app.state.checkpointer = deps["checkpointer"]
+        yield
     await close_client()
+
+
 
 
 app = FastAPI(title="PAWN", lifespan=lifespan)

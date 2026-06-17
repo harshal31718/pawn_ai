@@ -109,12 +109,12 @@ def test_chat_injects_document_as_system_message(client):
             assert resp.status_code == 200
             resp.read()
             
-    # Verify the document text was prepended as a system message
-    assert len(captured_messages) == 2
-    assert captured_messages[0]["role"] == "system"
-    assert doc_text in captured_messages[0]["content"]
-    assert captured_messages[1]["role"] == "user"
-    assert captured_messages[1]["content"] == "summarize the doc"
+    # 1 planning prompt + 1 document context + 1 user prompt + 1 synthesis prompt = 4 messages
+    assert len(captured_messages) == 4
+    assert captured_messages[1]["role"] == "system"
+    assert doc_text in captured_messages[1]["content"]
+    assert captured_messages[2]["role"] == "user"
+    assert captured_messages[2]["content"] == "summarize the doc"
 
 
 def test_chat_with_invalid_doc_id_returns_404(client):

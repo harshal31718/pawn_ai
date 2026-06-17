@@ -146,6 +146,15 @@ This becomes your interview script and project history.
 **Tests:** 29 passed (4 new RAG integration tests verifying vector search similarity, active thread filtering, FTS5 fallback, and SSE memory hit streams). Frontend typechecks and builds cleanly.
 **Commit:** `0b7ac54` (feat: hybrid vector FTS RAG over memories with sqlite-vec)
 
+### 2026-06-17 — Step 16: LangGraph Agent
+
+**Built:** Replaced single-shot streaming route with a 5-node StateGraph compiled with `AsyncSqliteSaver` checkpointer. Implemented ReAct JSON action parser, purpose-to-capability routing map, and database context lifecycle manager. Built TracePanel UI collapsible container displaying steps, memory hits, and model calls underneath assistant chat bubbles.
+**Decisions:** Expose `initialize_managers` as an async context manager to wrap the `AsyncSqliteSaver` lifespan properly. Use `adispatch_custom_event` inside nodes to route custom events dynamically into the `graph.astream_events` stream.
+**Issues:** Resolved `TypeError` on awaiting `dispatch_custom_event` by swapping to its async counterpart `adispatch_custom_event`. Updated existing integration tests asserting message lengths to account for the planning and final generation steps of the agent runner.
+**Tests:** 39 passed (10 new agent tests). Frontend typechecks and builds cleanly.
+**Commit:** `[hash]`
+
+
 
 
 

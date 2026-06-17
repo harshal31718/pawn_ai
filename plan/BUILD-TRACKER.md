@@ -92,7 +92,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `data/memory/index.json`. `text-embedding-004` embed interface. Brute-force cosine.
   Demo: fact from chat A surfaces in chat B via retrieval.
 
-- [ ] **Step 16 — LangGraph agent**
+- [x] **Step 16 — LangGraph agent**
   `StateGraph` with 5 nodes. JSON/ReAct protocol. Trace panel in UI.
   Demo: complex question → trace shows plan/retrieve/draft/critique/answer.
 

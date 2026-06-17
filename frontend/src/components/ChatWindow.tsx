@@ -4,9 +4,10 @@ import MessageBubble from './Message'
 
 interface Props {
   messages: Message[]
+  isStreaming: boolean
 }
 
-export default function ChatWindow({ messages }: Props) {
+export default function ChatWindow({ messages, isStreaming }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -20,10 +21,18 @@ export default function ChatWindow({ messages }: Props) {
           Start a conversation
         </p>
       )}
-      {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
-      ))}
+      {messages.map((msg, index) => {
+        const isLast = index === messages.length - 1
+        return (
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            isStreaming={isLast && isStreaming}
+          />
+        )
+      })}
       <div ref={bottomRef} />
     </div>
   )
 }
+

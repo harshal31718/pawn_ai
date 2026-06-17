@@ -302,7 +302,7 @@ export default function App() {
           />
         </header>
         
-        <ChatWindow messages={messages} />
+        <ChatWindow messages={messages} isStreaming={isStreaming} />
         
         {attachedDoc && (
           <div className="px-4 py-2 bg-zinc-50 border-t border-zinc-200 flex items-center shrink-0">

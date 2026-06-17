@@ -62,11 +62,10 @@ def test_chat_truncates_context_to_last_10_messages(client):
         ) as resp:
             resp.read()
 
-    # The prompt should contain the last 10 messages from history + the new user message = 11 messages total.
-    # History had 12. So it should drop the first two (i.e. 'User prompt 0' and 'Assistant response 0').
-    assert len(captured_messages) == 11
-    assert captured_messages[0]["content"] == "User prompt 1"
-    assert captured_messages[-1]["content"] == "Latest turn?"
+    # 1 planning prompt + 10 history + 1 user prompt + 1 synthesis prompt = 13 messages
+    assert len(captured_messages) == 13
+    assert captured_messages[1]["content"] == "User prompt 1"
+    assert captured_messages[-2]["content"] == "Latest turn?"
 
 
 def test_chat_prepends_summary_context(client):
@@ -96,15 +95,16 @@ def test_chat_prepends_summary_context(client):
         ) as resp:
             resp.read()
             
-    # Messages should be:
-    # 0: Summary System Message
-    # 1: User prompt from history ("hi")
-    # 2: Latest prompt ("What is my name?")
-    assert len(captured_messages) == 3
-    assert captured_messages[0]["role"] == "system"
-    assert "Summary text showing user name is Bob." in captured_messages[0]["content"]
-    assert captured_messages[1]["content"] == "hi"
-    assert captured_messages[2]["content"] == "What is my name?"
+    # Messages in final call should be:
+    # 1: Summary System Message
+    # 2: User prompt from history ("hi")
+    # 3: Latest prompt ("What is my name?")
+    # 4: Synthesis prompt
+    assert len(captured_messages) == 5
+    assert captured_messages[1]["role"] == "system"
+    assert "Summary text showing user name is Bob." in captured_messages[1]["content"]
+    assert captured_messages[2]["content"] == "hi"
+    assert captured_messages[3]["content"] == "What is my name?"
 
 
 def test_chat_triggers_summarize_background_task_at_20_messages(client):

@@ -1,5 +1,5 @@
 from typing import Literal
-from fastapi import APIRouter, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -12,7 +12,6 @@ from app.memory.summarize import summarize_conversation_task
 
 router = APIRouter()
 
-# Default provider when none is specified (fastest free tier)
 DEFAULT_PROVIDER = "gemini"
 
 
@@ -40,7 +39,6 @@ async def generate_title(first_prompt: str) -> str:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": first_prompt}
     ]
-    # Try groq first, then cerebras, then gemini
     for provider in ["groq", "cerebras", "gemini"]:
         if provider not in PROVIDERS:
             continue
@@ -63,12 +61,11 @@ async def auto_title_background_task(conv_id: str, first_prompt: str):
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
+async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
     user_msg_dict = None
     
     # 1. Determine base messages
     if req.conversation_id:
-        # Load history from storage
         meta = storage.get_conversation_meta(req.conversation_id)
         if not meta:
             raise HTTPException(
@@ -78,7 +75,6 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
         
         history = storage.load_messages(req.conversation_id)
         
-        # User's new message is the last one in req.messages
         if not req.messages:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -86,12 +82,9 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
             )
         
         user_msg_dict = req.messages[-1].model_dump()
-        
-        # Keep only the last 10 messages from history in prompt context
         raw_messages = history[-10:] if len(history) > 10 else history
         messages_to_send = raw_messages + [user_msg_dict]
         
-        # Prepend the summary as system message if it exists
         summary = storage.load_summary(req.conversation_id)
         if summary:
             summary_system = {
@@ -105,40 +98,11 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
             }
             messages_to_send.insert(0, summary_system)
     else:
-        # Stateless execution: use req.messages as is
         messages_to_send = [m.model_dump() for m in req.messages]
         if messages_to_send:
             user_msg_dict = messages_to_send[-1]
             
-    # 2. Retrieve past memories (RAG) and prepend them
-    rag_hits = []
-    if user_msg_dict:
-        try:
-            from app.memory.retrieve import retrieve
-            rag_hits = await retrieve(
-                query=user_msg_dict["content"],
-                active_conv_id=req.conversation_id,
-                top_k=3
-            )
-        except Exception as e:
-            import sys
-            print(f"RAG retrieval failed: {e}", file=sys.stderr)
-            
-    if rag_hits:
-        rag_content = "\n\n".join([f"- {hit['text']}" for hit in rag_hits])
-        rag_system = {
-            "role": "system",
-            "content": (
-                f"Relevant memories retrieved from past conversations:\n"
-                f"====================\n"
-                f"{rag_content}\n"
-                f"====================\n"
-                f"You may use these memories if they help answer the user's prompt."
-            )
-        }
-        messages_to_send.insert(0, rag_system)
-            
-    # 3. Inject document context if doc_id provided (not saved to database)
+    # 2. Inject document context if doc_id provided (in-memory only)
     if req.doc_id:
         doc_text = load_doc(req.doc_id)
         if doc_text is None:
@@ -154,38 +118,65 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
             f"====================\n"
             f"Answer the user's questions using only the above context."
         )
-        # Prepend to context (in-memory only)
         messages_to_send = [{"role": "system", "content": system_content}] + messages_to_send
 
+    # 3. Build inputs and config for LangGraph Agent
+    inputs = {
+        "conversation_id": req.conversation_id or "stateless",
+        "history": messages_to_send,
+        "retrieved_memory": [],
+        "scratchpad": [],
+        "next_action": None,
+        "final_answer": None,
+        "user_model_id": req.provider,
+        "step_count": 0
+    }
+    
+    config = {"configurable": {"thread_id": req.conversation_id or "stateless"}}
+    graph = request.app.state.graph
+
     async def generate():
-        # Yield memory hits before starting token stream
-        for hit in rag_hits:
-            yield events.memory_hit_event(hit["text"])
-            
+        if req.provider not in PROVIDERS:
+            yield events.error_event(f"Unknown provider: '{req.provider}'. Valid: {list(PROVIDERS)}")
+            yield events.done_event(via_provider=req.provider)
+            return
+
         assistant_text = ""
         success = False
         try:
-            async for token in chat_stream(
-                req.provider,
-                messages_to_send,
-                model=req.model,
-            ):
-                assistant_text += token
-                yield events.token_event(token)
+            async for event in graph.astream_events(inputs, config=config, version="v2"):
+                kind = event["event"]
+                if kind == "on_custom_event":
+                    name = event["name"]
+                    data = event["data"]
+                    if name == "token":
+                        delta = data.get("delta", "")
+                        assistant_text += delta
+                        yield events.token_event(delta)
+                    elif name == "step":
+                        yield events.step_event(data.get("label", ""), data.get("detail", ""))
+                    elif name == "memory_hit":
+                        yield events.memory_hit_event(data.get("summary", ""))
+                    elif name == "model_call":
+                        yield events.model_call_event(data.get("model", ""), data.get("purpose", ""))
             success = True
         except ProviderError as exc:
             yield events.error_event(exc.message)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            yield events.error_event(str(exc))
+            
         yield events.done_event(via_provider=req.provider)
 
-        # 3. If persistent and stream succeeded, append user & assistant turns to disk
-        if req.conversation_id and success and user_msg_dict:
+        # 4. If persistent and stream succeeded, append user & assistant turns to disk
+        if req.conversation_id and success and user_msg_dict and assistant_text:
             assistant_msg_dict = {"role": "assistant", "content": assistant_text}
             storage.append_messages(
                 req.conversation_id,
                 [user_msg_dict, assistant_msg_dict]
             )
             
-            # Check meta properties post-append
             meta = storage.get_conversation_meta(req.conversation_id)
             if meta:
                 msg_count = meta.get("message_count", 0)
@@ -195,7 +186,6 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
                         req.conversation_id,
                         user_msg_dict["content"]
                     )
-                # Trigger summarization background task every 20 messages
                 if msg_count >= 20 and msg_count % 20 == 0:
                     background_tasks.add_task(
                         summarize_conversation_task,
@@ -210,4 +200,5 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
             "X-Accel-Buffering": "no",
         },
     )
+
 

@@ -11,3 +11,5 @@ MEMORY_DIR        = DATA_DIR / "memory"
 MEMORY_DB         = MEMORY_DIR / "memory.db"
 RATE_LIMITS_DIR   = DATA_DIR / "rate_limits"
 SESSION_FILE      = RATE_LIMITS_DIR / "session.json"
+CHECKPOINTS_DB    = DATA_DIR / "checkpoints.db"
+

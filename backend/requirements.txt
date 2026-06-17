@@ -9,4 +9,6 @@ pdfplumber
 python-multipart
 sqlite-vec>=0.1.0
 numpy
-
+langgraph>=0.3.0
+langchain-core
+langgraph-checkpoint-sqlite>=3.0.1
