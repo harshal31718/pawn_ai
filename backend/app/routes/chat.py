@@ -3,7 +3,9 @@ from fastapi import APIRouter, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core.normalize import chat_stream, PROVIDERS
+from app.core.normalize import chat_stream
+from app.resolver.resolver import Resolver
+from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import ProviderError
 from app import events
 from app.storage.documents import load_doc
@@ -12,23 +14,18 @@ from app.memory.summarize import summarize_conversation_task
 
 router = APIRouter()
 
-DEFAULT_PROVIDER = "gemini"
-
-
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
 
-
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
-    provider: str = DEFAULT_PROVIDER   # e.g. "groq", "cerebras", "gemini"
-    model: str | None = None           # override the provider's default model
+    model_id: str | None = None        # Canonical model ID (e.g. "gemini-2.5-flash", "llama-3.3-70b")
+    provider: str | None = None        # Backward compatibility for provider selection
     doc_id: str | None = None          # optional uploaded document ID
     conversation_id: str | None = None  # optional conversation ID for persistence
 
-
-async def generate_title(first_prompt: str) -> str:
+async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter) -> str:
     """Helper to generate a short title for the conversation using the first user prompt."""
     system_prompt = (
         "You are a helpful assistant. Generate a short title (max 4-5 words) "
@@ -39,32 +36,48 @@ async def generate_title(first_prompt: str) -> str:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": first_prompt}
     ]
-    for provider in ["groq", "cerebras", "gemini"]:
-        if provider not in PROVIDERS:
-            continue
-        try:
-            title_text = ""
-            async for token in chat_stream(provider, messages):
-                title_text += token
-            cleaned = title_text.strip().replace('"', '').replace("'", "")
-            if cleaned:
-                return cleaned
-        except Exception:
-            continue
+    try:
+        model_id = resolver.pick_model_by_capability("fast")
+        title_text = ""
+        async for token in chat_stream(model_id, messages, resolver, rate_limiter):
+            title_text += token
+        cleaned = title_text.strip().replace('"', '').replace("'", "")
+        if cleaned:
+            return cleaned
+    except Exception:
+        pass
     return "New Chat"
 
-
-async def auto_title_background_task(conv_id: str, first_prompt: str):
+async def auto_title_background_task(conv_id: str, first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter):
     """Background task to generate and save the conversation title."""
-    title = await generate_title(first_prompt)
+    title = await generate_title(first_prompt, resolver, rate_limiter)
     storage.update_conversation_title(conv_id, title)
-
 
 @router.post("/chat")
 async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
     user_msg_dict = None
+    resolver = request.app.state.resolver
+    rate_limiter = request.app.state.rate_limiter
     
-    # 1. Determine base messages
+    # Resolve canonical model_id from input
+    model_id = req.model_id
+    if not model_id:
+        model_id = req.provider or "gemini-2.5-flash"
+        
+    # Check if the model_id exists in the registry or friendly provider map
+    if not resolver._registry.get_model(model_id) and model_id not in ["google", "gemini", "cerebras", "groq", "huggingface", "github", "openrouter"]:
+        async def generate_error():
+            yield events.error_event(f"Unknown model or provider: '{model_id}'")
+            yield events.done_event(via_provider="unknown")
+            
+        return StreamingResponse(
+            generate_error(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     if req.conversation_id:
         meta = storage.get_conversation_meta(req.conversation_id)
         if not meta:
@@ -128,7 +141,7 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "scratchpad": [],
         "next_action": None,
         "final_answer": None,
-        "user_model_id": req.provider,
+        "user_model_id": model_id,
         "step_count": 0
     }
     
@@ -136,13 +149,9 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
     graph = request.app.state.graph
 
     async def generate():
-        if req.provider not in PROVIDERS:
-            yield events.error_event(f"Unknown provider: '{req.provider}'. Valid: {list(PROVIDERS)}")
-            yield events.done_event(via_provider=req.provider)
-            return
-
         assistant_text = ""
         success = False
+        active_provider = "unknown"
         try:
             async for event in graph.astream_events(inputs, config=config, version="v2"):
                 kind = event["event"]
@@ -159,6 +168,10 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                         yield events.memory_hit_event(data.get("summary", ""))
                     elif name == "model_call":
                         yield events.model_call_event(data.get("model", ""), data.get("purpose", ""))
+                    elif name == "provider_switch":
+                        yield events.provider_switch_event(data.get("from_provider", ""), data.get("to_provider", ""))
+                    elif name == "final_provider":
+                        active_provider = data.get("provider", "unknown")
             success = True
         except ProviderError as exc:
             yield events.error_event(exc.message)
@@ -167,7 +180,15 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             traceback.print_exc()
             yield events.error_event(str(exc))
             
-        yield events.done_event(via_provider=req.provider)
+        if active_provider == "unknown":
+            try:
+                candidates = resolver.pick(model_id)
+                if candidates:
+                    active_provider = candidates[0][4]
+            except Exception:
+                pass
+                
+        yield events.done_event(via_provider=active_provider)
 
         # 4. If persistent and stream succeeded, append user & assistant turns to disk
         if req.conversation_id and success and user_msg_dict and assistant_text:
@@ -184,12 +205,16 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                     background_tasks.add_task(
                         auto_title_background_task,
                         req.conversation_id,
-                        user_msg_dict["content"]
+                        user_msg_dict["content"],
+                        resolver,
+                        rate_limiter
                     )
                 if msg_count >= 20 and msg_count % 20 == 0:
                     background_tasks.add_task(
                         summarize_conversation_task,
-                        req.conversation_id
+                        req.conversation_id,
+                        resolver,
+                        rate_limiter
                     )
 
     return StreamingResponse(
@@ -200,5 +225,3 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             "X-Accel-Buffering": "no",
         },
     )
-
-

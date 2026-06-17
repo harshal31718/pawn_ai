@@ -15,7 +15,7 @@ class ModelEntry(BaseModel):
 class EndpointEntry(BaseModel):
     id: str
     model_id: str
-    provider: Literal["google", "cerebras", "huggingface", "github", "openrouter"]
+    provider: Literal["google", "cerebras", "groq", "huggingface", "github", "openrouter"]
     provider_model_id: str
     base_url: str
     secret: str

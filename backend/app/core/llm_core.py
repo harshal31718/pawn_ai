@@ -29,7 +29,7 @@ def _provider_headers(provider: str, api_key: str | None, url: str) -> dict[str,
             "x-api-key": api_key or "",
             "anthropic-version": "2023-06-01",
         }
-    return {"Authorization": f"Bearer {api_key or ''}"}
+    return {"Authorization": f"Bearer {api_key or ''}".strip()}
 
 
 def _format_upstream_error(status_code: int, body: bytes) -> str:

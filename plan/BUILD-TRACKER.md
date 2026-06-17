@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1.6 — Rate-Limit Resilience
-**Active step:** Step R3 — Resolver + normalize contract change
-**Last completed:** Step R2 — Rate limiter
+**Active step:** Step R4 — Frontend wiring
+**Last completed:** Step R3 — Resolver + normalize contract change
 **Branch:** dev
 
 ---
@@ -111,7 +111,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `EndpointRateLimiter`: rolling windows, 90% threshold, cooldowns, dead-host.
   Demo: unit tests show endpoint flips unavailable at ≥90% and recovers.
 
-- [ ] **Step R3 — Resolver + normalize contract change**
+- [x] **Step R3 — Resolver + normalize contract change**
   `Resolver.pick(model_id)`. `normalize.chat_stream(model_id, messages)`.
   `ChatRequest` takes `model_id` only. Agent swaps to `PURPOSE_TO_LEVEL`.
   Demo: force priority-1 past 90% → next endpoint serves reply; `provider_switch` emitted.

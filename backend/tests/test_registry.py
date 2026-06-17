@@ -46,14 +46,15 @@ def test_registry_seeding_and_loading():
     
     # Endpoints priority sort check
     endpoints = registry.endpoints_for("llama-3.3-70b")
-    assert len(endpoints) >= 4
-    # Check priority is sorted ascending: 1, 2, 3, 4
+    assert len(endpoints) >= 5
+    # Check priority is sorted ascending: 1, 2, 3, 4, 5
     priorities = [e.priority for e in endpoints]
     assert priorities == sorted(priorities)
-    assert endpoints[0].provider == "cerebras"  # Priority 1
-    assert endpoints[1].provider == "huggingface"  # Priority 2
-    assert endpoints[2].provider == "github"  # Priority 3
-    assert endpoints[3].provider == "openrouter"  # Priority 4
+    assert endpoints[0].provider == "groq"         # Priority 1
+    assert endpoints[1].provider == "cerebras"     # Priority 2
+    assert endpoints[2].provider == "huggingface"  # Priority 3
+    assert endpoints[3].provider == "github"       # Priority 4
+    assert endpoints[4].provider == "openrouter"   # Priority 5
 
 def test_registry_api_endpoint(client):
     response = client.get("/registry/models")

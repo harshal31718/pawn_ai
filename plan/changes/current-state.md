@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-17
-Active step: Step R3 — Resolver + normalize contract change
+Active step: Step R4 — Frontend wiring
 Phase: Phase 1.6 — Rate-Limit Resilience
 
 ---
@@ -27,6 +27,7 @@ Phase: Phase 1.6 — Rate-Limit Resilience
 - Step 16: LangGraph agent — Replaced single-shot flow with a 5-node StateGraph (load_context, agent, search_memory, ask_model, final). Uses ReAct JSON parser and capability-level purpose routing. Built collapsible frontend TracePanel showing steps, memory hits, and model calls dynamically.
 - Step R1: Registry foundation — Created Pydantic ModelEntry and EndpointEntry schemas, database files models.json and endpoints.json seeding, loaded them via loaders module and returned catalogue dynamically on GET /registry/models. Added HuggingFace, GitHub Models, and OpenRouter secret keys.
 - Step R2: Rate limiter — Implemented in-memory EndpointRateLimiter tracking rolling RPM/TPM usage, 90% soft-wall blocks, cooldown durations, and dead-host detection.
+- Step R3: Resolver + normalize contract change — Implemented Resolver picking optimal active endpoints, simplified normalize.chat_stream signature to accept canonical model_id, routed Agent graph nodes using capability routing, and added provider mapping fallbacks for backward compatibility.
 
 ---
 

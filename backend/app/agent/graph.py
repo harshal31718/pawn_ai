@@ -1,11 +1,29 @@
 from typing import TypedDict, Optional, List, Dict, Any
 from functools import partial
+import asyncio
 
 from langgraph.graph import StateGraph, END
 from langchain_core.callbacks import adispatch_custom_event
 
 from app.agent.parser import parse_action
 from app.core import normalize
+from app.resolver.resolver import Resolver
+from app.core.rate_limiter import EndpointRateLimiter
+
+class DummyRateLimiter:
+    def can_use(self, endpoint) -> bool: return True
+    def record_call(self, endpoint_id, token_count=0): pass
+    def record_429(self, endpoint_id, retry_after=60): pass
+    def record_connect_failure(self, endpoint_id): pass
+    def record_success(self, endpoint_id): pass
+
+class DummyResolver:
+    def pick(self, model_id):
+        return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
+    def pick_by_capability(self, level, visibility="internal"):
+        return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
+    def pick_model_by_capability(self, level, visibility="internal"):
+        return "gemini-2.5-flash"
 
 class AgentState(TypedDict):
     conversation_id: str
@@ -132,7 +150,15 @@ async def load_context_node(state: AgentState) -> dict:
         "retrieved_memory": [h["text"] for h in hits]
     }
 
-async def agent_node(state: AgentState) -> dict:
+async def agent_node(
+    state: AgentState,
+    resolver: Optional[Resolver] = None,
+    rate_limiter: Optional[EndpointRateLimiter] = None
+) -> dict:
+    if resolver is None or rate_limiter is None:
+        resolver = resolver or DummyResolver()
+        rate_limiter = rate_limiter or DummyRateLimiter()
+
     step_count = state["step_count"]
     if step_count >= 8:
         last_result = state["scratchpad"][-1].get("result", "") if state["scratchpad"] else "Step limit exceeded."
@@ -151,14 +177,18 @@ async def agent_node(state: AgentState) -> dict:
     
     await adispatch_custom_event("step", {"label": "Thinking", "detail": f"step {step_count + 1}"})
     
-    from app.agent.routing import resolve_level
-    provider, model = resolve_level("fast")
+    model_id = resolver.pick_model_by_capability("fast")
     
+    async def on_switch(from_p, to_p):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+        
     response = ""
     async for token in normalize.chat_stream(
-        provider=provider,
+        model_id=model_id,
         messages=[{"role": "user", "content": prompt}],
-        model=model
+        resolver=resolver,
+        rate_limiter=rate_limiter,
+        on_provider_switch=on_switch
     ):
         response += token
         
@@ -190,22 +220,39 @@ async def search_memory_node(state: AgentState) -> dict:
         "next_action": None
     }
 
-async def ask_model_node(state: AgentState) -> dict:
+async def ask_model_node(
+    state: AgentState,
+    resolver: Optional[Resolver] = None,
+    rate_limiter: Optional[EndpointRateLimiter] = None
+) -> dict:
+    if resolver is None or rate_limiter is None:
+        resolver = resolver or DummyResolver()
+        rate_limiter = rate_limiter or DummyRateLimiter()
+
     purpose = state["next_action"]["purpose"]
     prompt_text = state["next_action"]["prompt"]
     
-    from app.agent.routing import PURPOSE_TO_LEVEL, resolve_level
+    from app.agent.routing import PURPOSE_TO_LEVEL
     level = PURPOSE_TO_LEVEL.get(purpose, "balanced")
-    provider, model = resolve_level(level, purpose=purpose)
+    model_id = resolver.pick_model_by_capability(level)
     
-    await adispatch_custom_event("model_call", {"model": f"{provider}:{model or 'default'}", "purpose": purpose})
+    candidates = resolver.pick(model_id)
+    active_provider = candidates[0][4] if candidates else "unknown"
+    active_provider_model = candidates[0][1] if candidates else "unknown"
+    
+    await adispatch_custom_event("model_call", {"model": f"{active_provider}:{active_provider_model}", "purpose": purpose})
     await adispatch_custom_event("step", {"label": "Drafting" if purpose == "draft" else "Critiquing", "detail": purpose})
     
+    async def on_switch(from_p, to_p):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+        
     response = ""
     async for token in normalize.chat_stream(
-        provider=provider,
+        model_id=model_id,
         messages=[{"role": "user", "content": prompt_text}],
-        model=model
+        resolver=resolver,
+        rate_limiter=rate_limiter,
+        on_provider_switch=on_switch
     ):
         response += token
         
@@ -215,7 +262,15 @@ async def ask_model_node(state: AgentState) -> dict:
         "next_action": None
     }
 
-async def final_node(state: AgentState) -> dict:
+async def final_node(
+    state: AgentState,
+    resolver: Optional[Resolver] = None,
+    rate_limiter: Optional[EndpointRateLimiter] = None
+) -> dict:
+    if resolver is None or rate_limiter is None:
+        resolver = resolver or DummyResolver()
+        rate_limiter = rate_limiter or DummyRateLimiter()
+
     synthesis_prompt = build_synthesis_prompt(
         original_question=state["history"][-1]["content"],
         memory=state["retrieved_memory"],
@@ -225,10 +280,23 @@ async def final_node(state: AgentState) -> dict:
     
     await adispatch_custom_event("step", {"label": "Composing final answer", "detail": ""})
     
+    model_id = state["user_model_id"]
+    candidates = resolver.pick(model_id)
+    initial_provider = candidates[0][4] if candidates else "unknown"
+    
+    await adispatch_custom_event("final_provider", {"provider": initial_provider})
+    
+    async def on_switch(from_p, to_p):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+        await adispatch_custom_event("final_provider", {"provider": to_p})
+        
     full_response = ""
     async for token in normalize.chat_stream(
-        provider=state["user_model_id"],
-        messages=state["history"] + [{"role": "user", "content": synthesis_prompt}]
+        model_id=model_id,
+        messages=state["history"] + [{"role": "user", "content": synthesis_prompt}],
+        resolver=resolver,
+        rate_limiter=rate_limiter,
+        on_provider_switch=on_switch
     ):
         full_response += token
         await adispatch_custom_event("token", {"delta": token})
@@ -248,14 +316,21 @@ def route_action(state: AgentState) -> str:
     return "agent"
 
 
-def build_agent_graph() -> StateGraph:
+def build_agent_graph(
+    resolver: Optional[Resolver] = None,
+    rate_limiter: Optional[EndpointRateLimiter] = None
+) -> StateGraph:
+    if resolver is None or rate_limiter is None:
+        resolver = resolver or DummyResolver()
+        rate_limiter = rate_limiter or DummyRateLimiter()
+
     graph = StateGraph(AgentState)
     
     graph.add_node("load_context", load_context_node)
-    graph.add_node("agent", agent_node)
+    graph.add_node("agent", partial(agent_node, resolver=resolver, rate_limiter=rate_limiter))
     graph.add_node("search_memory", search_memory_node)
-    graph.add_node("ask_model", ask_model_node)
-    graph.add_node("final", final_node)
+    graph.add_node("ask_model", partial(ask_model_node, resolver=resolver, rate_limiter=rate_limiter))
+    graph.add_node("final", partial(final_node, resolver=resolver, rate_limiter=rate_limiter))
     
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "agent")

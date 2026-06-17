@@ -174,7 +174,7 @@ async def test_final_node(mock_dispatch, mock_chat_stream):
     
     res = await final_node(state)
     assert res["final_answer"] == "synthesized answer"
-    assert mock_dispatch.call_count == 3  # step + 2 tokens
+    assert mock_dispatch.call_count == 4  # step + final_provider + 2 tokens
 
 def test_route_action():
     assert route_action({"next_action": {"action": "search_memory"}}) == "search_memory"

@@ -136,4 +136,5 @@ def test_chat_triggers_summarize_background_task_at_20_messages(client):
                 
             # Starlette TestClient runs background tasks synchronous before exiting the context manager.
             # So the task should have been enqueued and called.
-            mock_summarize.assert_called_once_with(conv_id)
+            mock_summarize.assert_called_once()
+            assert mock_summarize.call_args[0][0] == conv_id
