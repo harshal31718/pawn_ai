@@ -13,6 +13,7 @@ from app.exceptions import (
 from app.routes.chat import router as chat_router
 from app.routes.upload import router as upload_router
 from app.routes.conversations import router as conversations_router
+from app.routes.registry import router as registry_router
 from app.app_initializer import initialize_managers
 from app.core.llm_core import close_client
 
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI):
     async with initialize_managers() as deps:
         app.state.graph = deps["graph"]
         app.state.checkpointer = deps["checkpointer"]
+        app.state.registry = deps["registry"]
         yield
     await close_client()
 
@@ -47,6 +49,8 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(upload_router)
 app.include_router(conversations_router)
+app.include_router(registry_router)
+
 
 
 @app.get("/health")

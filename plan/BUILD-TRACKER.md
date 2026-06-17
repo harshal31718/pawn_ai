@@ -102,7 +102,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 *Plan reference: `plan/06-phase1.6-rate-limit.md`*
 *Branch: `dev/rate-limit-resilience`*
 
-- [ ] **Step R1 — Registry foundation**
+- [x] **Step R1 — Registry foundation**
   `models.json` + `endpoints.json` seeded. `loader.py`. `GET /registry/models`.
   New secrets: huggingface, github, openrouter.
   Demo: `GET /registry/models` returns the full catalog.
