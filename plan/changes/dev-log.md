@@ -152,7 +152,7 @@ This becomes your interview script and project history.
 **Decisions:** Expose `initialize_managers` as an async context manager to wrap the `AsyncSqliteSaver` lifespan properly. Use `adispatch_custom_event` inside nodes to route custom events dynamically into the `graph.astream_events` stream.
 **Issues:** Resolved `TypeError` on awaiting `dispatch_custom_event` by swapping to its async counterpart `adispatch_custom_event`. Updated existing integration tests asserting message lengths to account for the planning and final generation steps of the agent runner.
 **Tests:** 39 passed (10 new agent tests). Frontend typechecks and builds cleanly.
-**Commit:** `[hash]`
+**Commit:** `08473b0` (feat: LangGraph multi-step agent with checkpointer persistence and UI trace panel)
 
 
 
