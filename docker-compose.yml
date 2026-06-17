@@ -6,6 +6,7 @@ services:
     secrets:
       - gemini_api_key
       - cerebras_api_key
+      - groq_api_key
       - huggingface_api_key
       - github_api_key
       - openrouter_api_key
@@ -30,6 +31,8 @@ secrets:
     file: ./secrets/gemini_api_key
   cerebras_api_key:
     file: ./secrets/cerebras_api_key
+  groq_api_key:
+    file: ./secrets/groq_api_key
   huggingface_api_key:
     file: ./secrets/huggingface_api_key
   github_api_key:
