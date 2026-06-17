@@ -154,8 +154,10 @@ This becomes your interview script and project history.
 **Tests:** 39 passed (10 new agent tests). Frontend typechecks and builds cleanly.
 **Commit:** `08473b0` (feat: LangGraph multi-step agent with checkpointer persistence and UI trace panel)
 
+### 2026-06-17 — Step R1: Registry Foundation
 
-
-
-
-
+**Built:** Created Pydantic ModelEntry and EndpointEntry schemas, database files models.json and endpoints.json seeding, loaded them via loaders module and returned catalogue dynamically on GET /registry/models. Added HuggingFace, GitHub Models, and OpenRouter secret keys.
+**Decisions:** Initialized data registry schemas and seeding loader dynamically on startup.
+**Issues:** None.
+**Tests:** 41 passing.
+**Commit:** `6b51bcc` (feat: model registry foundation with json data endpoints (step R1))
