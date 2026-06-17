@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1.5 — Memory & Agent
-**Active step:** Step 12 — Multi-chat persistence
-**Last completed:** Step 11 — Document Upload (pdfplumber)
+**Active step:** Step 13 — Complete typed SSE events
+**Last completed:** Step 12 — Multi-chat persistence
 **Branch:** dev
 
 ---
@@ -76,7 +76,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Phase 1.5 — Memory & Agent
 *Plan reference: `plan/05-phase1.5-memory-agent.md`*
 
-- [ ] **Step 12 — Multi-chat persistence**
+- [x] **Step 12 — Multi-chat persistence**
   Backend source of truth. `data/conversations/<uuid>/`. CRUD endpoints. Sidebar UI.
   Demo: two chats with independent history, survive restarts. Auto-title fires.
 

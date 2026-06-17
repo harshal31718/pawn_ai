@@ -114,3 +114,12 @@ This becomes your interview script and project history.
 **Tests:** 18 passed (6 new: upload text, upload PDF mock, unsupported types, empty validation, system message injection, 404 handler). Frontend typechecks and builds cleanly.
 **Commit:** feat: document upload text extraction and system prompt injection
 
+### 2026-06-17 — Step 12: Multi-Chat Persistence
+
+**Built:** Created `backend/app/storage/conversations.py` to implement full CRUD file management under `data/conversations/<uuid>/` containing `meta.json` and append-only `messages.jsonl` files. Developed endpoints in `backend/app/routes/conversations.py` and wired them in `main.py`. Integrated conversation loading and auto-titling `BackgroundTask` in `chat.py`. Built `frontend/src/components/Sidebar.tsx` displaying the sorted list of threads and allowing thread creation, deletion, and inline double-click renaming. Updated `App.tsx` and `client.ts` to manage and pass the `conversationId`.
+**Decisions:** Automatically seed a clean conversation context on page load if none exist. Delay list refresh by 800ms post-response streaming to allow the background auto-title model generation to complete and write metadata before the frontend fetches.
+**Issues:** Encountered argument mismatch in frontend `streamChat` during compilation; resolved by adding `conversationId` parameter to the API client signature and payload.
+**Tests:** 21 passed (3 new: REST CRUD endpoints, messages saving to disk, auto-titling trigger). Frontend typechecks and builds cleanly.
+**Commit:** feat: multi-chat persistence with sidebar navigation and auto-titling
+
+
