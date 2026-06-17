@@ -169,3 +169,11 @@ This becomes your interview script and project history.
 **Issues:** None.
 **Tests:** 47 passing (6 new rate limiter tests).
 **Commit:** `da568f4` (feat: endpoint rate limiter with 90% soft-wall and cooldowns (step R2))
+
+### 2026-06-17 — Step R3: Resolver + normalize Contract Change
+
+**Built:** Created Resolver class in `resolver.py` picking optimal active endpoints and supporting capability-level routing. Modified `normalize.chat_stream` signature to accept canonical `model_id`. Updated `/chat` request schema and mapped old `provider` payload fields to model_id for backwards compatibility. Added Groq to seeded endpoints and updated test assertions.
+**Decisions:** Handled backward-compatible friendly provider name aliases directly inside the Resolver's pick function and chat.py model_id mapping to allow old tests and client implementations to work seamlessly.
+**Issues:** Trailing spaces in Authorization Bearer token header caused Newer HTTPX specifications to reject header format; resolved by stripping the header token string.
+**Tests:** 47 passing (unit tests adjusted to account for Groq endpoint addition and custom final provider event propagation).
+**Commit:** `83d3d16` (feat: resolver and fallback provider aliases with model_id signature (step R3))
