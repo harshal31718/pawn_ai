@@ -1,8 +1,8 @@
 # PAWN — Personal AI Workspace
 
 Multi-model BYOK chat app. One interface, multiple AI providers, transparent rate-limit
-failover, persistent memory. Full project plan in `plan/`. Current build state in
-`docs/current-state.md`. Build tracker in `plan/BUILD-TRACKER.md`.
+failover, persistent memory. Full project plan in `docs/blueprints/` and `docs/specifications/`. Current build state in
+`docs/history_and_status/current-state.md`. Build tracker in `docs/history_and_status/BUILD-TRACKER.md`.
 
 ## What This Is
 
@@ -24,9 +24,9 @@ failover, persistent memory. Full project plan in `plan/`. Current build state i
 
 ## Before Starting Any Work
 
-1. Read `plan/BUILD-TRACKER.md` — find the current active step.
-2. Read the relevant phase plan (e.g. `plan/04-phase1-foundation.md`).
-3. Read `docs/current-state.md` — understand what already exists.
+1. Read `docs/history_and_status/BUILD-TRACKER.md` — find the current active step.
+2. Read the relevant phase plan (e.g., `docs/blueprints/04-phase1-foundation.md`).
+3. Read `docs/history_and_status/current-state.md` — understand what already exists.
 4. Then implement.
 
 ## Multi-Agent Workflow

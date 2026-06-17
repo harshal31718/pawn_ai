@@ -12,9 +12,9 @@ structured information about a specific build step.
 
 ## What to Do
 
-1. Read `plan/BUILD-TRACKER.md` to find the current active step.
-2. Read the relevant phase plan file (e.g. `plan/04-phase1-foundation.md`).
-3. Read `docs/current-state.md` to understand what already exists.
+1. Read `docs/history_and_status/BUILD-TRACKER.md` to find the current active step.
+2. Read the relevant phase plan file (e.g., `docs/blueprints/04-phase1-foundation.md`).
+3. Read `docs/history_and_status/current-state.md` to understand what already exists.
 
 ## Output Format
 
