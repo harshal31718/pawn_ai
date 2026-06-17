@@ -177,3 +177,11 @@ This becomes your interview script and project history.
 **Issues:** Trailing spaces in Authorization Bearer token header caused Newer HTTPX specifications to reject header format; resolved by stripping the header token string.
 **Tests:** 47 passing (unit tests adjusted to account for Groq endpoint addition and custom final provider event propagation).
 **Commit:** `83d3d16` (feat: resolver and fallback provider aliases with model_id signature (step R3))
+
+### 2026-06-17 — Step R4: Frontend Wiring
+
+**Built:** Updated `ModelSwitcher.tsx` to retrieve models dynamically from `GET /registry/models` and group options by `capability_level` (Fast, Balanced, Research, Other). Added `fetchRegistryModels` in `client.ts`. Updated `types.ts` with `'notice'` role and `viaProvider` attribute in `Message`. Updated `App.tsx` to handle `onProviderSwitch` (appending a notice message and trace log) and `onDone` (passing and storing `viaProvider`). Added a formatted provider badge under assistant message bubbles in `Message.tsx`. Filtered out `'notice'` messages from chat history sent to backend.
+**Decisions:** Handled the custom notice messages purely in frontend state to keep backend conversation logs clean and standard. Explicitly typed `groups` in `ModelSwitcher` to avoid compile time issues with pushing 'other' groups.
+**Issues:** None.
+**Tests:** 47 passing backend tests. Frontend typescript typechecks and builds cleanly with zero errors.
+**Commit:** `88738e2` (feat: frontend wiring for dynamic models, inline failover notices, and provider badges (step R4))

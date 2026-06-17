@@ -13,9 +13,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase 1.6 — Rate-Limit Resilience
-**Active step:** Step R4 — Frontend wiring
-**Last completed:** Step R3 — Resolver + normalize contract change
+**Active phase:** Phase 1.6 — Rate-Limit Resilience (Complete)
+**Active step:** Merge Phase 1.6 -> main
+**Last completed:** Step R4 — Frontend wiring
 **Branch:** dev
 
 ---
@@ -116,7 +116,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `ChatRequest` takes `model_id` only. Agent swaps to `PURPOSE_TO_LEVEL`.
   Demo: force priority-1 past 90% → next endpoint serves reply; `provider_switch` emitted.
 
-- [ ] **Step R4 — Frontend wiring**
+- [x] **Step R4 — Frontend wiring**
   `ModelSwitcher` fetches from API. `provider_switch` inline notice. Provider badge.
   Demo: dropdown shows Fast/Balanced/Research groups; failover notice appears.
 

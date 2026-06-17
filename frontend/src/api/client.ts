@@ -24,7 +24,7 @@ export interface StreamChatCallbacks {
 export async function streamChat(
   messages: Array<{ role: string; content: string }>,
   callbacks: StreamChatCallbacks,
-  provider?: string,
+  modelId?: string,
   docId?: string,
   conversationId?: string,
 ): Promise<void> {
@@ -36,7 +36,7 @@ export async function streamChat(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages,
-      ...(provider ? { provider } : {}),
+      ...(modelId ? { model_id: modelId } : {}),
       ...(docId ? { doc_id: docId } : {}),
       ...(conversationId ? { conversation_id: conversationId } : {}),
     }),
@@ -191,6 +191,21 @@ export async function updateConversationTitle(convId: string, title: string): Pr
     body: JSON.stringify({ title }),
   })
   if (!res.ok) throw new Error(`Failed to update conversation title: ${convId}`)
+  return res.json()
+}
+
+export interface RegistryModel {
+  model_id: string
+  display_name: string
+  capability_level?: 'fast' | 'balanced' | 'research' | string
+  capability_tags: string[]
+  context_window: number
+  endpoint_count: number
+}
+
+export async function fetchRegistryModels(): Promise<RegistryModel[]> {
+  const res = await fetch(`${BASE_URL}/registry/models`)
+  if (!res.ok) throw new Error('Failed to fetch registry models')
   return res.json()
 }
 

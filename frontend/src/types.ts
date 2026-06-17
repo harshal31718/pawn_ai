@@ -12,9 +12,10 @@ export interface TraceEvent {
 
 export interface Message {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'notice'
   content: string
   trace?: TraceEvent[]
+  viaProvider?: string
 }
 
 export interface ChatState {

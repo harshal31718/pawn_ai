@@ -1,21 +1,6 @@
-interface Model {
-  id: string
-  label: string
-  level: 'fast' | 'balanced' | 'research'
-  sublabel?: string
-}
+import type { RegistryModel } from '../api/client'
 
-// Hardcoded for Steps 9–10. Replaced by GET /registry/models in Step R4.
-const MODELS: Model[] = [
-  { id: 'groq',        label: 'Llama 3.3 70B',  sublabel: 'Groq — fastest',    level: 'fast' },
-  { id: 'cerebras',   label: 'Llama 3.3 70B',  sublabel: 'Cerebras — fast',    level: 'fast' },
-  { id: 'gemini',     label: 'Gemini 2.5 Flash', sublabel: 'Google',            level: 'balanced' },
-  { id: 'huggingface',label: 'Llama 3.3 70B',  sublabel: 'HuggingFace',        level: 'balanced' },
-  { id: 'github',     label: 'Llama 3.3 70B',  sublabel: 'GitHub Models',      level: 'balanced' },
-  { id: 'openrouter', label: 'Llama 3.3 70B',  sublabel: 'OpenRouter (free)',   level: 'research' },
-]
-
-const LEVEL_LABELS: Record<Model['level'], string> = {
+const LEVEL_LABELS: Record<string, string> = {
   fast:     '⚡ Fast',
   balanced: '⚖️ Balanced',
   research: '🔬 Research',
@@ -25,15 +10,33 @@ interface Props {
   selected: string
   onChange: (id: string) => void
   disabled?: boolean
+  models: RegistryModel[]
 }
 
-export default function ModelSwitcher({ selected, onChange, disabled }: Props) {
+export default function ModelSwitcher({ selected, onChange, disabled, models }: Props) {
   // Group models by level for the optgroup display
-  const groups = (['fast', 'balanced', 'research'] as const).map((level) => ({
+  const levelsOrder = ['fast', 'balanced', 'research'] as const
+
+  const groups: Array<{
+    level: string
+    label: string
+    models: RegistryModel[]
+  }> = levelsOrder.map((level) => ({
     level,
-    label: LEVEL_LABELS[level],
-    models: MODELS.filter((m) => m.level === level),
+    label: LEVEL_LABELS[level] || level,
+    models: models.filter((m) => m.capability_level === level),
   }))
+
+  const otherModels = models.filter(
+    (m) => !m.capability_level || !levelsOrder.includes(m.capability_level as any)
+  )
+  if (otherModels.length > 0) {
+    groups.push({
+      level: 'other',
+      label: '⚙️ Other',
+      models: otherModels,
+    })
+  }
 
   return (
     <div className="flex items-center gap-1.5 px-1">
@@ -42,7 +45,7 @@ export default function ModelSwitcher({ selected, onChange, disabled }: Props) {
         id="model-switcher"
         value={selected}
         onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
+        disabled={disabled || models.length === 0}
         className="
           text-xs bg-zinc-100 border border-zinc-200 rounded-md
           px-2 py-1 text-zinc-700 cursor-pointer
@@ -51,12 +54,15 @@ export default function ModelSwitcher({ selected, onChange, disabled }: Props) {
           transition-colors
         "
       >
-        {groups.map(({ level, label, models }) =>
-          models.length > 0 ? (
+        {models.length === 0 && (
+          <option value={selected}>Loading models...</option>
+        )}
+        {groups.map(({ level, label, models: groupModels }) =>
+          groupModels.length > 0 ? (
             <optgroup key={level} label={label}>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.sublabel ? `${m.label} — ${m.sublabel}` : m.label}
+              {groupModels.map((m) => (
+                <option key={m.model_id} value={m.model_id}>
+                  {m.display_name} {m.endpoint_count > 0 ? `(${m.endpoint_count})` : '(no endpoints)'}
                 </option>
               ))}
             </optgroup>
@@ -66,3 +72,4 @@ export default function ModelSwitcher({ selected, onChange, disabled }: Props) {
     </div>
   )
 }
+

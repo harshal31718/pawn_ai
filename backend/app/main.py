@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
         app.state.checkpointer = deps["checkpointer"]
         app.state.registry = deps["registry"]
         app.state.rate_limiter = deps["rate_limiter"]
+        app.state.resolver = deps["resolver"]
         yield
     await close_client()
 

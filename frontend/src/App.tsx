@@ -13,7 +13,9 @@ import {
   fetchConversation,
   deleteConversation,
   updateConversationTitle,
-  type ConversationMeta
+  fetchRegistryModels,
+  type ConversationMeta,
+  type RegistryModel
 } from './api/client'
 
 let nextId = 1
@@ -21,7 +23,8 @@ let nextId = 1
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
-  const [selectedProvider, setSelectedProvider] = useState('gemini')
+  const [selectedProvider, setSelectedProvider] = useState('gemini-2.5-flash')
+  const [models, setModels] = useState<RegistryModel[]>([])
   
   // Conversations list & selection states
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
@@ -38,6 +41,25 @@ export default function App() {
     healthCheck()
       .then((data) => console.log('Backend:', data))
       .catch((err) => console.error('Backend unreachable:', err))
+
+    // Pull models registry
+    fetchRegistryModels()
+      .then((data) => {
+        setModels(data)
+        if (data.length > 0) {
+          setSelectedProvider((prev) => {
+            if (prev === 'gemini' && data.some((m) => m.model_id === 'gemini-2.5-flash')) {
+              return 'gemini-2.5-flash'
+            }
+            if (!data.some((m) => m.model_id === prev)) {
+              const defaultModel = data.find((m) => m.model_id === 'gemini-2.5-flash') || data[0]
+              return defaultModel.model_id
+            }
+            return prev
+          })
+        }
+      })
+      .catch((err) => console.error('Failed to fetch registry models:', err))
 
     // Pull saved chats
     refreshConversations()
@@ -62,7 +84,7 @@ export default function App() {
           }))
         
         setMessages(mapped)
-        setSelectedProvider(detail.meta.model_id || 'gemini')
+        setSelectedProvider(detail.meta.model_id || 'gemini-2.5-flash')
         setAttachedDoc(null) // Clear document context on thread switch
       })
       .catch((err) => {
@@ -149,10 +171,12 @@ export default function App() {
 
     // For persistent threads, we send the history which includes the userMsg.
     // The backend loads from disk and appends userMsg itself.
-    const history = [...messages, userMsg].map((m) => ({
-      role: m.role,
-      content: m.content,
-    }))
+    const history = [...messages, userMsg]
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+      }))
 
     await streamChat(
       history,
@@ -164,7 +188,12 @@ export default function App() {
             ),
           )
         },
-        onDone: () => {
+        onDone: (viaProvider) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, viaProvider } : m,
+            ),
+          )
           setIsStreaming(false)
           streamingIdRef.current = null
           // Refresh list to pull updated message count & automatic title after it completes
@@ -243,6 +272,20 @@ export default function App() {
           )
         },
         onProviderSwitch: (from, to) => {
+          const noticeMsg: Message = {
+            id: String(nextId++),
+            role: 'notice',
+            content: `Failing over: ${from} → ${to}`,
+          }
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === assistantId)
+            if (idx !== -1) {
+              const next = [...prev]
+              next.splice(idx, 0, noticeMsg)
+              return next
+            }
+            return [...prev, noticeMsg]
+          })
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
@@ -299,6 +342,7 @@ export default function App() {
             selected={selectedProvider}
             onChange={setSelectedProvider}
             disabled={isStreaming || isUploading}
+            models={models}
           />
         </header>
         
