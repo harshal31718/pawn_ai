@@ -3,6 +3,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.constants import CHECKPOINTS_DB
 from app.agent.graph import build_agent_graph
 from app.registry.loader import load_registry
+from app.core.rate_limiter import EndpointRateLimiter
 
 @asynccontextmanager
 async def initialize_managers():
@@ -12,11 +13,13 @@ async def initialize_managers():
     """
     CHECKPOINTS_DB.parent.mkdir(parents=True, exist_ok=True)
     registry = load_registry()
+    rate_limiter = EndpointRateLimiter()
     async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINTS_DB)) as checkpointer:
         graph = build_agent_graph().compile(checkpointer=checkpointer)
         yield {
             "checkpointer": checkpointer,
             "graph": graph,
-            "registry": registry
+            "registry": registry,
+            "rate_limiter": rate_limiter
         }
 

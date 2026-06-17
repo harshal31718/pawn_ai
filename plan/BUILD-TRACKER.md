@@ -13,9 +13,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase 1.5 — Memory & Agent
-**Active step:** Step 16 — LangGraph agent
-**Last completed:** Step 15 — RAG over memory
+**Active phase:** Phase 1.6 — Rate-Limit Resilience
+**Active step:** Step R3 — Resolver + normalize contract change
+**Last completed:** Step R2 — Rate limiter
 **Branch:** dev
 
 ---
@@ -107,7 +107,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   New secrets: huggingface, github, openrouter.
   Demo: `GET /registry/models` returns the full catalog.
 
-- [ ] **Step R2 — Rate limiter**
+- [x] **Step R2 — Rate limiter**
   `EndpointRateLimiter`: rolling windows, 90% threshold, cooldowns, dead-host.
   Demo: unit tests show endpoint flips unavailable at ≥90% and recovers.
 

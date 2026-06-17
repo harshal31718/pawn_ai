@@ -20,10 +20,10 @@ class EndpointEntry(BaseModel):
     base_url: str
     secret: str
     priority: int
-    rpm_limit: Optional[int]
-    rpd_limit: Optional[int]
-    tpm_limit: Optional[int]
-    tpd_limit: Optional[int]
+    rpm_limit: Optional[int] = None
+    rpd_limit: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    tpd_limit: Optional[int] = None
     active: bool
     last_verified: str
 
