@@ -1,8 +1,8 @@
 # PAWN — Personal AI Workspace
 
 Multi-model BYOK chat app. One interface, multiple AI providers, transparent rate-limit
-failover, persistent memory. Full project plan in `docs/blueprints/` and `docs/specifications/`. Current build state in
-`docs/history_and_status/current-state.md`. Build tracker in `docs/history_and_status/BUILD-TRACKER.md`.
+failover, persistent memory. Full project plan in `docs/plan/` and decisions in `docs/decisions/`. Current build state in
+`docs/current_state.md`. Build tracker in `docs/status/build_tracker.md`.
 
 ## What This Is
 
@@ -20,13 +20,13 @@ failover, persistent memory. Full project plan in `docs/blueprints/` and `docs/s
 3. Tests must pass before a step is marked done. No exceptions.
 4. Never commit files in `secrets/` (except `.gitkeep` and `*.example`).
 5. Frontend and backend communicate via REST + SSE only. No shared code or imports.
-6. Update `docs/current-state.md` and `docs/dev-log.md` after every step.
+6. Update `docs/current_state.md` and `docs/status/dev_log.md` after every step.
 
 ## Before Starting Any Work
 
-1. Read `docs/history_and_status/BUILD-TRACKER.md` — find the current active step.
-2. Read the relevant phase plan (e.g., `docs/blueprints/04-phase1-foundation.md`).
-3. Read `docs/history_and_status/current-state.md` — understand what already exists.
+1. Read `docs/status/build_tracker.md` — find the current active step.
+2. Read the relevant phase plan (e.g., `docs/implemented_phases/phase_1_foundation.md` or `docs/plan/phase_2_google_drive.md`).
+3. Read `docs/current_state.md` — understand what already exists.
 4. Then implement.
 
 ## Multi-Agent Workflow

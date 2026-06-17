@@ -1,6 +1,6 @@
 # PAWN — Build Tracker
 
-Source of truth for *what to build* is the relevant phase plan file in `docs/`.
+Source of truth for *what to build* is the relevant phase plan file in `docs/plan/` or `docs/implemented_phases/`.
 This file tracks *where we are*. Update it after every step — mark `[x]` only when
 tests pass and the step's demo works.
 
@@ -21,7 +21,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ---
 
 ## Phase 1 — Foundation
-*Plan reference: `docs/04-phase1-foundation.md`*
+*Plan reference: `docs/implemented_phases/phase_1_foundation.md`*
 
 - [x] **Step 1 — Create the repo**
   Folder structure, `.gitignore`, first commit. Demo: `git log` shows one commit.
@@ -74,7 +74,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ---
 
 ## Phase 1.5 — Memory & Agent
-*Plan reference: `docs/05-phase1.5-memory-agent.md`*
+*Plan reference: `docs/implemented_phases/phase_1_5_memory_agent.md`*
 
 - [x] **Step 12 — Multi-chat persistence**
   Backend source of truth. `data/conversations/<uuid>/`. CRUD endpoints. Sidebar UI.
@@ -99,7 +99,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ---
 
 ## Phase 1.6 — Rate-Limit Resilience
-*Plan reference: `docs/06-phase1.6-rate-limit.md`*
+*Plan reference: `docs/implemented_phases/phase_1_6_rate_limit.md`*
 *Branch: `dev/rate-limit-resilience`*
 
 - [x] **Step R1 — Registry foundation**
@@ -125,7 +125,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ---
 
 ## Phase 2 — Google Drive
-*Plan reference: `docs/07-phase2-drive.md`*
+*Plan reference: `docs/plan/phase_2_google_drive.md`*
 
 - [ ] **P2-1** — Drive API wired; conversation logs read/written to Drive.
 - [ ] **P2-2** — User memory file on Drive; auto-injected into context.
@@ -134,14 +134,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ---
 
 ## Phase 3 — Encryption
-*Plan reference: `docs/08-phase3-encryption.md`*
+*Plan reference: `docs/plan/phase_3_encryption.md`*
 
 - [ ] **P3-1** — WebCrypto AES-256-GCM; all personal Drive files encrypted in browser.
 
 ---
 
 ## Phase 4 — Multi-User / Auth
-*Plan reference: `docs/09-phase4-multiuser.md`*
+*Plan reference: `docs/plan/phase_4_multiuser.md`*
 
 - [ ] **P4-1** — Google OAuth2; multi-user sessions; per-user Drive isolation.
 - [ ] **P4-2** — Settings panel; custom agent configs; capability + tag routing.
