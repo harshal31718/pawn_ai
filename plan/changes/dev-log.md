@@ -138,6 +138,15 @@ This becomes your interview script and project history.
 **Tests:** 25 passed (4 new: direct summarizer test, context window truncation verify, summary prepend, and background threshold task trigger). Frontend typechecks and builds cleanly.
 **Commit:** feat: rolling conversation summaries with context memory truncation
 
+### 2026-06-17 — Step 15: RAG over Memory (sqlite-vec)
+
+**Built:** Integrated sqlite-vec extension loading into a sqlite3 database index manager (`backend/app/memory/index.py`), storing text summaries alongside float32 vector embeddings and FTS5 keyword indexing. Created the embedding query interface (`backend/app/memory/embed.py`) mapping to Gemini's `text-embedding-004` (with Ollama `nomic-embed-text` fallback). Created a hybrid retrieval system (`backend/app/memory/retrieve.py`) merging vector nearest-neighbors and FTS matching using Reciprocal Rank Fusion (RRF). Integrated RAG retrieval in the `/chat` route, prepending retrieved context system messages, and yielding `memory_hit` SSE tokens.
+**Decisions:** Request a candidate count multiplier of `top_k * 4` during candidate generation before filtering out the active conversation ID, ensuring we retain a sufficient candidate pool.
+**Issues:** None.
+**Tests:** 29 passed (4 new RAG integration tests verifying vector search similarity, active thread filtering, FTS5 fallback, and SSE memory hit streams). Frontend typechecks and builds cleanly.
+**Commit:** feat: hybrid vector FTS RAG over memories with sqlite-vec
+
+
 
 
 

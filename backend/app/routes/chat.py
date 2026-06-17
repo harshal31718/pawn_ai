@@ -110,7 +110,35 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
         if messages_to_send:
             user_msg_dict = messages_to_send[-1]
             
-    # 2. Inject document context if doc_id provided (not saved to database)
+    # 2. Retrieve past memories (RAG) and prepend them
+    rag_hits = []
+    if user_msg_dict:
+        try:
+            from app.memory.retrieve import retrieve
+            rag_hits = await retrieve(
+                query=user_msg_dict["content"],
+                active_conv_id=req.conversation_id,
+                top_k=3
+            )
+        except Exception as e:
+            import sys
+            print(f"RAG retrieval failed: {e}", file=sys.stderr)
+            
+    if rag_hits:
+        rag_content = "\n\n".join([f"- {hit['text']}" for hit in rag_hits])
+        rag_system = {
+            "role": "system",
+            "content": (
+                f"Relevant memories retrieved from past conversations:\n"
+                f"====================\n"
+                f"{rag_content}\n"
+                f"====================\n"
+                f"You may use these memories if they help answer the user's prompt."
+            )
+        }
+        messages_to_send.insert(0, rag_system)
+            
+    # 3. Inject document context if doc_id provided (not saved to database)
     if req.doc_id:
         doc_text = load_doc(req.doc_id)
         if doc_text is None:
@@ -130,6 +158,10 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
         messages_to_send = [{"role": "system", "content": system_content}] + messages_to_send
 
     async def generate():
+        # Yield memory hits before starting token stream
+        for hit in rag_hits:
+            yield events.memory_hit_event(hit["text"])
+            
         assistant_text = ""
         success = False
         try:

@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1.5 — Memory & Agent
-**Active step:** Step 15 — RAG over memory
-**Last completed:** Step 14 — Per-chat memory summaries
+**Active step:** Step 16 — LangGraph agent
+**Last completed:** Step 15 — RAG over memory
 **Branch:** dev
 
 ---
@@ -88,7 +88,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   Rolling `summary.md` per conversation. Threshold-triggered summarization.
   Demo: 30-message chat coherent; `summary.md` written to disk.
 
-- [~] **Step 15 — RAG over memory**
+- [x] **Step 15 — RAG over memory**
   `data/memory/index.json`. `text-embedding-004` embed interface. Brute-force cosine.
   Demo: fact from chat A surfaces in chat B via retrieval.
 
