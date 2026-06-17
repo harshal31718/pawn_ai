@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase 1.5 — Memory & Agent
-**Active step:** Step 13 — Complete typed SSE events
-**Last completed:** Step 12 — Multi-chat persistence
+**Active step:** Step 14 — Per-chat memory summaries
+**Last completed:** Step 13 — Complete typed SSE events
 **Branch:** dev
 
 ---
@@ -80,7 +80,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   Backend source of truth. `data/conversations/<uuid>/`. CRUD endpoints. Sidebar UI.
   Demo: two chats with independent history, survive restarts. Auto-title fires.
 
-- [ ] **Step 13 — Complete typed SSE events**
+- [x] **Step 13 — Complete typed SSE events**
   All event types dispatched and routed in `streamChat`. Frontend callbacks wired.
   Demo: all event types appear in Network tab; UI handles each.
 

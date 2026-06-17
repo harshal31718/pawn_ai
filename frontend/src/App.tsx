@@ -183,6 +183,85 @@ export default function App() {
           setIsStreaming(false)
           streamingIdRef.current = null
         },
+        onStep: (label, detail) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    trace: [
+                      ...(m.trace || []),
+                      {
+                        type: 'step',
+                        label,
+                        detail,
+                        timestamp: new Date().toLocaleTimeString(),
+                      },
+                    ],
+                  }
+                : m,
+            ),
+          )
+        },
+        onMemoryHit: (summary) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    trace: [
+                      ...(m.trace || []),
+                      {
+                        type: 'memory_hit',
+                        summary,
+                        timestamp: new Date().toLocaleTimeString(),
+                      },
+                    ],
+                  }
+                : m,
+            ),
+          )
+        },
+        onModelCall: (model, purpose) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    trace: [
+                      ...(m.trace || []),
+                      {
+                        type: 'model_call',
+                        model,
+                        purpose,
+                        timestamp: new Date().toLocaleTimeString(),
+                      },
+                    ],
+                  }
+                : m,
+            ),
+          )
+        },
+        onProviderSwitch: (from, to) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    trace: [
+                      ...(m.trace || []),
+                      {
+                        type: 'provider_switch',
+                        from,
+                        to,
+                        timestamp: new Date().toLocaleTimeString(),
+                      },
+                    ],
+                  }
+                : m,
+            ),
+          )
+        },
       },
       selectedProvider,
       attachedDoc?.id || undefined,

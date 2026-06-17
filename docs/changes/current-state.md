@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-17
-Active step: Step 13 — Complete typed SSE events
+Active step: Step 14 — Per-chat memory summaries
 Phase: Phase 1.5 — Memory & Agent
 
 ---
@@ -21,6 +21,7 @@ Phase: Phase 1.5 — Memory & Agent
 - Step 10: Model switcher UI — Grouped provider/model switcher component integrated in React frontend.
 - Step 11: Document upload — `backend/app/routes/upload.py` accepts PDF/TXT files, extracts text via `pdfplumber`, and stores it in-memory to inject as system message context in `/chat`. Added attachment UI in the input field.
 - Step 12: Multi-chat persistence — Built disk-based conversation serialization (`meta.json` + append-only `messages.jsonl`), REST backend CRUD endpoints, auto-titling background tasks, and a dual-pane layout in React featuring inline renaming and thread deletion.
+- Step 13: Complete typed SSE events — Wired `onStep`, `onMemoryHit`, `onModelCall`, and `onProviderSwitch` callbacks in `App.tsx` and updated `types.ts` message interfaces to store active trace sequences dynamically.
 
 ---
 

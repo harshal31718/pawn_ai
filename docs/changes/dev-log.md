@@ -122,4 +122,13 @@ This becomes your interview script and project history.
 **Tests:** 21 passed (3 new: REST CRUD endpoints, messages saving to disk, auto-titling trigger). Frontend typechecks and builds cleanly.
 **Commit:** feat: multi-chat persistence with sidebar navigation and auto-titling
 
+### 2026-06-17 — Step 13: Complete Typed SSE Events
+
+**Built:** Updated `frontend/src/types.ts` to include the `TraceEvent` schema and an optional `trace` field on the `Message` interface. Wired the remaining SSE callbacks (`onStep`, `onMemoryHit`, `onModelCall`, and `onProviderSwitch`) in `App.tsx`'s `streamChat` invocation to append incoming trace events dynamically onto the active message object.
+**Decisions:** Maintain trace logs directly inside the Message object scope in frontend state, preparing the state format for the upcoming TracePanel (Step 16) and provider switch inline notifications (Step R4).
+**Issues:** None.
+**Tests:** 21 passed; frontend typechecks and builds cleanly.
+**Commit:** feat: wire up all remaining typed SSE trace callbacks in frontend state
+
+
 
