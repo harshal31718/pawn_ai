@@ -35,7 +35,7 @@ pawn/
 │   └── src/
 ├── secrets/
 │   └── .gitkeep
-├── docs/
+├── workspace/
 │   └── dev-log.md
 ├── docker-compose.yml
 └── .gitignore
@@ -98,7 +98,7 @@ dist/
 # dev tools
 .claude/
 .git/
-docs/
+workspace/
 
 # os
 .DS_Store
@@ -134,7 +134,7 @@ failover, persistent memory on Google Drive.
 - All LLM calls go through app/core/normalize.py → llm_core.py. Never inline.
 - Frontend and backend communicate via REST + SSE only. No shared code.
 - One test per new endpoint. Tests must pass before a step is marked done.
-- Update docs/dev-log.md at the end of each step.
+- Update workspace/dev-log.md at the end of each step.
 ```
 
 ### .claude/rules/backend.md
@@ -616,4 +616,4 @@ Commit: `feat: basic RAG — whole-doc injection into context`
 - One step per session. Pause for review before moving to the next.
 - Review every diff. Understand every line.
 - Tests present and passing before a step is marked done.
-- Dated entry in `docs/dev-log.md` at the end of each step.
+- Dated entry in `workspace/dev-log.md` at the end of each step.

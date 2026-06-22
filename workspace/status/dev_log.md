@@ -32,7 +32,7 @@ This becomes your interview script and project history.
 **Decisions:** Used plan/12-claude-setup-guide.md verbatim as the authoritative source for all .claude/ content.
 **Issues:** None.
 **Tests:** N/A.
-**Commit:** chore: project scaffolding — .claude config, docs/, secrets pattern
+**Commit:** chore: project scaffolding — .claude config, workspace/, secrets pattern
 
 ### 2026-06-15 — Step 2.5: Docker Scaffolding
 
@@ -185,3 +185,11 @@ This becomes your interview script and project history.
 **Issues:** None.
 **Tests:** 47 passing backend tests. Frontend typescript typechecks and builds cleanly with zero errors.
 **Commit:** `88738e2` (feat: frontend wiring for dynamic models, inline failover notices, and provider badges (step R4))
+
+### 2026-06-22 — Hotfix: Port and CORS Configuration
+
+**Built:** Fixed a silent misconfiguration that caused all browser API calls to hit a foreign service instead of PAWN's backend. `docker-compose.yml` used port ranges (`8000-8010:8000`, `5173-5180:5173`); Docker allocated 8001 for the backend and 5174 for the frontend, but `VITE_API_URL` was hardcoded to `http://localhost:8000` (another service) and CORS `allow_origins` only listed `http://localhost:5173`. Pinned ports to `8001:8000` and `5174:5173`, updated `VITE_API_URL` to `http://localhost:8001`, added `http://localhost:5174` to CORS allowed origins, and created `frontend/.env` for local dev outside Docker.
+**Decisions:** Fixed port ranges to deterministic values rather than trying to free port 8000 — another service on the host owns it and there is no reason to conflict.
+**Issues:** PDF upload (and all other API calls) silently failed because requests went to an unrelated service that happened to return 200 on `/health` but 404 on all PAWN routes.
+**Tests:** CORS preflight verified via curl: `access-control-allow-origin: http://localhost:5174`. Upload endpoint confirmed working inside container.
+**Commit:** stable: small fixes resolved

@@ -28,7 +28,7 @@ any application code. Set this up first. Claude Code will use it for every sessi
 │   └── skills/
 │       └── build-step/
 │           └── SKILL.md
-├── docs/
+├── workspace/
 │   ├── current-state.md           ← what's built and working RIGHT NOW (kept up to date)
 │   ├── dev-log.md                 ← dated entry per step
 │   └── api-reference.md           ← backend routes + SSE events (updated per step)
@@ -61,7 +61,7 @@ The build tracker and phase plans are what agents read to know what to build.
 
 Multi-model BYOK chat app. One interface, multiple AI providers, transparent rate-limit
 failover, persistent memory. Full project plan in `plan/`. Current build state in
-`docs/current-state.md`. Build tracker in `plan/BUILD-TRACKER.md`.
+`workspace/current-state.md`. Build tracker in `plan/BUILD-TRACKER.md`.
 
 ## What This Is
 
@@ -79,13 +79,13 @@ failover, persistent memory. Full project plan in `plan/`. Current build state i
 3. Tests must pass before a step is marked done. No exceptions.
 4. Never commit files in `secrets/` (except `.gitkeep` and `*.example`).
 5. Frontend and backend communicate via REST + SSE only. No shared code or imports.
-6. Update `docs/current-state.md` and `docs/dev-log.md` after every step.
+6. Update `workspace/current-state.md` and `workspace/dev-log.md` after every step.
 
 ## Before Starting Any Work
 
 1. Read `plan/BUILD-TRACKER.md` — find the current active step.
 2. Read the relevant phase plan (e.g. `plan/04-phase1-foundation.md`).
-3. Read `docs/current-state.md` — understand what already exists.
+3. Read `workspace/current-state.md` — understand what already exists.
 4. Then implement.
 
 ## Multi-Agent Workflow
@@ -109,7 +109,7 @@ You are a specialized agent working on the PAWN project. Before doing anything:
 
 ## Required Reading (do this first, every time)
 
-1. Read `docs/current-state.md` — understand what is built and working right now.
+1. Read `workspace/current-state.md` — understand what is built and working right now.
 2. Read `plan/BUILD-TRACKER.md` — find the current active step and its status.
 3. Read the relevant plan file for the active phase (listed in BUILD-TRACKER.md).
 4. Read `.claude/rules/` files relevant to your task (backend.md, frontend.md, etc.).
@@ -419,7 +419,7 @@ structured information about a specific build step.
 
 1. Read `plan/BUILD-TRACKER.md` to find the current active step.
 2. Read the relevant phase plan file (e.g. `plan/04-phase1-foundation.md`).
-3. Read `docs/current-state.md` to understand what already exists.
+3. Read `workspace/current-state.md` to understand what already exists.
 
 ## Output Format
 
@@ -463,8 +463,8 @@ you verify that it is truly complete.
    - Check that the required files exist
    - Check that required tests exist and pass (call test-runner agent or check output)
    - Verify naming conventions match the plan (grep for expected class/function names)
-4. Check `docs/current-state.md` has been updated to reflect the completed step.
-5. Check `docs/dev-log.md` has a dated entry for this step.
+4. Check `workspace/current-state.md` has been updated to reflect the completed step.
+5. Check `workspace/dev-log.md` has a dated entry for this step.
 
 ## Output Format
 
@@ -537,8 +537,8 @@ Run the `build-validator` agent:
 - If STATUS: FAIL → fix missing items, re-run validator
 
 ### Phase G — Update Docs
-1. Update `docs/current-state.md`: add what was built in this step
-2. Append a dated entry to `docs/dev-log.md`
+1. Update `workspace/current-state.md`: add what was built in this step
+2. Append a dated entry to `workspace/dev-log.md`
 3. Update `plan/BUILD-TRACKER.md`: mark the step `[x]`
 4. Commit: `git commit -m "feat: [step description]"`
 
@@ -562,9 +562,9 @@ After all phases complete, report:
 
 ---
 
-## `docs/current-state.md` (initial content)
+## `workspace/current-state.md` (initial content)
 
-Create this file in `/PAWN/docs/current-state.md` before starting Step 1:
+Create this file in `/PAWN/workspace/current-state.md` before starting Step 1:
 
 ```markdown
 # PAWN — Current State
@@ -631,7 +631,7 @@ After every completed step, update:
 
 ---
 
-## `docs/dev-log.md` (initial content)
+## `workspace/dev-log.md` (initial content)
 
 ```markdown
 # PAWN — Development Log
@@ -668,8 +668,8 @@ This becomes your interview script and project history.
 - [ ] `/PAWN/.claude/rules/` — all 4 rule files created
 - [ ] `/PAWN/.claude/agents/` — all 5 agent files created
 - [ ] `/PAWN/.claude/skills/build-step/SKILL.md` created
-- [ ] `/PAWN/docs/current-state.md` created with initial content
-- [ ] `/PAWN/docs/dev-log.md` created with initial content
+- [ ] `/PAWN/workspace/current-state.md` created with initial content
+- [ ] `/PAWN/workspace/dev-log.md` created with initial content
 - [ ] `claude` runs in `/PAWN` without errors
 - [ ] Hook in `settings.json` blocks `secrets/real_key` writes (test it)
 

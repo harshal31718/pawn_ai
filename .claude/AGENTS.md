@@ -4,8 +4,8 @@ You are a specialized agent working on the PAWN project. Before doing anything:
 
 ## Required Reading (do this first, every time)
 
-1. Read `docs/current_state.md` — understand what is built and working right now.
-2. Read `docs/status/build_tracker.md` — find the current active step and its status.
+1. Read `workspace/current_state.md` — understand what is built and working right now.
+2. Read `workspace/status/build_tracker.md` — find the current active step and its status.
 3. Read the relevant plan file for the active phase (listed in BUILD-TRACKER.md).
 4. Read `.claude/rules/` files relevant to your task (backend.md, frontend.md, etc.).
 

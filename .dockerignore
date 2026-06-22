@@ -22,7 +22,7 @@ dist/
 # dev tools
 .claude/
 .git/
-docs/
+workspace/
 
 # os
 .DS_Store

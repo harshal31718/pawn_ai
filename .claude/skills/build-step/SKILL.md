@@ -50,9 +50,9 @@ Run the `build-validator` agent:
 - If STATUS: FAIL → fix missing items, re-run validator
 
 ### Phase G — Update Docs
-1. Update `docs/current_state.md`: add what was built in this step
-2. Append a dated entry to `docs/status/dev_log.md`
-3. Update `docs/status/build_tracker.md`: mark the step `[x]`
+1. Update `workspace/current_state.md`: add what was built in this step
+2. Append a dated entry to `workspace/status/dev_log.md`
+3. Update `workspace/status/build_tracker.md`: mark the step `[x]`
 4. Commit: `git commit -m "feat: [step description]"`
 
 ## Output to User
