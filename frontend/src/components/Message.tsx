@@ -1,5 +1,6 @@
+import { useState, useRef, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
 import type { Message } from '../types'
-import TracePanel from './TracePanel'
 
 interface Props {
   message: Message
@@ -16,28 +17,195 @@ const formatProviderName = (p: string) => {
 
 export default function MessageBubble({ message, isStreaming }: Props) {
   const isUser = message.role === 'user'
+  const [isExpanded, setIsExpanded] = useState(false)
+  const [isLong, setIsLong] = useState(false)
+  const [isTraceOpen, setIsTraceOpen] = useState(true)
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isStreaming && message.trace && message.trace.length > 0) {
+      const timer = setTimeout(() => setIsTraceOpen(false), 500)
+      return () => clearTimeout(timer)
+    }
+  }, [isStreaming, message.trace])
+
+  useEffect(() => {
+    if (!isUser) return
+    const el = contentRef.current
+    if (el) {
+      if (el.scrollHeight > 140) {
+        setIsLong(true)
+      }
+    }
+  }, [message.content, isUser])
+
+  const showTruncated = isUser && isLong && !isExpanded && !isStreaming
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
-      <div className="flex flex-col max-w-[75%]">
+      <div className={`flex flex-col w-fit ${isUser ? 'max-w-[50%] ml-auto' : 'max-w-[85%] md:max-w-[75%] mr-auto'}`}>
         <div
-          className={`rounded-2xl px-4 py-2 text-sm leading-relaxed whitespace-pre-wrap ${
+          ref={contentRef}
+          className={`rounded-2xl px-4 py-2 text-sm leading-relaxed relative break-words break-all ${
             isUser
-              ? 'bg-zinc-800 text-white self-end'
-              : 'bg-zinc-100 text-zinc-900 self-start'
-          }`}
+              ? 'bg-theme-brand text-theme-brand-text whitespace-pre-wrap'
+              : 'bg-theme-bg text-theme-text border border-theme-border/40'
+          } ${showTruncated ? 'max-h-[140px] overflow-hidden' : `max-h-none ${isUser && isLong ? 'pb-7' : ''}`}`}
         >
-          {message.content}
+          {/* Fade Overlay */}
+          {showTruncated && (
+            <div className={`absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t ${isUser ? 'from-theme-brand via-theme-brand/80' : 'from-theme-surface via-theme-surface/80'} to-transparent pointer-events-none z-10`} />
+          )}
+
+          {/* Toggle Button */}
+          {isUser && isLong && !isStreaming && (
+            <button
+              type="button"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className={`absolute bottom-1.5 right-4 text-[10px] font-bold select-none cursor-pointer hover:underline underline-offset-2 z-20 text-theme-brand-text/90 hover:text-theme-brand-text`}
+            >
+              {isExpanded ? 'less' : 'more'}
+            </button>
+          )}
+
+          {isUser ? (
+            message.content
+          ) : (
+            <ReactMarkdown
+              components={{
+                ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
+                li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
+                p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0 leading-relaxed">{children}</p>,
+                h1: ({ children }) => <h1 className="text-lg font-bold my-2">{children}</h1>,
+                h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
+                h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
+                pre: ({ children }) => (
+                  <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-xs leading-normal">
+                    {children}
+                  </pre>
+                ),
+                code: ({ children, className }) => {
+                  const isInline = !className;
+                  return isInline ? (
+                    <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-xs border border-theme-border/30">
+                      {children}
+                    </code>
+                  ) : (
+                    <code className={className}>{children}</code>
+                  );
+                },
+                a: ({ children, href }) => (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          )}
         </div>
-        {!isUser && message.viaProvider && (
-          <div className="text-[10px] text-zinc-400 mt-1 ml-2 self-start font-medium tracking-wider select-none animate-in fade-in duration-200">
-            via {formatProviderName(message.viaProvider)}
+        {/* Combined Metadata and Agent Trace Panel */}
+        {!isUser && (message.viaProvider || (message.trace && message.trace.length > 0)) && (
+          <div className="mt-1.5 flex flex-col w-full px-2 relative z-10">
+            
+            {/* Metadata Row */}
+            <div className="flex items-center justify-between text-[10px] text-theme-text-muted font-medium select-none">
+              {/* Left: Provider Info */}
+              <div>
+                {message.viaProvider ? `via ${formatProviderName(message.viaProvider)}` : ''}
+              </div>
+
+              {/* Right: Agent Toggle Button */}
+              {message.trace && message.trace.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIsTraceOpen(!isTraceOpen)}
+                  className="flex items-center gap-1 hover:text-theme-text transition-colors focus:outline-none cursor-pointer font-semibold"
+                >
+                  <span>Agent Execution ({message.trace.length} step{message.trace.length > 1 ? 's' : ''})</span>
+                  <svg
+                    className={`w-3 h-3 transform transition-transform ${isTraceOpen ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            {/* Expanded Trace Details: background matching reply box (bg-theme-surface) */}
+            {isTraceOpen && message.trace && message.trace.length > 0 && (
+              <div className="mt-1.5 p-3 rounded-xl border border-theme-border/40 bg-theme-bg relative z-10 text-xs text-theme-text shadow-sm divide-y divide-zinc-200/10 dark:divide-zinc-800/20 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-200">
+                {message.trace.map((event, idx) => {
+                  if (event.type === 'step') {
+                    return (
+                      <div key={idx} className="flex items-start gap-2 pt-2 first:pt-0">
+                        <span className="text-emerald-500 font-semibold mt-0.5 select-none">●</span>
+                        <div className="flex-1">
+                          <span className="font-semibold text-zinc-700 dark:text-zinc-300">{event.label}</span>
+                          {event.detail && (
+                            <span className="text-zinc-500 dark:text-zinc-400 block mt-0.5 bg-theme-bg/60 p-1.5 rounded font-mono text-[10px] whitespace-pre-wrap border border-theme-border/20">
+                              {event.detail}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  }
+                  
+                  if (event.type === 'memory_hit') {
+                    return (
+                      <div key={idx} className="flex items-start gap-2 pt-2 text-zinc-400 dark:text-zinc-500 italic">
+                        <span className="text-amber-500 font-bold mt-0.5 select-none">↩</span>
+                        <div className="flex-1 text-[11px] leading-relaxed">
+                          <span className="font-medium text-zinc-500 dark:text-zinc-400 not-italic">Memory Hit:</span> {event.summary}
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  if (event.type === 'model_call') {
+                    return (
+                      <div key={idx} className="flex items-center gap-2 pt-2 text-zinc-500 dark:text-zinc-400">
+                        <span className="text-indigo-500 select-none">⚡</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium">Model Call:</span>
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40 text-indigo-600 dark:text-indigo-400 font-mono text-[10px]">
+                            {event.model}
+                          </span>
+                          <span className="text-[10px] text-zinc-400 dark:text-zinc-500 capitalize">({event.purpose})</span>
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  if (event.type === 'provider_switch') {
+                    return (
+                      <div key={idx} className="flex items-center gap-2 pt-2 text-rose-500 dark:text-rose-400 bg-rose-50/30 dark:bg-rose-950/20 p-1.5 rounded border border-rose-100/30 dark:border-rose-900/25">
+                        <span className="select-none">⇄</span>
+                        <div>
+                          <span className="font-semibold">Provider Switch:</span>
+                          <span className="ml-1 font-mono text-[10px]">
+                            {event.from} → {event.to}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  }
+                  return null
+                })}
+              </div>
+            )}
+
           </div>
-        )}
-        {!isUser && message.trace && message.trace.length > 0 && (
-          <TracePanel trace={message.trace} isStreaming={isStreaming} />
         )}
       </div>
     </div>
   )
 }
+
 

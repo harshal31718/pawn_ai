@@ -193,3 +193,41 @@ This becomes your interview script and project history.
 **Issues:** PDF upload (and all other API calls) silently failed because requests went to an unrelated service that happened to return 200 on `/health` but 404 on all PAWN routes.
 **Tests:** CORS preflight verified via curl: `access-control-allow-origin: http://localhost:5174`. Upload endpoint confirmed working inside container.
 **Commit:** stable: small fixes resolved
+
+### 2026-06-27 — Step R5: UI Visual Overhaul + LAN Access
+
+**Built:**
+
+*Theme & layout system:*
+- `frontend/src/index.css` — Full CSS variable theme system: `@theme` block, `:root` light tokens (zinc-based), `.dark` override tokens. Scrollbars hidden globally.
+- `frontend/index.html` — Blocking inline `<script>` in `<head>` reads `localStorage['pawn-theme']` and `prefers-color-scheme`, applies `.dark` before first paint to eliminate FOUC theme flash.
+- `frontend/src/App.tsx` — Responsive `isSidebarOpen` state (open ≥768px); `darkMode` state with localStorage + `prefers-color-scheme`, synced via `useEffect` to `document.documentElement`. Floating pill header islands (left: title + sidebar toggle, right: ModelSwitcher + dark mode toggle). Top-corner gradient overlays set to `h-16 via-theme-bg/25` (reduced from h-28/via-50 to avoid masking scrolled text). Floating bottom gradient input area. Sidebar receives `isOpen/onClose/onOpen` props.
+
+*New component:*
+- `frontend/src/components/InteractiveGridBackground.tsx` — 184-line animated canvas dot-grid reacting to mouse position; receives `darkMode` prop.
+
+*Message rendering:*
+- `frontend/src/components/Message.tsx` — `react-markdown` for assistant messages with custom component overrides (ul/ol/li, p, h1-3, pre, code inline+block, a). User messages: height >140px triggers collapsible fade overlay + "more/less" button. Unified metadata row below assistant bubble: provider name left, "Agent Execution (N steps)" toggle button right. Trace panel logic inlined (replaces deleted `TracePanel.tsx`): step/memory_hit/model_call rows in a `max-h-60` scrollable card using `bg-theme-bg` to blend with page. Auto-collapses trace 500ms after streaming ends. `w-fit` container with `ml-auto`/`mr-auto` so trace card aligns to bubble edges. `relative z-10` on metadata + trace rows fixes canvas dot bleed-through.
+- `frontend/src/components/TracePanel.tsx` — **Deleted** (logic absorbed into Message.tsx).
+
+*Input:*
+- `frontend/src/components/MessageInput.tsx` — Auto-resize textarea clamped at 138px. `isMultiLine` state: pill → card morph on expansion.
+
+*Sidebar:*
+- `frontend/src/components/Sidebar.tsx` — Mini-sidebar collapsed width narrowed from `w-16` to `w-12`, padding `px-1`. Clicking the blank collapsed column expands (outer wrapper has `onClick={onOpen}`; icon buttons call `e.stopPropagation()`). Inner container uses fixed widths (`w-64` expanded, `w-12` collapsed) so the parent clips as a curtain — eliminates "New Chat" text-squish flicker. Profile avatar badge ("H", `w-8 h-8 bg-theme-brand rounded-full`) rendered below settings icon in collapsed state. Delete icon and confirmation popup colors neutralized to zinc (red removed). Conversation item clicks no longer call `onClose`, keeping sidebar open on thread switches.
+
+*Registry API:*
+- `backend/app/registry/schemas.py` — Added `providers: List[str] = []` to `ModelResponse`.
+- `backend/app/routes/registry.py` — Populates `providers` as sorted unique set of endpoint provider names per model.
+- `frontend/src/api/client.ts` — Added `providers: string[]` to `RegistryModel`.
+
+*LAN access:*
+- `backend/app/main.py` — Added `http://10.95.144.153:5174` to CORS `allow_origins`.
+- `docker-compose.yml` — `VITE_API_URL` set to `http://10.95.144.153:8001` for cross-device testing.
+
+- `frontend/package.json` — Added `react-markdown` dependency.
+
+**Decisions:** LAN IP `10.95.144.153` hardcoded for testing session — revert to `localhost` before merging to main. `react-markdown` over MDX for simplicity; no syntax highlighter added yet. Smart scroll freezes on alignment (not pinned to bottom) for better UX during long streamed responses. Trace auto-collapse delay (500ms after `isStreaming` → false) gives the user a moment to see the final state before it closes.
+**Issues:** None.
+**Tests:** 47 passing backend (no new backend tests). Frontend TypeScript build: pending verification before merge.
+**Commit:** (uncommitted — working tree changes on dev branch)

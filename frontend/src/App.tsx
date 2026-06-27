@@ -4,6 +4,8 @@ import ChatWindow from './components/ChatWindow'
 import MessageInput from './components/MessageInput'
 import ModelSwitcher from './components/ModelSwitcher'
 import Sidebar from './components/Sidebar'
+import SettingsModal from './components/SettingsModal'
+import InteractiveGridBackground from './components/InteractiveGridBackground'
 import {
   healthCheck,
   streamChat,
@@ -26,7 +28,6 @@ export default function App() {
   const [selectedProvider, setSelectedProvider] = useState('gemini-2.5-flash')
   const [models, setModels] = useState<RegistryModel[]>([])
   
-  // Conversations list & selection states
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
 
@@ -34,7 +35,32 @@ export default function App() {
   const [attachedDoc, setAttachedDoc] = useState<{ id: string; name: string } | null>(null)
   const [isUploading, setIsUploading] = useState(false)
 
+  // Responsive sidebar & Theme states
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768)
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('pawn-theme')
+    return saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  })
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [displayName, setDisplayName] = useState(() => localStorage.getItem('pawn-display-name') || 'Harshal')
+
   const streamingIdRef = useRef<string | null>(null)
+
+  // Sync theme to document element
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark')
+      localStorage.setItem('pawn-theme', 'dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+      localStorage.setItem('pawn-theme', 'light')
+    }
+  }, [darkMode])
+
+  function handleSaveDisplayName(name: string) {
+    setDisplayName(name)
+    localStorage.setItem('pawn-display-name', name)
+  }
 
   // 1. Initialise on mount
   useEffect(() => {
@@ -324,8 +350,11 @@ export default function App() {
     }
   }
 
+  const activeConv = conversations.find((c) => c.id === activeConvId)
+  const headerTitle = activeConv ? activeConv.title : 'PAWN Chat'
+
   return (
-    <div className="flex h-screen w-screen bg-white overflow-hidden font-sans">
+    <div className="flex h-screen w-screen bg-theme-bg text-theme-text overflow-hidden font-sans transition-colors duration-200">
       <Sidebar
         conversations={conversations}
         activeId={activeConvId}
@@ -333,50 +362,113 @@ export default function App() {
         onCreate={handleCreate}
         onDelete={handleDelete}
         onRename={handleRename}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        onOpen={() => setIsSidebarOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        displayName={displayName}
+      />
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        darkMode={darkMode}
+        onToggleDarkMode={() => setDarkMode((d) => !d)}
+        displayName={displayName}
+        onSaveDisplayName={handleSaveDisplayName}
       />
       
       <div className="flex-1 flex flex-col h-full overflow-hidden relative">
-        <header className="border-b border-zinc-200 px-4 py-2 shrink-0 flex items-center justify-between bg-white z-10">
-          <h1 className="text-sm font-semibold text-zinc-800">PAWN Chat</h1>
-          <ModelSwitcher
-            selected={selectedProvider}
-            onChange={setSelectedProvider}
-            disabled={isStreaming || isUploading}
-            models={models}
-          />
+        <InteractiveGridBackground darkMode={darkMode} />
+        {/* Floating Top Header Area */}
+        <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center justify-between w-full">
+          {/* Corner Gradient Shading Panels (Center clear, smooth corner fade) */}
+          <div className="absolute top-0 left-0 w-1/2 h-16 bg-gradient-to-br from-theme-bg via-theme-bg/25 to-transparent pointer-events-none z-10" />
+          <div className="absolute top-0 right-0 w-1/2 h-16 bg-gradient-to-bl from-theme-bg via-theme-bg/25 to-transparent pointer-events-none z-10" />
+
+          {/* Left Floating Island: Project Name/Chat Title */}
+          <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
+            {!isSidebarOpen && (
+              <button
+                type="button"
+                onClick={() => setIsSidebarOpen(true)}
+                className="md:hidden p-1 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text focus:outline-none transition-colors"
+                title="Open sidebar"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4.5 h-4.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                </svg>
+              </button>
+            )}
+            <h1 className="text-xs font-semibold text-theme-text truncate max-w-[150px] md:max-w-xs select-none" title={headerTitle}>
+              {headerTitle}
+            </h1>
+          </div>
+          
+          {/* Right Floating Island: Model switcher + Dark mode combined bar */}
+          <div className="flex items-center gap-2 px-2.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
+            <ModelSwitcher
+              selected={selectedProvider}
+              onChange={setSelectedProvider}
+              disabled={isStreaming || isUploading}
+              models={models}
+            />
+
+            <div className="w-px h-4 bg-theme-border/60 shrink-0" />
+
+            <button
+              type="button"
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-1 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
+              title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {darkMode ? (
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4.5 h-4.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m0 13.5V21M5.03 5.03l1.59 1.59m10.76 10.76l1.59 1.59M3 12h2.25m13.5 0H21M5.03 18.97l1.59-1.59m10.76-10.76l1.59-1.59M12 9a3 3 0 100 6 3 3 0 000-6z" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4.5 h-4.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+                </svg>
+              )}
+            </button>
+          </div>
         </header>
         
         <ChatWindow messages={messages} isStreaming={isStreaming} />
         
-        {attachedDoc && (
-          <div className="px-4 py-2 bg-zinc-50 border-t border-zinc-200 flex items-center shrink-0">
-            <div className="flex items-center gap-1.5 bg-zinc-100 border border-zinc-300 rounded-lg px-2.5 py-1 text-xs text-zinc-700 select-none animate-in fade-in zoom-in duration-200">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-zinc-500 shrink-0">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-              </svg>
-              <span className="font-medium truncate max-w-[200px]">{attachedDoc.name}</span>
-              <button
-                type="button"
-                onClick={() => setAttachedDoc(null)}
-                disabled={isStreaming}
-                className="ml-1 text-zinc-400 hover:text-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
-                title="Remove attachment"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
-                  <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+        {/* Floating Bottom Input Area */}
+        <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none flex flex-col items-center p-4 bg-gradient-to-t from-theme-bg via-theme-bg/85 to-transparent pt-16">
+          <div className="w-full max-w-3xl flex flex-col gap-2 pointer-events-auto">
+            {attachedDoc && (
+              <div className="flex items-center gap-1.5 bg-theme-surface border border-theme-border rounded-xl px-2.5 py-1 text-xs text-theme-text select-none self-start shadow-md animate-in fade-in zoom-in duration-200">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-zinc-500 shrink-0">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                 </svg>
-              </button>
-            </div>
-          </div>
-        )}
+                <span className="font-medium truncate max-w-[200px]">{attachedDoc.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setAttachedDoc(null)}
+                  disabled={isStreaming}
+                  className="ml-1 text-theme-text-muted hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
+                  title="Remove attachment"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+                    <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                  </svg>
+                </button>
+              </div>
+            )}
 
-        <MessageInput
-          onSend={handleSend}
-          disabled={isStreaming}
-          onUpload={handleUpload}
-          isUploading={isUploading}
-        />
+            <MessageInput
+              onSend={handleSend}
+              disabled={isStreaming}
+              onUpload={handleUpload}
+              isUploading={isUploading}
+            />
+          </div>
+        </div>
       </div>
     </div>
   )
 }
+

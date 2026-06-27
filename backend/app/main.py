@@ -42,7 +42,11 @@ app.add_middleware(RequestTimeoutMiddleware, timeout=45, sse_paths=["/chat"])
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://10.95.144.153:5174",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
