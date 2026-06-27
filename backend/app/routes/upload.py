@@ -4,6 +4,8 @@ import uuid
 import pdfplumber
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 
+from app.core.drive_factory import get_drive_for_user
+from app.storage import documents_drive
 from app.storage.documents import store_doc
 
 router = APIRouter()
@@ -61,6 +63,10 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         )
 
     doc_id = str(uuid.uuid4())
-    store_doc(doc_id, text, user_id=user_id)
+    drive = get_drive_for_user(user_id)
+    if drive:
+        documents_drive.store_doc(doc_id, text, drive)
+    else:
+        store_doc(doc_id, text, user_id=user_id)
 
     return {"doc_id": doc_id, "filename": filename, "char_count": len(text)}

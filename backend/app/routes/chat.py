@@ -8,8 +8,11 @@ from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import ProviderError
 from app import events
+from app.core.drive_factory import get_drive_for_user
+from app.storage import documents_drive
+from app.storage import conversations_drive
 from app.storage.documents import load_doc
-from app.storage import conversations as storage
+from app.storage import conversations as local_storage
 from app.memory.summarize import summarize_conversation_task
 
 router = APIRouter()
@@ -51,7 +54,11 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
 async def auto_title_background_task(conv_id: str, first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None):
     """Background task to generate and save the conversation title."""
     title = await generate_title(first_prompt, resolver, rate_limiter)
-    storage.update_conversation_title(conv_id, title, user_id=user_id)
+    drive = get_drive_for_user(user_id) if user_id else None
+    if drive:
+        conversations_drive.update_conversation_title(drive, conv_id, title)
+    else:
+        local_storage.update_conversation_title(conv_id, title, user_id=user_id)
 
 @router.post("/chat")
 async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
@@ -59,18 +66,19 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
     user_id = request.state.user_id
     resolver = request.app.state.resolver
     rate_limiter = request.app.state.rate_limiter
-    
+    drive = get_drive_for_user(user_id)
+
     # Resolve canonical model_id from input
     model_id = req.model_id
     if not model_id:
         model_id = req.provider or "gemini-2.5-flash"
-        
+
     # Check if the model_id exists in the registry or friendly provider map
     if not resolver._registry.get_model(model_id) and model_id not in ["google", "gemini", "cerebras", "groq", "huggingface", "github", "openrouter"]:
         async def generate_error():
             yield events.error_event(f"Unknown model or provider: '{model_id}'")
             yield events.done_event(via_provider="unknown")
-            
+
         return StreamingResponse(
             generate_error(),
             media_type="text/event-stream",
@@ -80,14 +88,20 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             },
         )
     if req.conversation_id:
-        meta = storage.get_conversation_meta(req.conversation_id, user_id=user_id)
+        if drive:
+            meta = conversations_drive.get_conversation_meta(drive, req.conversation_id)
+        else:
+            meta = local_storage.get_conversation_meta(req.conversation_id, user_id=user_id)
         if not meta:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Conversation {req.conversation_id} not found."
             )
 
-        history = storage.load_messages(req.conversation_id, user_id=user_id)
+        if drive:
+            history = conversations_drive.load_messages(drive, req.conversation_id)
+        else:
+            history = local_storage.load_messages(req.conversation_id, user_id=user_id)
 
         if not req.messages:
             raise HTTPException(
@@ -99,7 +113,10 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         raw_messages = history[-10:] if len(history) > 10 else history
         messages_to_send = raw_messages + [user_msg_dict]
 
-        summary = storage.load_summary(req.conversation_id, user_id=user_id)
+        if drive:
+            summary = conversations_drive.load_summary(drive, req.conversation_id)
+        else:
+            summary = local_storage.load_summary(req.conversation_id, user_id=user_id)
         if summary:
             summary_system = {
                 "role": "system",
@@ -115,10 +132,13 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         messages_to_send = [m.model_dump() for m in req.messages]
         if messages_to_send:
             user_msg_dict = messages_to_send[-1]
-            
-    # 2. Inject document context if doc_id provided (in-memory only)
+
+    # 2. Inject document context if doc_id provided
     if req.doc_id:
-        doc_text = load_doc(req.doc_id, user_id=user_id)
+        if drive:
+            doc_text = documents_drive.load_doc(req.doc_id, drive)
+        else:
+            doc_text = load_doc(req.doc_id, user_id=user_id)
         if doc_text is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -192,16 +212,15 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                 
         yield events.done_event(via_provider=active_provider)
 
-        # 4. If persistent and stream succeeded, append user & assistant turns to disk
+        # 4. If persistent and stream succeeded, append user & assistant turns
         if req.conversation_id and success and user_msg_dict and assistant_text:
             assistant_msg_dict = {"role": "assistant", "content": assistant_text}
-            storage.append_messages(
-                req.conversation_id,
-                [user_msg_dict, assistant_msg_dict],
-                user_id=user_id,
-            )
-
-            meta = storage.get_conversation_meta(req.conversation_id, user_id=user_id)
+            if drive:
+                conversations_drive.append_messages(drive, req.conversation_id, [user_msg_dict, assistant_msg_dict])
+                meta = conversations_drive.get_conversation_meta(drive, req.conversation_id)
+            else:
+                local_storage.append_messages(req.conversation_id, [user_msg_dict, assistant_msg_dict], user_id=user_id)
+                meta = local_storage.get_conversation_meta(req.conversation_id, user_id=user_id)
             if meta:
                 msg_count = meta.get("message_count", 0)
                 if meta.get("title") == "New Chat" and msg_count == 2:
