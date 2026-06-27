@@ -1,10 +1,15 @@
 import { useRef, useState, useEffect, type KeyboardEvent } from 'react'
+import ModelSwitcher from './ModelSwitcher'
+import type { RegistryModel } from '../api/client'
 
 interface Props {
   onSend: (content: string) => void
   disabled?: boolean
   onUpload?: (file: File) => void
   isUploading?: boolean
+  selectedProvider?: string
+  onChangeProvider?: (id: string) => void
+  models?: RegistryModel[]
 }
 
 export default function MessageInput({
@@ -12,6 +17,9 @@ export default function MessageInput({
   disabled = false,
   onUpload,
   isUploading = false,
+  selectedProvider = '',
+  onChangeProvider,
+  models = [],
 }: Props) {
   const [value, setValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -93,7 +101,7 @@ export default function MessageInput({
               ? 'w-full order-1 px-1 min-h-[44px]' 
               : 'flex-1 order-2 py-1.5 min-h-[32px]'}
           `}
-          placeholder="Hello......."
+          placeholder="Ask anything ..."
           rows={1}
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -133,30 +141,64 @@ export default function MessageInput({
         {/* 4. Layout Spacer: Visible only in multi-line mode to push send button right */}
         <div className={`order-4 flex-1 ${isMultiLine ? 'block' : 'hidden'}`} />
 
-        {/* 5. Send Button */}
-        <button
-          type="button"
-          onClick={submit}
-          disabled={disabled || isUploading || !value.trim()}
-          className={`
-            rounded-full bg-theme-brand text-theme-brand-text h-9 w-9 shrink-0
-            disabled:opacity-40 hover:bg-theme-brand-hover transition-colors
-            flex items-center justify-center active:scale-95 cursor-pointer
-            ${isMultiLine ? 'order-5' : 'order-3'}
-          `}
-          title="Send message"
-        >
-          {disabled ? (
-            <svg className="animate-spin h-4.5 w-4.5 text-current" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        {/* 5. Model Selector */}
+        {selectedProvider && onChangeProvider && models.length > 0 && (
+          <div className={`shrink-0 ${isMultiLine ? 'order-5' : 'order-3'}`}>
+            <ModelSwitcher
+              selected={selectedProvider}
+              onChange={onChangeProvider}
+              disabled={disabled || isUploading}
+              models={models}
+            />
+          </div>
+        )}
+
+        {/* 6. Send / Stop Button */}
+        {disabled ? (
+          /* Loading ring + stop square — always visible when generating */
+          <div
+            className={`relative h-9 w-9 shrink-0 flex items-center justify-center ${isMultiLine ? 'order-6' : 'order-4'}`}
+          >
+            {/* Spinning arc ring using brand color */}
+            <svg
+              className="absolute inset-0 w-9 h-9 animate-spin"
+              viewBox="0 0 36 36"
+              fill="none"
+              style={{ animationDuration: '900ms' }}
+            >
+              <circle
+                cx="18" cy="18" r="15"
+                stroke="var(--theme-brand)"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeDasharray="62 32"
+              />
             </svg>
-          ) : (
+            {/* Inner stop square circle */}
+            <div className="w-7 h-7 rounded-full bg-theme-user-bubble flex items-center justify-center">
+              <div className="w-3 h-3 rounded-[3px] bg-theme-user-bubble-text" />
+            </div>
+          </div>
+        ) : (
+          /* Regular send button — hidden when input is empty */
+          <button
+            type="button"
+            onClick={submit}
+            disabled={isUploading || !value.trim()}
+            className={`
+              rounded-full bg-theme-user-bubble text-theme-user-bubble-text h-9 w-9 shrink-0
+              disabled:opacity-40 hover:opacity-90 transition-all duration-150
+              flex items-center justify-center active:scale-95 cursor-pointer
+              ${isMultiLine ? 'order-6' : 'order-4'}
+              ${value.trim() ? 'scale-100 opacity-100' : 'scale-0 opacity-0 pointer-events-none w-0 overflow-hidden'}
+            `}
+            title="Send message"
+          >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" className="w-4.5 h-4.5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
             </svg>
-          )}
-        </button>
+          </button>
+        )}
       </div>
     </div>
   )

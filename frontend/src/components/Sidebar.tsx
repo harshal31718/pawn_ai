@@ -352,9 +352,9 @@ export default function Sidebar({
  
               {/* Profile Avatar Circle */}
               <div
-                onClick={(e) => { e.stopPropagation(); onOpenSettings() }}
-                className="w-8 h-8 rounded-full bg-theme-brand text-theme-brand-text flex items-center justify-center font-bold text-xs shadow-sm shrink-0 select-none cursor-pointer active:scale-95 transition-transform"
-                title={`${displayName} · Open settings`}
+                onClick={(e) => e.stopPropagation()}
+                className="w-8 h-8 rounded-full bg-theme-brand text-theme-brand-text flex items-center justify-center font-bold text-xs shadow-sm shrink-0 select-none cursor-default"
+                title={displayName}
               >
                 {displayName[0]?.toUpperCase() || 'U'}
               </div>

@@ -5,9 +5,10 @@ import MessageBubble from './Message'
 interface Props {
   messages: Message[]
   isStreaming: boolean
+  firstName: string
 }
 
-export default function ChatWindow({ messages, isStreaming }: Props) {
+export default function ChatWindow({ messages, isStreaming, firstName }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const lastUserMsgIdRef = useRef<string | null>(null)
   const reachedTopRef = useRef<boolean>(false)
@@ -52,11 +53,7 @@ export default function ChatWindow({ messages, isStreaming }: Props) {
 
   return (
     <div ref={containerRef} className="flex-1 overflow-y-auto px-4 pt-20 pb-48">
-      {messages.length === 0 && (
-        <p className="text-center text-theme-text-muted text-sm mt-8">
-          Start a conversation
-        </p>
-      )}
+      {messages.length === 0 && null}
       {messages.map((msg, index) => {
         const isLast = index === messages.length - 1
         return (

@@ -48,13 +48,13 @@ export default function MessageBubble({ message, isStreaming }: Props) {
           ref={contentRef}
           className={`rounded-2xl px-4 py-2 text-sm leading-relaxed relative break-words break-all ${
             isUser
-              ? 'bg-theme-brand text-theme-brand-text whitespace-pre-wrap'
-              : 'bg-theme-bg text-theme-text border border-theme-border/40'
+              ? 'bg-theme-user-bubble text-theme-user-bubble-text whitespace-pre-wrap'
+              : 'bg-theme-ai-bubble text-theme-ai-bubble-text border border-theme-border/40'
           } ${showTruncated ? 'max-h-[140px] overflow-hidden' : `max-h-none ${isUser && isLong ? 'pb-7' : ''}`}`}
         >
           {/* Fade Overlay */}
           {showTruncated && (
-            <div className={`absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t ${isUser ? 'from-theme-brand via-theme-brand/80' : 'from-theme-surface via-theme-surface/80'} to-transparent pointer-events-none z-10`} />
+            <div className={`absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t ${isUser ? 'from-theme-user-bubble via-theme-user-bubble/80' : 'from-theme-ai-bubble via-theme-ai-bubble/80'} to-transparent pointer-events-none z-10`} />
           )}
 
           {/* Toggle Button */}
@@ -137,18 +137,18 @@ export default function MessageBubble({ message, isStreaming }: Props) {
               )}
             </div>
 
-            {/* Expanded Trace Details: background matching reply box (bg-theme-surface) */}
+            {/* Expanded Trace Details */}
             {isTraceOpen && message.trace && message.trace.length > 0 && (
-              <div className="mt-1.5 p-3 rounded-xl border border-theme-border/40 bg-theme-bg relative z-10 text-xs text-theme-text shadow-sm divide-y divide-zinc-200/10 dark:divide-zinc-800/20 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-200">
+              <div className="mt-1.5 p-3 rounded-xl border border-theme-border/40 bg-theme-bg relative z-10 text-xs text-theme-text shadow-sm divide-y divide-theme-border/10 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-200">
                 {message.trace.map((event, idx) => {
                   if (event.type === 'step') {
                     return (
                       <div key={idx} className="flex items-start gap-2 pt-2 first:pt-0">
                         <span className="text-emerald-500 font-semibold mt-0.5 select-none">●</span>
                         <div className="flex-1">
-                          <span className="font-semibold text-zinc-700 dark:text-zinc-300">{event.label}</span>
+                          <span className="font-semibold text-theme-text">{event.label}</span>
                           {event.detail && (
-                            <span className="text-zinc-500 dark:text-zinc-400 block mt-0.5 bg-theme-bg/60 p-1.5 rounded font-mono text-[10px] whitespace-pre-wrap border border-theme-border/20">
+                            <span className="text-theme-text-muted block mt-0.5 bg-theme-surface/60 p-1.5 rounded font-mono text-[10px] whitespace-pre-wrap border border-theme-border/30">
                               {event.detail}
                             </span>
                           )}
@@ -159,10 +159,10 @@ export default function MessageBubble({ message, isStreaming }: Props) {
                   
                   if (event.type === 'memory_hit') {
                     return (
-                      <div key={idx} className="flex items-start gap-2 pt-2 text-zinc-400 dark:text-zinc-500 italic">
+                      <div key={idx} className="flex items-start gap-2 pt-2 italic">
                         <span className="text-amber-500 font-bold mt-0.5 select-none">↩</span>
-                        <div className="flex-1 text-[11px] leading-relaxed">
-                          <span className="font-medium text-zinc-500 dark:text-zinc-400 not-italic">Memory Hit:</span> {event.summary}
+                        <div className="flex-1 text-[11px] leading-relaxed text-theme-text-muted">
+                          <span className="font-medium text-theme-text not-italic">Memory Hit:</span> {event.summary}
                         </div>
                       </div>
                     )
@@ -170,14 +170,14 @@ export default function MessageBubble({ message, isStreaming }: Props) {
 
                   if (event.type === 'model_call') {
                     return (
-                      <div key={idx} className="flex items-center gap-2 pt-2 text-zinc-500 dark:text-zinc-400">
-                        <span className="text-indigo-500 select-none">⚡</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-medium">Model Call:</span>
-                          <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40 text-indigo-600 dark:text-indigo-400 font-mono text-[10px]">
+                      <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text-muted">
+                        <span className="text-theme-text select-none">⚡</span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium text-theme-text">Model Call:</span>
+                          <span className="px-1.5 py-0.5 rounded bg-theme-surface border border-theme-border/50 text-theme-text font-mono text-[10px]">
                             {event.model}
                           </span>
-                          <span className="text-[10px] text-zinc-400 dark:text-zinc-500 capitalize">({event.purpose})</span>
+                          <span className="text-[10px] text-theme-text-muted capitalize">({event.purpose})</span>
                         </div>
                       </div>
                     )
@@ -185,11 +185,11 @@ export default function MessageBubble({ message, isStreaming }: Props) {
 
                   if (event.type === 'provider_switch') {
                     return (
-                      <div key={idx} className="flex items-center gap-2 pt-2 text-rose-500 dark:text-rose-400 bg-rose-50/30 dark:bg-rose-950/20 p-1.5 rounded border border-rose-100/30 dark:border-rose-900/25">
-                        <span className="select-none">⇄</span>
+                      <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text bg-theme-surface/40 p-1.5 rounded border border-theme-border/30">
+                        <span className="select-none text-theme-text-muted">⇄</span>
                         <div>
                           <span className="font-semibold">Provider Switch:</span>
-                          <span className="ml-1 font-mono text-[10px]">
+                          <span className="ml-1 font-mono text-[10px] text-theme-text-muted">
                             {event.from} → {event.to}
                           </span>
                         </div>

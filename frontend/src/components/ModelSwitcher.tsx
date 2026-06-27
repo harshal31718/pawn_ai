@@ -87,7 +87,7 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
         }}
         className="
           text-xs bg-theme-surface border border-theme-border rounded-md
-          px-2.5 py-1 text-theme-text cursor-pointer
+          px-2.5 py-0.5 text-theme-text cursor-pointer
           hover:bg-theme-surface-hover focus:outline-none focus:ring-1 focus:ring-theme-border
           disabled:opacity-50 disabled:cursor-not-allowed
           transition-all flex items-center gap-1.5 active:scale-95 font-medium
