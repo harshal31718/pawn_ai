@@ -13,10 +13,10 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase 2 — Google Drive (Not Started)
-**Active step:** P2-1 — Drive API wired; conversation logs read/written to Drive
-**Last completed:** Merge Phase 1.6 -> main
-**Branch:** main
+**Active phase:** Phase MU — Multi-User / Auth / BYOK / Drive
+**Active step:** DD-1 — Drive storage layer
+**Last completed:** Merge Phase 1.6 → main
+**Branch:** dev
 
 ---
 
@@ -128,34 +128,73 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
-## Phase 2 — Google Drive
-*Plan reference: `workspace/plan/phase_2_google_drive.md`*
+## Phase MU — Multi-User / Auth / BYOK / Drive
+*Plan reference: `~/.claude/plans/what-i-want-1-mutable-waffle.md`*
+*Branch: dev*
 
-- [ ] **P2-1** — Drive API wired; conversation logs read/written to Drive.
-- [ ] **P2-2** — User memory file on Drive; auto-injected into context.
-- [ ] **P2-3** — Uploaded docs stored on Drive.
+Architecture:
+- App data (profiles, sessions, BYOK keys, memory embeddings) → Supabase free tier (pgvector)
+- User data (conversations, uploads) → user's own Google Drive
+- Auth: Google OAuth2 (includes drive.file scope)
+- BYOK: keys encrypted AES-256-GCM at rest; backend proxies all LLM calls (no CORS exposure)
 
----
+- [x] **MA-1** — Supabase client + AES-GCM crypto + new secrets wired ✓
+  `backend/app/db/supabase_client.py`, `backend/app/core/crypto.py`, 6 new secrets,
+  updated `config.py`, `requirements.txt`, `docker-compose.yml`, `secrets/*.example`
+  NOTE: supabase_url / supabase_service_key / google_client_id / google_client_secret
+  contain PLACEHOLDER values — user must fill with real values before MA-2 routes work.
+  encryption_secret and jwt_secret are pre-generated with real random values.
 
-## Phase 3 — Encryption
-*Plan reference: `workspace/plan/phase_3_encryption.md`*
+- [x] **MA-2** — Google OAuth2 + auth routes + JWT ✓
+  `backend/app/core/jwt_utils.py`, `backend/app/routes/auth.py` (login/callback/me/logout),
+  registered in main.py. /auth/* routes public (no middleware yet).
 
-- [ ] **P3-1** — WebCrypto AES-256-GCM; all personal Drive files encrypted in browser.
+- [x] **MA-3** — Auth middleware + route scoping ✓
+  `backend/app/middleware/auth.py` (AuthMiddleware, JWT Bearer, public /health /auth/*),
+  `backend/tests/conftest.py` (bypass_auth fixture for tests),
+  storage/conversations.py and documents.py scoped by user_id,
+  routes/conversations.py, routes/upload.py, routes/chat.py pass user_id through,
+  LangGraph thread_id namespaced as {user_id}:{conv_id}. 47 tests passing.
+  `backend/app/routes/auth.py` (login/callback/me/logout), `backend/app/core/jwt_utils.py`
 
----
+- [ ] **MA-3** — Auth middleware + route scoping
+  `backend/app/middleware/auth.py`, all routes get `user_id` from `request.state`
 
-## Phase 4 — Multi-User / Auth
-*Plan reference: `workspace/plan/phase_4_multiuser.md`*
+- [x] **MA-4** — Frontend auth UI + 429 back-off timer ✓
+  `frontend/src/contexts/AuthContext.tsx` (AuthProvider, useAuth, OAuth callback handler),
+  `frontend/src/pages/LoginPage.tsx` (Google sign-in button with inline SVG logo),
+  `frontend/src/api/client.ts` (authHeaders() on all requests, onRateLimit callback, 401 auto-reload),
+  `frontend/src/App.tsx` (AuthProvider wrapper, AuthGate, 429 countdown banner, useAuth for displayName),
+  `backend/app/events.py` (rate_limit_event + code field on error_event).
+  Build passes (tsc + vite). 47 backend tests passing.
+  `AuthContext.tsx`, `LoginPage.tsx`, JWT header injection in `client.ts`, rate-limit countdown UI
 
-- [ ] **P4-1** — Google OAuth2; multi-user sessions; per-user Drive isolation.
-- [ ] **P4-2** — Settings panel; custom agent configs; capability + tag routing.
+- [ ] **DD-1** — Drive storage layer
+  `backend/app/storage/drive.py` (DriveStorage), `backend/app/core/drive_factory.py`
+
+- [ ] **DD-2** — Conversations → Google Drive
+  `backend/app/storage/conversations_drive.py`, updated routes
+
+- [ ] **DD-3** — Uploads → Google Drive
+  `backend/app/storage/documents_drive.py`, updated routes
+
+- [ ] **SM-1** — Memory → Supabase pgvector
+  Replace `memory/index.py` SQLite with Supabase inserts, replace `memory/retrieve.py` with pgvector search
+
+- [ ] **BK-1** — BYOK key store + /keys routes
+  `backend/app/core/key_store.py`, `backend/app/routes/keys.py`
+
+- [ ] **BK-2** — Resolver + normalize per-user key lookup
+  `resolver.py` and `normalize.py` accept `user_id` + `db`; fall back to shared secrets
+
+- [ ] **BK-3** — Frontend settings panel
+  `SettingsPanel.tsx` (API keys tab + profile tab), settings gear in Sidebar
 
 ---
 
 ## Working Agreement
 
-- One step per session. Pause and review the diff before moving to the next.
-- Read the phase plan file before starting a step.
+- Auto mode: implement steps sequentially, update tracker after every step.
 - Tests must pass before marking `[x]`. No exceptions.
-- Update this file and `workspace/dev-log.md` at the end of every step.
-- The step is done when its demo works, not just when the code compiles.
+- Update this file and `workspace/current_state.md` after every step.
+- If blocked (user action needed), document in plan file and move to next implementable step.

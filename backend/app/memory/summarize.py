@@ -62,18 +62,19 @@ async def summarize_conversation_task(
     conv_id: str,
     resolver: Optional[Resolver] = None,
     rate_limiter: Optional[EndpointRateLimiter] = None,
+    user_id: Optional[str] = None,
 ) -> None:
     """
     Loads all messages for the conversation, generates a summary, and writes it to disk.
     Ingests the summary into the memory vector index (RAG).
     """
-    messages = storage.load_messages(conv_id)
+    messages = storage.load_messages(conv_id, user_id=user_id)
     if not messages:
         return
-    
+
     summary = await summarize_history(messages, resolver, rate_limiter)
     if summary:
-        storage.save_summary(conv_id, summary)
+        storage.save_summary(conv_id, summary, user_id=user_id)
         
         try:
             from app.memory.embed import embed

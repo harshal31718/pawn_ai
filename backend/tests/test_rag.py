@@ -109,8 +109,8 @@ def test_fts5_fallback_when_embedding_fails():
 
 def test_chat_yields_memory_hit_events(client):
     """If retrieve() returns hits, the chat endpoint must stream memory_hit SSE events."""
-    # Create the active conversation to avoid 404
-    storage.create_conversation(conv_id="active-conv")
+    # Create the active conversation to avoid 404; user_id must match conftest.TEST_USER_ID
+    storage.create_conversation(user_id="test-user-id", conv_id="active-conv")
     
     emb = [1.0] + [0.0] * 767
     add_chunk("past-conv", "Remember that Bob loves blue cheese.", emb)

@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Message } from './types'
 import ChatWindow from './components/ChatWindow'
 import MessageInput from './components/MessageInput'
 import Sidebar from './components/Sidebar'
 import SettingsPage from './components/SettingsPage'
 import InteractiveGridBackground from './components/InteractiveGridBackground'
+import LoginPage from './pages/LoginPage'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
 import {
   healthCheck,
   streamChat,
@@ -21,7 +23,9 @@ import {
 
 let nextId = 1
 
-export default function App() {
+function AppContent() {
+  const { user, isAuthenticated, logout } = useAuth()
+  const [rateLimitCountdown, setRateLimitCountdown] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState('gemini-2.5-flash')
@@ -42,7 +46,7 @@ export default function App() {
     return 'system'
   })
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [displayName, setDisplayName] = useState(() => localStorage.getItem('pawn-display-name') || 'Harshal')
+  const [displayName, setDisplayName] = useState(() => user?.name || localStorage.getItem('pawn-display-name') || 'User')
   const [defaultModel, setDefaultModel] = useState(() => localStorage.getItem('pawn-default-model') || 'gemini-2.5-flash')
   const [userBubbleColor, setUserBubbleColor] = useState(() => localStorage.getItem('pawn-user-bubble') || '')
   const [aiBubbleColor, setAiBubbleColor] = useState(() => localStorage.getItem('pawn-ai-bubble') || '')
@@ -266,6 +270,17 @@ export default function App() {
     await streamChat(
       history,
       {
+        onRateLimit: (retryAfter) => {
+          setIsStreaming(false)
+          streamingIdRef.current = null
+          setRateLimitCountdown(retryAfter)
+          const interval = setInterval(() => {
+            setRateLimitCountdown((prev) => {
+              if (prev === null || prev <= 1) { clearInterval(interval); return null }
+              return prev - 1
+            })
+          }, 1000)
+        },
         onToken: (delta) => {
           setMessages((prev) =>
             prev.map((m) =>
@@ -546,9 +561,17 @@ export default function App() {
                       </button>
                     </div>
                   )}
+                  {rateLimitCountdown !== null && (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-medium animate-in fade-in">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+                      </svg>
+                      Rate limited — retrying in {rateLimitCountdown}s
+                    </div>
+                  )}
                   <MessageInput
                     onSend={handleSend}
-                    disabled={isStreaming}
+                    disabled={isStreaming || rateLimitCountdown !== null}
                     onUpload={handleUpload}
                     isUploading={isUploading}
                     selectedProvider={selectedProvider}
@@ -584,9 +607,17 @@ export default function App() {
                 </div>
               )}
 
+              {rateLimitCountdown !== null && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-medium animate-in fade-in">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+                  </svg>
+                  Rate limited — retrying in {rateLimitCountdown}s
+                </div>
+              )}
               <MessageInput
                 onSend={handleSend}
-                disabled={isStreaming}
+                disabled={isStreaming || rateLimitCountdown !== null}
                 onUpload={handleUpload}
                 isUploading={isUploading}
                 selectedProvider={selectedProvider}
@@ -600,5 +631,19 @@ export default function App() {
       )}
     </div>
   )
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
+  )
+}
+
+function AuthGate() {
+  const { isAuthenticated } = useAuth()
+  if (!isAuthenticated) return <LoginPage />
+  return <AppContent />
 }
 

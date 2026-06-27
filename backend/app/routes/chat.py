@@ -48,14 +48,15 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
         pass
     return "New Chat"
 
-async def auto_title_background_task(conv_id: str, first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter):
+async def auto_title_background_task(conv_id: str, first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None):
     """Background task to generate and save the conversation title."""
     title = await generate_title(first_prompt, resolver, rate_limiter)
-    storage.update_conversation_title(conv_id, title)
+    storage.update_conversation_title(conv_id, title, user_id=user_id)
 
 @router.post("/chat")
 async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
     user_msg_dict = None
+    user_id = request.state.user_id
     resolver = request.app.state.resolver
     rate_limiter = request.app.state.rate_limiter
     
@@ -79,26 +80,26 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             },
         )
     if req.conversation_id:
-        meta = storage.get_conversation_meta(req.conversation_id)
+        meta = storage.get_conversation_meta(req.conversation_id, user_id=user_id)
         if not meta:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Conversation {req.conversation_id} not found."
             )
-        
-        history = storage.load_messages(req.conversation_id)
-        
+
+        history = storage.load_messages(req.conversation_id, user_id=user_id)
+
         if not req.messages:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Messages list cannot be empty."
             )
-        
+
         user_msg_dict = req.messages[-1].model_dump()
         raw_messages = history[-10:] if len(history) > 10 else history
         messages_to_send = raw_messages + [user_msg_dict]
-        
-        summary = storage.load_summary(req.conversation_id)
+
+        summary = storage.load_summary(req.conversation_id, user_id=user_id)
         if summary:
             summary_system = {
                 "role": "system",
@@ -117,7 +118,7 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             
     # 2. Inject document context if doc_id provided (in-memory only)
     if req.doc_id:
-        doc_text = load_doc(req.doc_id)
+        doc_text = load_doc(req.doc_id, user_id=user_id)
         if doc_text is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -145,7 +146,8 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "step_count": 0
     }
     
-    config = {"configurable": {"thread_id": req.conversation_id or "stateless"}}
+    thread_id = f"{user_id}:{req.conversation_id}" if req.conversation_id else f"{user_id}:stateless"
+    config = {"configurable": {"thread_id": thread_id}}
     graph = request.app.state.graph
 
     async def generate():
@@ -195,10 +197,11 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             assistant_msg_dict = {"role": "assistant", "content": assistant_text}
             storage.append_messages(
                 req.conversation_id,
-                [user_msg_dict, assistant_msg_dict]
+                [user_msg_dict, assistant_msg_dict],
+                user_id=user_id,
             )
-            
-            meta = storage.get_conversation_meta(req.conversation_id)
+
+            meta = storage.get_conversation_meta(req.conversation_id, user_id=user_id)
             if meta:
                 msg_count = meta.get("message_count", 0)
                 if meta.get("title") == "New Chat" and msg_count == 2:
@@ -207,14 +210,16 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                         req.conversation_id,
                         user_msg_dict["content"],
                         resolver,
-                        rate_limiter
+                        rate_limiter,
+                        user_id,
                     )
                 if msg_count >= 20 and msg_count % 20 == 0:
                     background_tasks.add_task(
                         summarize_conversation_task,
                         req.conversation_id,
                         resolver,
-                        rate_limiter
+                        rate_limiter,
+                        user_id,
                     )
 
     return StreamingResponse(
