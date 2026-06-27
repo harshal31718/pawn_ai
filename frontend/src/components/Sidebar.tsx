@@ -148,7 +148,13 @@ export default function Sidebar({
             {/* Conversations List */}
             <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
               {conversations.length === 0 ? (
-                <div className="text-theme-text-muted text-xs text-center py-8">No chats yet.</div>
+                <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 opacity-40">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21.75l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v5.018z" />
+                  </svg>
+                  <span className="text-xs">No conversations yet</span>
+                  <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
+                </div>
               ) : (
                 conversations.map((conv) => {
                   const isActive = conv.id === activeId
@@ -216,7 +222,7 @@ export default function Sidebar({
                                 onDelete(conv.id)
                                 setDeleteConfirmId(null)
                               }}
-                              className="px-2 py-0.5 rounded bg-white hover:bg-zinc-100 text-zinc-950 border border-zinc-200 text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
+                              className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-700 text-white border border-red-700 text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
                             >
                               Yes
                             </button>
@@ -225,7 +231,7 @@ export default function Sidebar({
                           <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
                               onClick={(e) => handleStartRename(conv, e)}
-                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-theme-text"
+                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-theme-text transition-all active:scale-95"
                               title="Rename"
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
@@ -237,7 +243,7 @@ export default function Sidebar({
                                 e.stopPropagation()
                                 setDeleteConfirmId(conv.id)
                               }}
-                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-white"
+                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-red-500 transition-all active:scale-95"
                               title="Delete"
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">

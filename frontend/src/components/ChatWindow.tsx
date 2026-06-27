@@ -5,10 +5,9 @@ import MessageBubble from './Message'
 interface Props {
   messages: Message[]
   isStreaming: boolean
-  firstName: string
 }
 
-export default function ChatWindow({ messages, isStreaming, firstName }: Props) {
+export default function ChatWindow({ messages, isStreaming }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const lastUserMsgIdRef = useRef<string | null>(null)
   const reachedTopRef = useRef<boolean>(false)

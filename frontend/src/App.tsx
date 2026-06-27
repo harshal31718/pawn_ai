@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import type { Message } from './types'
 import ChatWindow from './components/ChatWindow'
 import MessageInput from './components/MessageInput'
-import ModelSwitcher from './components/ModelSwitcher'
 import Sidebar from './components/Sidebar'
 import SettingsPage from './components/SettingsPage'
 import InteractiveGridBackground from './components/InteractiveGridBackground'
@@ -498,12 +497,7 @@ export default function App() {
             </div>
           </header>
 
-          {(() => {
-            const firstName = displayName.split(' ')[0] || displayName
-            return (
-              <ChatWindow messages={messages} isStreaming={isStreaming} firstName={firstName} />
-            )
-          })()}
+          <ChatWindow messages={messages} isStreaming={isStreaming} />
 
           {/* Radial glow behind greeting — only when no messages */}
           {messages.length === 0 && (
@@ -528,11 +522,14 @@ export default function App() {
                     </h1>
                   )
                 })()}
+                <p className="text-sm text-theme-text-muted text-center max-w-sm leading-relaxed select-none pointer-events-none -mt-3">
+                  Ask a question, upload a document, or pick a model to get started.
+                </p>
                 {/* Input area */}
                 <div className="w-full flex flex-col gap-2">
                   {attachedDoc && (
                     <div className="flex items-center gap-1.5 bg-theme-surface border border-theme-border rounded-xl px-2.5 py-1 text-xs text-theme-text select-none self-start shadow-md animate-in fade-in zoom-in duration-200">
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-zinc-500 shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted shrink-0">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                       </svg>
                       <span className="font-medium truncate max-w-[200px]">{attachedDoc.name}</span>
@@ -569,7 +566,7 @@ export default function App() {
             <div className="w-full max-w-3xl flex flex-col gap-2 pointer-events-auto pb-4 px-4">
               {attachedDoc && (
                 <div className="flex items-center gap-1.5 bg-theme-surface border border-theme-border rounded-xl px-2.5 py-1 text-xs text-theme-text select-none self-start shadow-md animate-in fade-in zoom-in duration-200">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-zinc-500 shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted shrink-0">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                   </svg>
                   <span className="font-medium truncate max-w-[200px]">{attachedDoc.name}</span>

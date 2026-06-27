@@ -71,9 +71,7 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
   }
 
   return (
-    <div className="relative flex items-center gap-1.5 px-1">
-      <span className="text-xs text-theme-text-muted shrink-0 select-none">Model</span>
-      
+    <div className="relative flex items-center px-1">
       {/* Trigger Button */}
       <button
         id="model-switcher-button"
@@ -94,6 +92,11 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
         "
       >
         <span>{buttonLabel}</span>
+        {selectedModel?.providers?.[0] && !disabled && (
+          <span className="text-theme-text-muted font-normal opacity-70">
+            · {formatProviderName(selectedModel.providers[0])}
+          </span>
+        )}
         <svg
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 20 20"
@@ -118,8 +121,8 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
       {/* Custom Dropdown list overlay */}
       {isOpen && (
         <div className="
-          absolute right-0 top-full mt-1.5 w-80 bg-theme-bg border border-theme-border rounded-lg shadow-lg z-50 overflow-hidden text-xs py-1
-          animate-in fade-in slide-in-from-top-1 duration-150
+          absolute right-0 bottom-full mb-1.5 w-80 bg-theme-bg border border-theme-border rounded-lg shadow-lg z-50 overflow-hidden text-xs py-1
+          animate-in fade-in slide-in-from-bottom-1 duration-150
         ">
           <div className="max-h-80 overflow-y-auto">
             {groups.map(({ level, label, models: groupModels }) =>
@@ -145,7 +148,16 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
                             ${isOptionSelected ? 'bg-theme-surface font-semibold text-theme-text' : 'text-theme-text'}
                           `}
                         >
-                          <span className="truncate font-medium flex-1 min-w-0">{m.display_name}</span>
+                          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                            {isOptionSelected ? (
+                              <svg className="w-3 h-3 shrink-0 text-theme-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                              </svg>
+                            ) : (
+                              <span className="w-3 h-3 shrink-0" />
+                            )}
+                            <span className="truncate font-medium">{m.display_name}</span>
+                          </div>
                           
                           {m.providers.length > 2 ? (
                             isExpanded ? (

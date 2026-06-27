@@ -54,6 +54,15 @@
   --theme-ai-bubble-text: #f4f4f5;
 }
 
+/* Thinking indicator animation */
+@keyframes thinking-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30%            { opacity: 1;    transform: translateY(-3px); }
+}
+.thinking-dot {
+  animation: thinking-dot 1.2s ease-in-out infinite;
+}
+
 /* Hide scrollbars globally */
 ::-webkit-scrollbar {
   display: none;

@@ -26,6 +26,8 @@ export default function MessageInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isMultiLine, setIsMultiLine] = useState(false)
 
+  const showSend = value.trim().length > 0 || disabled
+
   useEffect(() => {
     const textarea = textareaRef.current
     if (textarea) {
@@ -85,11 +87,12 @@ export default function MessageInput({
 
       {/* Unified Connected Island Input */}
       <div className={`
-        w-full bg-theme-surface border border-theme-border transition-all duration-300
-        flex flex-wrap items-end gap-2
-        ${isMultiLine 
-          ? 'p-3 rounded-3xl shadow-lg' 
-          : 'px-3 py-1.5 rounded-full shadow-md'}
+        w-full bg-theme-surface transition-all duration-300
+        flex flex-wrap gap-2
+        ${disabled ? 'border border-theme-border/40 opacity-75' : 'border border-theme-border'}
+        ${isMultiLine
+          ? 'items-end p-3 rounded-3xl shadow-lg'
+          : 'items-center px-3 py-1.5 rounded-full shadow-md'}
       `}>
         {/* 1. The Textarea: Always mounted to preserve keyboard focus */}
         <textarea
@@ -141,9 +144,9 @@ export default function MessageInput({
         {/* 4. Layout Spacer: Visible only in multi-line mode to push send button right */}
         <div className={`order-4 flex-1 ${isMultiLine ? 'block' : 'hidden'}`} />
 
-        {/* 5. Model Selector */}
+        {/* 5. Model Selector — separated from text cluster by a thin border */}
         {selectedProvider && onChangeProvider && models.length > 0 && (
-          <div className={`shrink-0 ${isMultiLine ? 'order-5' : 'order-3'}`}>
+          <div className={`shrink-0 border-l border-theme-border/30 pl-1 transition-all duration-150 ${isMultiLine ? 'order-5' : 'order-3'}`}>
             <ModelSwitcher
               selected={selectedProvider}
               onChange={onChangeProvider}
@@ -153,53 +156,52 @@ export default function MessageInput({
           </div>
         )}
 
-        {/* 6. Send / Stop Button */}
-        {disabled ? (
-          /* Loading ring + stop square — always visible when generating */
-          <div
-            className={`relative h-9 w-9 shrink-0 flex items-center justify-center ${isMultiLine ? 'order-6' : 'order-4'}`}
-          >
-            {/* Spinning arc ring using brand color */}
-            <svg
-              className="absolute inset-0 w-9 h-9 animate-spin"
-              viewBox="0 0 36 36"
-              fill="none"
-              style={{ animationDuration: '900ms' }}
-            >
-              <circle
-                cx="18" cy="18" r="15"
-                stroke="var(--theme-brand)"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeDasharray="62 32"
-              />
-            </svg>
-            {/* Inner stop square circle */}
-            <div className="w-7 h-7 rounded-full bg-theme-user-bubble flex items-center justify-center">
-              <div className="w-3 h-3 rounded-[3px] bg-theme-user-bubble-text" />
+        {/* 6. Send / Stop Button — animated wrapper slides to make space for model selector */}
+        <div className={`
+          overflow-hidden transition-all duration-200 shrink-0
+          ${isMultiLine ? 'order-6' : 'order-4'}
+          ${showSend ? 'max-w-[36px] opacity-100' : 'max-w-0 opacity-0'}
+        `}>
+          {disabled ? (
+            <div className="relative h-9 w-9 flex items-center justify-center">
+              <svg
+                className="absolute inset-0 w-9 h-9 animate-spin"
+                viewBox="0 0 36 36"
+                fill="none"
+                style={{ animationDuration: '900ms' }}
+              >
+                <circle
+                  cx="18" cy="18" r="15"
+                  stroke="var(--theme-brand)"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeDasharray="62 32"
+                />
+              </svg>
+              <div className="w-7 h-7 rounded-full bg-theme-user-bubble flex items-center justify-center">
+                <div className="w-3 h-3 rounded-[3px] bg-theme-user-bubble-text" />
+              </div>
             </div>
-          </div>
-        ) : (
-          /* Regular send button — hidden when input is empty */
-          <button
-            type="button"
-            onClick={submit}
-            disabled={isUploading || !value.trim()}
-            className={`
-              rounded-full bg-theme-user-bubble text-theme-user-bubble-text h-9 w-9 shrink-0
-              disabled:opacity-40 hover:opacity-90 transition-all duration-150
-              flex items-center justify-center active:scale-95 cursor-pointer
-              ${isMultiLine ? 'order-6' : 'order-4'}
-              ${value.trim() ? 'scale-100 opacity-100' : 'scale-0 opacity-0 pointer-events-none w-0 overflow-hidden'}
-            `}
-            title="Send message"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" className="w-4.5 h-4.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-            </svg>
-          </button>
-        )}
+          ) : (
+            <button
+              type="button"
+              onClick={submit}
+              disabled={isUploading || !value.trim()}
+              className="
+                rounded-full bg-theme-user-bubble text-theme-user-bubble-text h-9 w-9
+                disabled:opacity-40 hover:opacity-90 transition-colors duration-150
+                flex items-center justify-center active:scale-95 cursor-pointer
+              "
+              title="Send message"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" className="w-4.5 h-4.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
+
     </div>
   )
 }

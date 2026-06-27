@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useLayoutEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Message } from '../types'
 
@@ -22,22 +22,29 @@ export default function MessageBubble({ message, isStreaming }: Props) {
   const [isTraceOpen, setIsTraceOpen] = useState(true)
   const contentRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (!isStreaming && message.trace && message.trace.length > 0) {
-      const timer = setTimeout(() => setIsTraceOpen(false), 500)
-      return () => clearTimeout(timer)
-    }
-  }, [isStreaming, message.trace])
-
-  useEffect(() => {
+  // useLayoutEffect fires before paint — gives reliable scrollHeight; also resets when content shrinks
+  useLayoutEffect(() => {
     if (!isUser) return
     const el = contentRef.current
-    if (el) {
-      if (el.scrollHeight > 140) {
-        setIsLong(true)
-      }
+    if (el && el.scrollHeight > 140) {
+      setIsLong(true)
+    } else if (el) {
+      setIsLong(false)
     }
   }, [message.content, isUser])
+
+  // Notice messages render as a centered pill (provider failover announcements etc.)
+  if (message.role === 'notice') {
+    return (
+      <div className="flex justify-center my-2">
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+                         bg-theme-surface border border-theme-border/40
+                         text-[10px] text-theme-text-muted font-medium select-none">
+          <span>⇄</span>{message.content}
+        </span>
+      </div>
+    )
+  }
 
   const showTruncated = isUser && isLong && !isExpanded && !isStreaming
 
@@ -62,7 +69,7 @@ export default function MessageBubble({ message, isStreaming }: Props) {
             <button
               type="button"
               onClick={() => setIsExpanded(!isExpanded)}
-              className={`absolute bottom-1.5 right-4 text-[10px] font-bold select-none cursor-pointer hover:underline underline-offset-2 z-20 text-theme-brand-text/90 hover:text-theme-brand-text`}
+              className="absolute bottom-1.5 right-4 text-[10px] font-bold select-none cursor-pointer hover:underline underline-offset-2 z-20 text-theme-user-bubble-text/90 hover:text-theme-user-bubble-text"
             >
               {isExpanded ? 'less' : 'more'}
             </button>
@@ -70,54 +77,73 @@ export default function MessageBubble({ message, isStreaming }: Props) {
 
           {isUser ? (
             message.content
+          ) : message.content === '' && isStreaming ? (
+            /* Thinking indicator: shown before first token arrives */
+            <span className="flex items-center gap-1.5 py-0.5" aria-label="Thinking">
+              <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" />
+              <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.2s' }} />
+              <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.4s' }} />
+            </span>
           ) : (
-            <ReactMarkdown
-              components={{
-                ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
-                li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
-                p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0 leading-relaxed">{children}</p>,
-                h1: ({ children }) => <h1 className="text-lg font-bold my-2">{children}</h1>,
-                h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
-                h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
-                pre: ({ children }) => (
-                  <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-xs leading-normal">
-                    {children}
-                  </pre>
-                ),
-                code: ({ children, className }) => {
-                  const isInline = !className;
-                  return isInline ? (
-                    <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-xs border border-theme-border/30">
+            <>
+              <ReactMarkdown
+                components={{
+                  ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
+                  li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
+                  p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0 leading-relaxed">{children}</p>,
+                  h1: ({ children }) => <h1 className="text-lg font-bold my-2">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
+                  pre: ({ children }) => (
+                    <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-xs leading-normal">
                       {children}
-                    </code>
-                  ) : (
-                    <code className={className}>{children}</code>
-                  );
-                },
-                a: ({ children, href }) => (
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
-                    {children}
-                  </a>
-                ),
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
+                    </pre>
+                  ),
+                  code: ({ children, className }) => {
+                    const isInline = !className
+                    return isInline ? (
+                      <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-xs border border-theme-border/30">
+                        {children}
+                      </code>
+                    ) : (
+                      <code className={className}>{children}</code>
+                    )
+                  },
+                  a: ({ children, href }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
+              {/* Blinking cursor during active stream */}
+              {isStreaming && (
+                <span className="inline-block w-0.5 h-3.5 bg-theme-text-muted opacity-75 animate-pulse ml-px align-middle" aria-hidden />
+              )}
+            </>
           )}
         </div>
-        {/* Combined Metadata and Agent Trace Panel */}
+
+        {/* Metadata + Agent Trace Panel */}
         {!isUser && (message.viaProvider || (message.trace && message.trace.length > 0)) && (
           <div className="mt-1.5 flex flex-col w-full px-2 relative z-10">
-            
             {/* Metadata Row */}
             <div className="flex items-center justify-between text-[10px] text-theme-text-muted font-medium select-none">
-              {/* Left: Provider Info */}
+              {/* Left: Provider badge */}
               <div>
-                {message.viaProvider ? `via ${formatProviderName(message.viaProvider)}` : ''}
+                {message.viaProvider && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full
+                                   bg-theme-surface border border-theme-border/40
+                                   text-[10px] text-theme-text-muted font-medium leading-none">
+                    via {formatProviderName(message.viaProvider)}
+                  </span>
+                )}
               </div>
 
-              {/* Right: Agent Toggle Button */}
+              {/* Right: Agent trace toggle */}
               {message.trace && message.trace.length > 0 && (
                 <button
                   type="button"
@@ -137,75 +163,78 @@ export default function MessageBubble({ message, isStreaming }: Props) {
               )}
             </div>
 
-            {/* Expanded Trace Details */}
-            {isTraceOpen && message.trace && message.trace.length > 0 && (
-              <div className="mt-1.5 p-3 rounded-xl border border-theme-border/40 bg-theme-bg relative z-10 text-xs text-theme-text shadow-sm divide-y divide-theme-border/10 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-200">
-                {message.trace.map((event, idx) => {
-                  if (event.type === 'step') {
-                    return (
-                      <div key={idx} className="flex items-start gap-2 pt-2 first:pt-0">
-                        <span className="text-emerald-500 font-semibold mt-0.5 select-none">●</span>
-                        <div className="flex-1">
-                          <span className="font-semibold text-theme-text">{event.label}</span>
-                          {event.detail && (
-                            <span className="text-theme-text-muted block mt-0.5 bg-theme-surface/60 p-1.5 rounded font-mono text-[10px] whitespace-pre-wrap border border-theme-border/30">
-                              {event.detail}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  }
-                  
-                  if (event.type === 'memory_hit') {
-                    return (
-                      <div key={idx} className="flex items-start gap-2 pt-2 italic">
-                        <span className="text-amber-500 font-bold mt-0.5 select-none">↩</span>
-                        <div className="flex-1 text-[11px] leading-relaxed text-theme-text-muted">
-                          <span className="font-medium text-theme-text not-italic">Memory Hit:</span> {event.summary}
-                        </div>
-                      </div>
-                    )
-                  }
+            {/* Trace panel: smooth height collapse via grid-rows (no JS measurement needed) */}
+            {message.trace && message.trace.length > 0 && (
+              <div className={`mt-1.5 overflow-hidden transition-all duration-200 grid ${
+                isTraceOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+              }`}>
+                <div className="min-h-0">
+                  <div className="p-3 rounded-xl border border-theme-border/40 bg-theme-bg text-xs text-theme-text shadow-sm divide-y divide-theme-border/10 max-h-60 overflow-y-auto">
+                    {message.trace.map((event, idx) => {
+                      if (event.type === 'step') {
+                        return (
+                          <div key={idx} className="flex items-start gap-2 pt-2 first:pt-0">
+                            <span className="text-emerald-500 font-semibold mt-0.5 select-none">●</span>
+                            <div className="flex-1">
+                              <span className="font-semibold text-theme-text">{event.label}</span>
+                              {event.detail && (
+                                <span className="text-theme-text-muted block mt-0.5 bg-theme-surface/60 p-1.5 rounded font-mono text-[10px] whitespace-pre-wrap border border-theme-border/30">
+                                  {event.detail}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      }
 
-                  if (event.type === 'model_call') {
-                    return (
-                      <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text-muted">
-                        <span className="text-theme-text select-none">⚡</span>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-medium text-theme-text">Model Call:</span>
-                          <span className="px-1.5 py-0.5 rounded bg-theme-surface border border-theme-border/50 text-theme-text font-mono text-[10px]">
-                            {event.model}
-                          </span>
-                          <span className="text-[10px] text-theme-text-muted capitalize">({event.purpose})</span>
-                        </div>
-                      </div>
-                    )
-                  }
+                      if (event.type === 'memory_hit') {
+                        return (
+                          <div key={idx} className="flex items-start gap-2 pt-2 italic">
+                            <span className="text-amber-500 font-bold mt-0.5 select-none">↩</span>
+                            <div className="flex-1 text-[11px] leading-relaxed text-theme-text-muted">
+                              <span className="font-medium text-theme-text not-italic">Memory Hit:</span> {event.summary}
+                            </div>
+                          </div>
+                        )
+                      }
 
-                  if (event.type === 'provider_switch') {
-                    return (
-                      <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text bg-theme-surface/40 p-1.5 rounded border border-theme-border/30">
-                        <span className="select-none text-theme-text-muted">⇄</span>
-                        <div>
-                          <span className="font-semibold">Provider Switch:</span>
-                          <span className="ml-1 font-mono text-[10px] text-theme-text-muted">
-                            {event.from} → {event.to}
-                          </span>
-                        </div>
-                      </div>
-                    )
-                  }
-                  return null
-                })}
+                      if (event.type === 'model_call') {
+                        return (
+                          <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text-muted">
+                            <span className="text-theme-text select-none">⚡</span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-medium text-theme-text">Model Call:</span>
+                              <span className="px-1.5 py-0.5 rounded bg-theme-surface border border-theme-border/50 text-theme-text font-mono text-[10px]">
+                                {event.model}
+                              </span>
+                              <span className="text-[10px] text-theme-text-muted capitalize">({event.purpose})</span>
+                            </div>
+                          </div>
+                        )
+                      }
+
+                      if (event.type === 'provider_switch') {
+                        return (
+                          <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text bg-theme-surface/40 p-1.5 rounded border border-theme-border/30">
+                            <span className="select-none text-theme-text-muted">⇄</span>
+                            <div>
+                              <span className="font-semibold">Provider Switch:</span>
+                              <span className="ml-1 font-mono text-[10px] text-theme-text-muted">
+                                {event.from} → {event.to}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      }
+                      return null
+                    })}
+                  </div>
+                </div>
               </div>
             )}
-
           </div>
         )}
       </div>
     </div>
   )
 }
-
-
