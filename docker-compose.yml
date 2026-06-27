@@ -1,0 +1,53 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8000"
+    secrets:
+      - gemini_api_key
+      - cerebras_api_key
+      - groq_api_key
+      - huggingface_api_key
+      - github_api_key
+      - openrouter_api_key
+    volumes:
+      - ./backend/data:/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./backend/app
+          target: /app/app
+        - action: rebuild
+          path: ./backend/requirements.txt
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5174:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8001
+    volumes:
+      - /app/node_modules
+    command: npm run dev -- --host
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+        - action: rebuild
+          path: ./frontend/package.json
+
+secrets:
+  gemini_api_key:
+    file: ./secrets/gemini_api_key
+  cerebras_api_key:
+    file: ./secrets/cerebras_api_key
+  groq_api_key:
+    file: ./secrets/groq_api_key
+  huggingface_api_key:
+    file: ./secrets/huggingface_api_key
+  github_api_key:
+    file: ./secrets/github_api_key
+  openrouter_api_key:
+    file: ./secrets/openrouter_api_key

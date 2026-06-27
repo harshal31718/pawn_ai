@@ -16,6 +16,7 @@ venv/
 node_modules/
 dist/
 .vite/
+.env
 
 # claude local settings
 .claude/settings.local.json

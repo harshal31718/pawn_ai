@@ -18,8 +18,8 @@ you verify that it is truly complete.
    - Check that the required files exist
    - Check that required tests exist and pass (call test-runner agent or check output)
    - Verify naming conventions match the plan (grep for expected class/function names)
-4. Check `docs/current-state.md` has been updated to reflect the completed step.
-5. Check `docs/dev-log.md` has a dated entry for this step.
+4. Check `workspace/current-state.md` has been updated to reflect the completed step.
+5. Check `workspace/dev-log.md` has a dated entry for this step.
 
 ## Output Format
 

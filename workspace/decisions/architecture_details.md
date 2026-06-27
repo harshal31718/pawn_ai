@@ -14,7 +14,7 @@
 | Model registry | JSON files in `data/registry/` — data, not code |
 | Rate limit state | In-memory per process, rolling windows, initialized at zero on startup |
 | Agent framework | LangGraph + JSON/ReAct tool protocol |
-| RAG | Brute-force cosine over in-memory embeddings (no external vector DB) |
+| RAG | sqlite-vec (`vec0` virtual table) + FTS5 full-text search, fused with Reciprocal Rank Fusion (RRF) |
 | Embeddings | `text-embedding-004` (Gemini embedding API) behind swappable interface |
 | Memory storage | Local `data/` → Google Drive in Phase 2 |
 | Auth | None in Phase 1–3 → Google OAuth2 in Phase 4 |
@@ -78,6 +78,8 @@ pawn/
 │   │   │   └── endpoints.json
 │   │   ├── conversations/
 │   │   ├── memory/
+│   │   │   └── memory.db            ← sqlite-vec: vec0 + FTS5 + chunks tables
+│   │   ├── checkpoints.db           ← LangGraph AsyncSqliteSaver checkpoints
 │   │   └── rate_limits/
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -93,7 +95,7 @@ pawn/
 │   │   │   ├── ModelSwitcher.tsx    ← fetches GET /registry/models; groups by capability level
 │   │   │   ├── Sidebar.tsx          ← conversation list, new/switch/delete
 │   │   │   └── TracePanel.tsx       ← collapsible agent step events
-│   │   ├── hooks/
+│   │   ├── types.ts
 │   │   └── App.tsx
 │   ├── package.json
 │   ├── .env.example
@@ -120,7 +122,7 @@ pawn/
 │   │   └── build-step/SKILL.md
 │   └── settings.json
 │
-├── docs/
+├── workspace/
 │   └── dev-log.md
 ├── docker-compose.yml
 ├── .gitignore
@@ -147,10 +149,11 @@ REGISTRY_DIR    = DATA_DIR / "registry"
 MODELS_FILE     = REGISTRY_DIR / "models.json"
 ENDPOINTS_FILE  = REGISTRY_DIR / "endpoints.json"
 CONVERSATIONS_DIR = DATA_DIR / "conversations"
-MEMORY_DIR      = DATA_DIR / "memory"
-MEMORY_INDEX    = MEMORY_DIR / "index.json"
-RATE_LIMITS_DIR = DATA_DIR / "rate_limits"
-SESSION_FILE    = RATE_LIMITS_DIR / "session.json"
+MEMORY_DIR        = DATA_DIR / "memory"
+MEMORY_DB         = MEMORY_DIR / "memory.db"
+RATE_LIMITS_DIR   = DATA_DIR / "rate_limits"
+SESSION_FILE      = RATE_LIMITS_DIR / "session.json"
+CHECKPOINTS_DB    = DATA_DIR / "checkpoints.db"
 ```
 
 `DATA_DIR` reads one env var. Everything else derives from it. No `os.path.join("data", "x")` at call sites ever.
