@@ -1,1 +1,75 @@
 @import "tailwindcss";
+
+@theme {
+  --color-theme-bg: var(--theme-bg);
+  --color-theme-surface: var(--theme-surface);
+  --color-theme-surface-hover: var(--theme-surface-hover);
+  --color-theme-text: var(--theme-text);
+  --color-theme-text-muted: var(--theme-text-muted);
+  --color-theme-border: var(--theme-border);
+
+  --color-theme-brand: var(--theme-brand);
+  --color-theme-brand-hover: var(--theme-brand-hover);
+  --color-theme-brand-text: var(--theme-brand-text);
+
+  --color-theme-user-bubble: var(--theme-user-bubble);
+  --color-theme-user-bubble-text: var(--theme-user-bubble-text);
+  --color-theme-ai-bubble: var(--theme-ai-bubble);
+  --color-theme-ai-bubble-text: var(--theme-ai-bubble-text);
+}
+
+:root {
+  --theme-bg: #ffffff;
+  --theme-surface: #f4f4f5; /* zinc-100 */
+  --theme-surface-hover: #e4e4e7; /* zinc-200 */
+  --theme-text: #09090b; /* zinc-950 */
+  --theme-text-muted: #71717a; /* zinc-500 */
+  --theme-border: #e4e4e7; /* zinc-200 */
+
+  --theme-brand: #18181b; /* zinc-900 */
+  --theme-brand-hover: #27272a; /* zinc-800 */
+  --theme-brand-text: #ffffff;
+
+  --theme-user-bubble: #18181b;
+  --theme-user-bubble-text: #ffffff;
+  --theme-ai-bubble: #ffffff;
+  --theme-ai-bubble-text: #09090b;
+}
+
+.dark {
+  --theme-bg: #09090b; /* zinc-950 */
+  --theme-surface: #18181b; /* zinc-900 */
+  --theme-surface-hover: #27272a; /* zinc-800 */
+  --theme-text: #f4f4f5; /* zinc-100 */
+  --theme-text-muted: #a1a1aa; /* zinc-400 */
+  --theme-border: #27272a; /* zinc-800 */
+
+  --theme-brand: #f4f4f5; /* zinc-100 */
+  --theme-brand-hover: #e4e4e7; /* zinc-200 */
+  --theme-brand-text: #09090b; /* zinc-950 */
+
+  --theme-user-bubble: #f4f4f5;
+  --theme-user-bubble-text: #09090b;
+  --theme-ai-bubble: #09090b;
+  --theme-ai-bubble-text: #f4f4f5;
+}
+
+/* Thinking indicator animation */
+@keyframes thinking-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30%            { opacity: 1;    transform: translateY(-3px); }
+}
+.thinking-dot {
+  animation: thinking-dot 1.2s ease-in-out infinite;
+}
+
+/* Hide scrollbars globally */
+::-webkit-scrollbar {
+  display: none;
+}
+
+* {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+

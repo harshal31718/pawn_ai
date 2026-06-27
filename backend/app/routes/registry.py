@@ -18,6 +18,7 @@ async def get_models(request: Request):
             capability_tags=m.capability_tags,
             context_window=m.context_window,
             endpoint_count=len(registry.endpoints_for(m.id)),
+            providers=sorted(list(set(ep.provider for ep in registry.endpoints_for(m.id)))),
         )
         for m in models
     ]

@@ -120,6 +120,10 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   `ModelSwitcher` fetches from API. `provider_switch` inline notice. Provider badge.
   Demo: dropdown shows Fast/Balanced/Research groups; failover notice appears.
 
+- [x] **Step R5 — UI visual overhaul + LAN access**
+  CSS variable theme system + FOUC-prevention script in `index.html`. `InteractiveGridBackground` canvas. Floating pill header islands (title toggle left, ModelSwitcher + dark mode right); gradient overlays `h-16`. Smart scroll. `TracePanel.tsx` deleted — trace inlined in `Message.tsx` as unified metadata row + collapsible step cards. `react-markdown` for assistant. Auto-resize pill→card input. `Sidebar` mini `w-12`, click-column expand, flicker-free transitions, profile avatar, neutral delete. Registry `providers` field. LAN IP in CORS + `VITE_API_URL`.
+  Demo: dark/light persists on reload (no flash); long message collapses; agent trace auto-collapses after stream; grid reacts to mouse.
+
 - [x] **Merge Phase 1.6 → main**
 
 ---

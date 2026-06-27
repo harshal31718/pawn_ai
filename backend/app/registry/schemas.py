@@ -34,3 +34,5 @@ class ModelResponse(BaseModel):
     capability_tags: List[str]
     context_window: int
     endpoint_count: int
+    providers: List[str] = []
+

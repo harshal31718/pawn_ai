@@ -201,6 +201,7 @@ export interface RegistryModel {
   capability_tags: string[]
   context_window: number
   endpoint_count: number
+  providers: string[]
 }
 
 export async function fetchRegistryModels(): Promise<RegistryModel[]> {
