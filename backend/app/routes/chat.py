@@ -28,7 +28,7 @@ class ChatRequest(BaseModel):
     doc_id: str | None = None          # optional uploaded document ID
     conversation_id: str | None = None  # optional conversation ID for persistence
 
-async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter) -> str:
+async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None) -> str:
     """Helper to generate a short title for the conversation using the first user prompt."""
     system_prompt = (
         "You are a helpful assistant. Generate a short title (max 4-5 words) "
@@ -42,7 +42,7 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
     try:
         model_id = resolver.pick_model_by_capability("fast")
         title_text = ""
-        async for token in chat_stream(model_id, messages, resolver, rate_limiter):
+        async for token in chat_stream(model_id, messages, resolver, rate_limiter, user_id=user_id):
             title_text += token
         cleaned = title_text.strip().replace('"', '').replace("'", "")
         if cleaned:
@@ -53,7 +53,7 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
 
 async def auto_title_background_task(conv_id: str, first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None):
     """Background task to generate and save the conversation title."""
-    title = await generate_title(first_prompt, resolver, rate_limiter)
+    title = await generate_title(first_prompt, resolver, rate_limiter, user_id=user_id)
     drive = get_drive_for_user(user_id) if user_id else None
     if drive:
         conversations_drive.update_conversation_title(drive, conv_id, title)
@@ -157,6 +157,7 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
     # 3. Build inputs and config for LangGraph Agent
     inputs = {
         "conversation_id": req.conversation_id or "stateless",
+        "user_id": user_id,
         "history": messages_to_send,
         "retrieved_memory": [],
         "scratchpad": [],
@@ -204,7 +205,7 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             
         if active_provider == "unknown":
             try:
-                candidates = resolver.pick(model_id)
+                candidates = resolver.pick(model_id, user_id=user_id)
                 if candidates:
                     active_provider = candidates[0][4]
             except Exception:

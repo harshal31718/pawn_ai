@@ -1,6 +1,8 @@
 from typing import Optional
 from app.core.normalize import chat_stream
-from app.storage import conversations as storage
+from app.core.drive_factory import get_drive_for_user
+from app.storage import conversations as local_storage
+from app.storage import conversations_drive
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 
@@ -12,7 +14,7 @@ class DummyRateLimiter:
     def record_success(self, endpoint_id): pass
 
 class DummyResolver:
-    def pick(self, model_id):
+    def pick(self, model_id, user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
     def pick_by_capability(self, level, visibility="internal"):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
@@ -68,20 +70,28 @@ async def summarize_conversation_task(
     Loads all messages for the conversation, generates a summary, and writes it to disk.
     Ingests the summary into the memory vector index (RAG).
     """
-    messages = storage.load_messages(conv_id, user_id=user_id)
+    drive = get_drive_for_user(user_id) if user_id else None
+    if drive:
+        messages = conversations_drive.load_messages(drive, conv_id)
+    else:
+        messages = local_storage.load_messages(conv_id, user_id=user_id)
     if not messages:
         return
 
     summary = await summarize_history(messages, resolver, rate_limiter)
     if summary:
-        storage.save_summary(conv_id, summary, user_id=user_id)
+        if drive:
+            conversations_drive.save_summary(drive, conv_id, summary)
+        else:
+            local_storage.save_summary(conv_id, summary, user_id=user_id)
         
-        try:
-            from app.memory.embed import embed
-            from app.memory.index import add_chunk
-            
-            embedding = await embed(summary)
-            add_chunk(conv_id, summary, embedding)
-        except Exception as e:
-            import sys
-            print(f"Failed to index summary for RAG: {e}", file=sys.stderr)
+        if user_id:
+            try:
+                from app.memory.embed import embed
+                from app.memory.index import add_chunk
+
+                embedding = await embed(summary)
+                add_chunk(user_id, conv_id, summary, embedding)
+            except Exception as e:
+                import sys
+                print(f"Failed to index summary for RAG: {e}", file=sys.stderr)

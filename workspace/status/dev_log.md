@@ -231,3 +231,30 @@ This becomes your interview script and project history.
 **Issues:** None.
 **Tests:** 47 passing backend (no new backend tests). Frontend TypeScript build: pending verification before merge.
 **Commit:** (uncommitted — working tree changes on dev branch)
+
+---
+
+### 2026-06-27 — Phase MU: Multi-User / Auth / BYOK / Google Drive (all code steps)
+
+**Built:** Transformed PAWN from single-user local app to multi-user system.
+- **Auth (MA-1..MA-4):** Google OAuth2 (`routes/auth.py`), JWT sessions (`core/jwt_utils.py`, HS256/7-day), `middleware/auth.py` (Bearer → `request.state.user_id`, public `/health` `/auth/*`), AES-256-GCM crypto (`core/crypto.py`), Supabase client (`db/supabase_client.py`). Frontend: `AuthContext`, `LoginPage`, AuthGate, Bearer headers + 401 auto-reload, 429 countdown banner.
+- **Drive (DD-1..DD-3):** `storage/drive.py` (DriveStorage), `core/drive_factory.py` (exception-safe `get_drive_for_user` → None → local fallback), `conversations_drive.py`, `documents_drive.py`. Routes + summarize use Drive when available, else local filesystem.
+- **Memory (SM-1):** Replaced sqlite-vec with Supabase pgvector. `memory/index.py` add_chunk → insert; `memory/retrieve.py` → pgvector + FTS via RPCs `match_memory_chunks`/`search_memory_chunks` with RRF fusion in Python. `AgentState.user_id` threaded through graph + chat. `supabase/schema.sql` created.
+- **BYOK (BK-1..BK-3):** `core/key_store.py` (AES-GCM, exception-safe), `routes/keys.py` (GET/PUT/DELETE; values never returned). `resolver.pick(model_id, user_id)` prefers user key over shared secret. `normalize.chat_stream(..., user_id)`. Frontend `ApiKeysSection.tsx` in `SettingsPage` + Sign out + real email.
+
+**Decisions:**
+- App data (profiles, encrypted tokens, BYOK keys, memory embeddings) → Supabase free tier; user data (conversations, uploads) → user's own Google Drive.
+- Backend-proxy BYOK (keys decrypted server-side, never reach frontend) — avoids CORS and key exposure. Edge-proxy is a future optimization.
+- Graceful degradation everywhere: Supabase/Drive unavailable → fall back to local filesystem and no-op memory, so tests pass without external services.
+- `resolver.pick` keeps legacy behaviour when no key resolves (returns all available) so shared-secret/dev/test path is preserved.
+
+**Issues:**
+- All existing tests would 401 after auth middleware → added `conftest.py` bypass_auth fixture.
+- Test/storage user_id mismatch after scoping → tests pass `user_id="test-user-id"`.
+- `KeyError: 'user_id'` in load_context/search_memory nodes (test states lack it) → use `state.get("user_id")`; updated one call-args assertion.
+- Rewrote `test_rag.py` to mock Supabase (no live pgvector in tests).
+- Fixed pre-existing frontend unused-var build errors (`useCallback`, `isAuthenticated`).
+
+**Tests:** 56 backend tests passing (47 prior + 7 keys + 2 net new rag mocks/agent). Frontend `npm run build` passes clean.
+**Blocked on (manual):** Supabase project + `supabase/schema.sql`; Google OAuth2 credentials. Then verify end-to-end and merge dev → main.
+**Commit:** (uncommitted — working tree changes on dev branch)

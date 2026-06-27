@@ -16,6 +16,7 @@ from app.routes.chat import router as chat_router
 from app.routes.upload import router as upload_router
 from app.routes.conversations import router as conversations_router
 from app.routes.registry import router as registry_router
+from app.routes.keys import router as keys_router
 from app.app_initializer import initialize_managers
 from app.core.llm_core import close_client
 
@@ -48,7 +49,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:5174",
-        "http://10.95.144.153:5174",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -60,6 +60,7 @@ app.include_router(chat_router)
 app.include_router(upload_router)
 app.include_router(conversations_router)
 app.include_router(registry_router)
+app.include_router(keys_router)
 
 
 

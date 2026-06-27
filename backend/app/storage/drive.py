@@ -48,6 +48,11 @@ class DriveStorage:
         if expires_at:
             try:
                 expiry = datetime.fromisoformat(expires_at)
+                # Supabase returns timestamptz (tz-aware), but google-auth compares
+                # expiry against a naive UTC now() — convert to naive UTC to avoid
+                # "can't compare offset-naive and offset-aware datetimes".
+                if expiry.tzinfo is not None:
+                    expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
             except ValueError:
                 pass
 

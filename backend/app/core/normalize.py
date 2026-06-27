@@ -27,6 +27,7 @@ async def chat_stream(
     resolver: Resolver,
     rate_limiter: EndpointRateLimiter,
     on_provider_switch: Callable[[str, str], None] | None = None,
+    user_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens from the optimal provider for the given model_id, with failover.
 
@@ -36,6 +37,7 @@ async def chat_stream(
         resolver:           The Resolver instance.
         rate_limiter:       The EndpointRateLimiter instance.
         on_provider_switch: Callback invoked when a rate limit forces provider switch.
+        user_id:            If given, the user's BYOK keys are preferred over shared secrets.
 
     Yields:
         str — individual token strings.
@@ -44,7 +46,7 @@ async def chat_stream(
         ProviderError — on any upstream failure (rate limit, auth, network).
         NoEndpointError — if no endpoints are available.
     """
-    candidates = resolver.pick(model_id)
+    candidates = resolver.pick(model_id, user_id=user_id)
     
     last_error = None
     for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):

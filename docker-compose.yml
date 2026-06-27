@@ -32,7 +32,7 @@ services:
     ports:
       - "5174:5173"
     environment:
-      - VITE_API_URL=http://10.95.144.153:8001
+      - VITE_API_URL=http://localhost:8001
     volumes:
       - /app/node_modules
     command: npm run dev -- --host

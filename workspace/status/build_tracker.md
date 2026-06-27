@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase MU — Multi-User / Auth / BYOK / Drive
-**Active step:** DD-1 — Drive storage layer
-**Last completed:** Merge Phase 1.6 → main
+**Active step:** Manual setup (Supabase + Google OAuth) → then verify → merge dev → main
+**Last completed:** BK-3 — Frontend settings panel (all MU code steps done)
 **Branch:** dev
 
 ---
@@ -157,9 +157,6 @@ Architecture:
   LangGraph thread_id namespaced as {user_id}:{conv_id}. 47 tests passing.
   `backend/app/routes/auth.py` (login/callback/me/logout), `backend/app/core/jwt_utils.py`
 
-- [ ] **MA-3** — Auth middleware + route scoping
-  `backend/app/middleware/auth.py`, all routes get `user_id` from `request.state`
-
 - [x] **MA-4** — Frontend auth UI + 429 back-off timer ✓
   `frontend/src/contexts/AuthContext.tsx` (AuthProvider, useAuth, OAuth callback handler),
   `frontend/src/pages/LoginPage.tsx` (Google sign-in button with inline SVG logo),
@@ -169,26 +166,95 @@ Architecture:
   Build passes (tsc + vite). 47 backend tests passing.
   `AuthContext.tsx`, `LoginPage.tsx`, JWT header injection in `client.ts`, rate-limit countdown UI
 
-- [ ] **DD-1** — Drive storage layer
-  `backend/app/storage/drive.py` (DriveStorage), `backend/app/core/drive_factory.py`
+- [x] **DD-1** — Drive storage layer ✓
+  `backend/app/storage/drive.py` (DriveStorage: root/folder CRUD, upload/download text,
+  list, delete, find; auto token refresh + Supabase persistence callback),
+  `backend/app/core/drive_factory.py` (get_drive_for_user — exception-safe, returns None
+  when Supabase unavailable / no tokens / decrypt fails → callers fall back to local FS).
 
-- [ ] **DD-2** — Conversations → Google Drive
-  `backend/app/storage/conversations_drive.py`, updated routes
+- [x] **DD-2** — Conversations → Google Drive ✓
+  `backend/app/storage/conversations_drive.py` (same interface, drive as first param;
+  folder structure PAWN/conversations/{conv_id}/meta.json|messages.jsonl|summary.md).
+  Routes wired: routes/conversations.py + routes/chat.py + memory/summarize.py all try
+  get_drive_for_user(user_id) first, fall back to local filesystem when None.
 
-- [ ] **DD-3** — Uploads → Google Drive
-  `backend/app/storage/documents_drive.py`, updated routes
+- [x] **DD-3** — Uploads → Google Drive ✓
+  `backend/app/storage/documents_drive.py` (PAWN/uploads/{doc_id}.txt).
+  Routes wired: routes/upload.py + routes/chat.py use drive when available, else local.
+  47 tests passing (tests hit local fallback since no real Supabase).
 
-- [ ] **SM-1** — Memory → Supabase pgvector
-  Replace `memory/index.py` SQLite with Supabase inserts, replace `memory/retrieve.py` with pgvector search
+- [x] **SM-1** — Memory → Supabase pgvector ✓
+  `memory/index.py` add_chunk(user_id, conv_id, text, embedding) → Supabase insert (exception-safe).
+  `memory/retrieve.py` retrieve(query, user_id, active_conv_id, top_k) → pgvector + FTS via RPC,
+  RRF fusion in Python, graceful degradation (FTS-only if embed fails, [] if Supabase down).
+  AgentState gains user_id; graph.py retrieve calls + chat.py inputs pass it through.
+  summarize.py indexes summaries with user_id. Removed sqlite-vec dep.
+  `supabase/schema.sql` created (tables + match_memory_chunks/search_memory_chunks RPCs).
+  test_rag.py rewritten to mock Supabase. 47 tests passing.
+  NOTE: user must run supabase/schema.sql in their Supabase project before memory works live.
 
-- [ ] **BK-1** — BYOK key store + /keys routes
-  `backend/app/core/key_store.py`, `backend/app/routes/keys.py`
+- [x] **BK-1** — BYOK key store + /keys routes ✓
+  `backend/app/core/key_store.py` (set_key/get_key/list_providers/delete_key, AES-GCM,
+  exception-safe reads, VALID_PROVIDERS set). `backend/app/routes/keys.py`
+  (GET /keys → providers only, PUT /keys/{provider}, DELETE /keys/{provider}; key values
+  never returned). Registered in main.py. test_keys.py (7 tests).
 
-- [ ] **BK-2** — Resolver + normalize per-user key lookup
-  `resolver.py` and `normalize.py` accept `user_id` + `db`; fall back to shared secrets
+- [x] **BK-2** — Resolver + normalize per-user key lookup ✓
+  `resolver.pick(model_id, user_id=None)`: user BYOK key (key_store.get_key) preferred,
+  falls back to shared Docker secret; keyed endpoints first, falls back to all available
+  if none keyed (preserves test/dev path). `normalize.chat_stream(..., user_id=None)`
+  forwards to pick. graph.py AgentState.user_id threaded into agent/ask_model/final nodes
+  + their pick/chat_stream calls. chat.py generate_title + error fallback pass user_id.
+  DummyResolver.pick signatures updated. 54 tests passing.
 
-- [ ] **BK-3** — Frontend settings panel
-  `SettingsPanel.tsx` (API keys tab + profile tab), settings gear in Sidebar
+- [x] **BK-3** — Frontend settings panel ✓
+  `frontend/src/components/ApiKeysSection.tsx` (BYOK: per-provider password input, Save/Remove,
+  "Configured" badge, getKeys/setKey/deleteKey; key values never re-displayed).
+  Integrated into existing `SettingsPage.tsx` (new API Keys section + Profile shows real email
+  + Sign out button; removed now-implemented "Connected Accounts" from Future list).
+  `Sidebar.tsx` profile card shows real email (gear icon already wired pre-MA-4).
+  `App.tsx` passes user.email + logout; client.ts getKeys() unwraps {providers}.
+  Fixed pre-existing unused-var build errors (useCallback, isAuthenticated).
+  Frontend build passes (tsc + vite). 54 backend tests passing.
+
+---
+
+## Manual Setup (user action) — DONE: login working end-to-end ✓
+
+Completed by user on 2026-06-27. Google OAuth2 → JWT → app login verified working.
+
+1. **Supabase**: created free project; ran `supabase/schema.sql`; filled
+   `secrets/supabase_url` + `secrets/supabase_service_key` (new-style `sb_secret_...` key).
+2. **Google Cloud OAuth2**: created Web client; redirect URI
+   `http://localhost:8001/auth/callback`; Drive API enabled; consent screen in Testing with
+   test user added; filled `secrets/google_client_id` + `secrets/google_client_secret`.
+3. `encryption_secret` + `jwt_secret` were already real (MA-1).
+
+### Setup-time code fixes (must be committed)
+
+- **PKCE disabled** (`autogenerate_code_verifier=False` in `routes/auth.py:_build_flow`): the flow
+  is stateless (separate Flow objects in /login and /callback) so a per-request code_verifier
+  can't survive; google-auth-oauthlib auto-PKCE caused "invalid_grant: Missing code verifier".
+  Safe because this is a confidential client (has client_secret).
+- **`OAUTHLIB_RELAX_TOKEN_SCOPE=1`** set at import in `routes/auth.py`: Google reorders/drops scopes
+  (e.g. drive.file under granular consent), and oauthlib errors on any scope change. Relaxed so
+  exchange completes; missing drive.file → app falls back to local filesystem storage.
+- **Naive-UTC expiry fix** (`storage/drive.py` __init__): Supabase returns `expires_at` as tz-aware
+  `timestamptz`, but google-auth compares expiry against a naive UTC now() → TypeError crashed every
+  chat request. Now converted to naive UTC. This was the "conversations save but no reply" bug.
+
+### Verified live (2026-06-27) ✓
+
+- [x] Google OAuth login → JWT → app.
+- [x] Conversations saving to user's Google Drive (`PAWN/conversations/`).
+- [x] BYOK Google key (Settings → API Keys) → LLM reply streams back ("Hello there friend.").
+
+### Still to verify (optional, before/after merge)
+
+- [ ] Memory: fact from chat A surfaces in chat B (needs Supabase pgvector + embeddings).
+- [ ] Second Google account → empty chat list (isolation).
+
+### Next: commit setup fixes + merge dev → main
 
 ---
 

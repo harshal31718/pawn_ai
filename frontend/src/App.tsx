@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Message } from './types'
 import ChatWindow from './components/ChatWindow'
 import MessageInput from './components/MessageInput'
@@ -24,7 +24,7 @@ import {
 let nextId = 1
 
 function AppContent() {
-  const { user, isAuthenticated, logout } = useAuth()
+  const { user, logout } = useAuth()
   const [rateLimitCountdown, setRateLimitCountdown] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
@@ -441,6 +441,7 @@ function AppContent() {
         onOpen={() => setIsSidebarOpen(true)}
         onOpenSettings={() => setIsSettingsOpen((v) => !v)}
         displayName={displayName}
+        email={user?.email || ''}
       />
       {isSettingsOpen ? (
         <SettingsPage
@@ -460,6 +461,8 @@ function AppContent() {
           backgroundEffect={backgroundEffect}
           onToggleBackgroundEffect={handleToggleBackgroundEffect}
           conversations={conversations}
+          email={user?.email || ''}
+          onLogout={logout}
         />
       ) : (
         <div className="flex-1 flex flex-col h-full overflow-hidden relative">

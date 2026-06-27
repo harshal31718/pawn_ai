@@ -8,7 +8,14 @@ Flow:
 """
 
 import json
+import os
 from datetime import datetime, timezone
+
+# Google may return scopes in a different order, or drop a scope the user did not
+# grant via granular consent (e.g. drive.file). oauthlib treats any scope change as
+# an error by default; relax that so the token exchange completes. Drive access is
+# optional — when drive.file is absent the app falls back to local filesystem storage.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -48,7 +55,16 @@ def _build_flow() -> Flow:
             "redirect_uris": [_REDIRECT_URI],
         }
     }
-    flow = Flow.from_client_config(client_config, scopes=_SCOPES)
+    # Disable PKCE: this is a confidential client (we hold a client_secret) and the
+    # flow is stateless — /auth/login and /auth/callback build separate Flow objects,
+    # so a per-request code_verifier cannot be carried between them. Without this,
+    # google-auth-oauthlib auto-generates a code_verifier at login that is lost by
+    # callback, causing "invalid_grant: Missing code verifier".
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=_SCOPES,
+        autogenerate_code_verifier=False,
+    )
     flow.redirect_uri = _REDIRECT_URI
     return flow
 

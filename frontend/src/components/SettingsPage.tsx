@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { RegistryModel, ConversationMeta } from '../api/client'
+import ApiKeysSection from './ApiKeysSection'
 
 type Theme = 'system' | 'light' | 'dark'
 
@@ -33,6 +34,8 @@ interface Props {
   backgroundEffect: boolean
   onToggleBackgroundEffect: () => void
   conversations: ConversationMeta[]
+  email: string
+  onLogout: () => void
 }
 
 const SHORTCUTS = [
@@ -43,7 +46,6 @@ const SHORTCUTS = [
 
 const FUTURE_ITEMS = [
   { label: 'Password & Authentication', desc: 'Password change, 2FA, login history, active sessions' },
-  { label: 'Connected Accounts', desc: 'Link API provider keys — BYOK management UI' },
   { label: 'Notifications', desc: 'Global toggle, message & system channels, quiet hours' },
   { label: 'Sync & Backup', desc: 'Cloud sync, data backup and restore across devices' },
   { label: 'Search Preferences', desc: 'Scope and filter defaults (search feature planned)' },
@@ -72,7 +74,7 @@ export default function SettingsPage({
   userBubbleColor, onChangeUserBubble,
   aiBubbleColor, onChangeAiBubble,
   backgroundEffect, onToggleBackgroundEffect,
-  conversations,
+  conversations, email, onLogout,
 }: Props) {
   const [nameInput, setNameInput] = useState(displayName)
   const [nameSaved, setNameSaved] = useState(false)
@@ -270,11 +272,26 @@ export default function SettingsPage({
               <div>
                 <label className="text-[10px] font-medium text-theme-text-muted block mb-1">Email</label>
                 <p className="text-xs text-theme-text-muted px-3 py-1.5 bg-theme-bg border border-theme-border/50 rounded-lg opacity-60 select-none">
-                  harshal@pawn.ai
+                  {email || 'Not signed in'}
                 </p>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                <div>
+                  <p className="text-xs font-medium text-theme-text">Sign out</p>
+                  <p className="text-[10px] text-theme-text-muted mt-0.5">End your session on this device</p>
+                </div>
+                <button
+                  type="button" onClick={onLogout}
+                  className="text-xs px-3 py-1.5 bg-theme-bg border border-red-500/40 rounded-lg text-red-500 hover:bg-red-500/10 transition-colors font-semibold shrink-0"
+                >
+                  Sign out
+                </button>
               </div>
             </div>
           </section>
+
+          {/* ── API Keys (BYOK) ── */}
+          <ApiKeysSection />
 
           {/* ── Chat Defaults ── */}
           <section>

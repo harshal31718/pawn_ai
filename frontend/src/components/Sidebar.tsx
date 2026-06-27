@@ -13,6 +13,7 @@ interface Props {
   onOpen: () => void
   onOpenSettings: () => void
   displayName: string
+  email?: string
 }
 
 export default function Sidebar({
@@ -27,6 +28,7 @@ export default function Sidebar({
   onOpen,
   onOpenSettings,
   displayName,
+  email,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -266,7 +268,7 @@ export default function Sidebar({
               </div>
               <div className="flex flex-col min-w-0 flex-1">
                 <span className="text-xs font-semibold text-theme-text truncate leading-none mb-1">{displayName}</span>
-                <span className="text-[10px] text-theme-text-muted truncate leading-none">harshal@pawn.ai</span>
+                <span className="text-[10px] text-theme-text-muted truncate leading-none">{email || 'Signed in'}</span>
               </div>
               <button
                 type="button"

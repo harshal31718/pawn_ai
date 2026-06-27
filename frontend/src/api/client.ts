@@ -232,7 +232,8 @@ export async function fetchRegistryModels(): Promise<RegistryModel[]> {
 export async function getKeys(): Promise<string[]> {
   const res = await fetch(`${BASE_URL}/keys`, { headers: authHeaders() })
   if (!res.ok) throw new Error('Failed to fetch keys')
-  return res.json()
+  const data = await res.json()
+  return data.providers ?? []
 }
 
 export async function setKey(provider: string, apiKey: string): Promise<void> {
