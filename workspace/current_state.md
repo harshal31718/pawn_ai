@@ -1,8 +1,8 @@
 # PAWN — Current State
 
 Last updated: 2026-06-27
-Active step: Merge Phase 1.6 -> main
-Phase: Phase 1.6 — Rate-Limit Resilience + UI Overhaul (Complete)
+Active step: P2-1: Google Drive Integration API wiring
+Phase: Phase 2 — Google Drive (Not Started)
 
 ---
 
