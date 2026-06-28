@@ -26,6 +26,9 @@ KAGGLE_RUN_TIMEOUT_SECONDS = 600
 KAGGLE_POLL_INTERVAL_SECONDS = 8
 # Per-HTTP-call timeout (each individual push/status/output request).
 KAGGLE_HTTP_TIMEOUT_SECONDS = 30
+# Max time to wait for an in-flight run (e.g. the deploy warmup) to free the slug
+# before pushing a new run, instead of immediately erroring "Kaggle is busy".
+KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS = 300
 
 # Per-user kernel slug suffixes (full slug is "<username>/<suffix>").
 KAGGLE_CUBE_SLUG = "pawn-cube-poc"

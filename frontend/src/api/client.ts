@@ -82,6 +82,50 @@ export async function deleteKaggleConfig(): Promise<void> {
   if (!res.ok && res.status !== 404) throw new Error(await errorDetail(res))
 }
 
+export interface ImageResult {
+  image: string // base64
+  mime: string
+  via?: string
+}
+
+export async function connectKaggle(): Promise<void> {
+  const res = await fetch(`${BASE_URL}/generate/connect`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function runKaggleImage(prompt: string, signal?: AbortSignal): Promise<ImageResult> {
+  const res = await fetch(`${BASE_URL}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ prompt, modality: 'image' }),
+    signal,
+  })
+
+  if (res.status === 401) {
+    localStorage.removeItem('pawn-token')
+    localStorage.removeItem('pawn-user')
+    window.location.reload()
+    throw new Error('Session expired')
+  }
+
+  if (!res.ok) {
+    let detail = `Request failed: ${res.status}`
+    try {
+      const body = await res.json()
+      if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail)
+  }
+
+  return res.json()
+}
+
 export async function runKaggleCube(input: number, signal?: AbortSignal): Promise<CubeResult> {
   const res = await fetch(`${BASE_URL}/generate`, {
     method: 'POST',

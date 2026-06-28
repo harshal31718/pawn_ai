@@ -1,8 +1,7 @@
 """Kaggle-backed generation route.
 
-POST /generate — body {modality, input?, prompt?}. Today only modality="cube"
-(Milestone A.0, proves the Kaggle round-trip); "image" arrives once the cube
-path is green.
+POST /generate — body {modality, input?, prompt?}.
+POST /generate/connect — verify connection and push the notebook.
 
 The Kaggle call runs in run_in_threadpool (it blocks for minutes). A per-user
 lock serialises a single user's runs — one kernel slug is single-writer, so two
@@ -37,21 +36,38 @@ class GenerateRequest(BaseModel):
     prompt: str | None = None
 
 
+@router.post("/connect")
+async def connect_kaggle(request: Request):
+    user_id = request.state.user_id
+    async with _lock_for(user_id):
+        await run_in_threadpool(generate.connect_kaggle, user_id)
+    return {"status": "ok"}
+
+
 @router.post("")
 async def generate_artifact(req: GenerateRequest, request: Request):
     user_id = request.state.user_id
 
-    if req.modality != "cube":
+    if req.modality == "cube":
+        if req.input is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Field 'input' is required for the cube modality.",
+            )
+        async with _lock_for(user_id):
+            return await run_in_threadpool(generate.generate_cube, user_id, req.input)
+
+    elif req.modality == "image":
+        if not req.prompt or not req.prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Field 'prompt' is required for the image modality.",
+            )
+        async with _lock_for(user_id):
+            return await run_in_threadpool(generate.generate_image, user_id, req.prompt.strip())
+
+    else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Modality '{req.modality}' is not supported yet.",
         )
-    if req.input is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Field 'input' is required for the cube modality.",
-        )
-
-    async with _lock_for(user_id):
-        # NotConfiguredError / KaggleError propagate to their exception handlers.
-        return await run_in_threadpool(generate.generate_cube, user_id, req.input)

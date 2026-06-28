@@ -19,6 +19,7 @@ import httpx
 
 from app.constants import (
     KAGGLE_API_BASE,
+    KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS,
     KAGGLE_HTTP_TIMEOUT_SECONDS,
     KAGGLE_POLL_INTERVAL_SECONDS,
     KAGGLE_RUN_TIMEOUT_SECONDS,
@@ -66,6 +67,8 @@ def _push(
     *,
     enable_gpu: bool,
     enable_internet: bool,
+    dataset_sources: list[str] = None,
+    accelerator: str = None,
 ) -> None:
     body = {
         "slug": f"{username}/{kernel_name}",
@@ -77,12 +80,18 @@ def _push(
         "enableGpu": enable_gpu,
         "enableTpu": False,
         "enableInternet": enable_internet,
-        "datasetDataSources": [],
+        "datasetDataSources": dataset_sources or [],
         "competitionDataSources": [],
         "kernelDataSources": [],
         "modelDataSources": [],
         "categoryIds": [],
     }
+    if accelerator:
+        # Kaggle's /kernels/push reads the GPU type from `machineShape` (wire form
+        # of the SDK's machine_shape / CLI --accelerator). The `accelerator` key is
+        # silently ignored, which falls the run back to the default Pascal P100.
+        # Valid values: NvidiaTeslaT4, NvidiaTeslaP100, Tpu1VmV38.
+        body["machineShape"] = accelerator
     resp = client.post("/kernels/push", json=body)
     _raise_for_status(resp, "push")
     data = resp.json()
@@ -113,6 +122,41 @@ def _wait_until_complete(
             raise KaggleError(f"Kaggle run failed: {data.get('failureMessage') or status}")
         if time.monotonic() > deadline:
             raise KaggleError("Kaggle run timed out before completing.")
+        time.sleep(poll_interval)
+
+
+def _wait_until_idle(
+    client: httpx.Client,
+    username: str,
+    kernel_name: str,
+    *,
+    timeout: int,
+    poll_interval: int,
+) -> None:
+    """Block until no run is in-flight on the slug, so a new run can be pushed.
+
+    A Kaggle push always starts a run, so right after a deploy the warmup kernel is
+    `queued`/`running`. Rather than erroring "Kaggle is busy", we wait for the slug
+    to reach any terminal state (complete *or* failed — a prior failed warmup must
+    not block a fresh run) before returning. Raises only if it stays busy past
+    `timeout`. A non-200 status is treated as "can't tell" → let the push proceed.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        resp = client.get(
+            "/kernels/status",
+            params={"userName": username, "kernelSlug": kernel_name},
+        )
+        if resp.status_code != 200:
+            return
+        status = (resp.json().get("status") or "").lower()
+        if status not in ("running", "queued"):
+            return
+        if time.monotonic() > deadline:
+            raise KaggleError(
+                "Kaggle is still busy after waiting for the previous run "
+                "(notebook warmup). Try again shortly."
+            )
         time.sleep(poll_interval)
 
 
@@ -152,8 +196,11 @@ def run_kernel(
     output_filename: str,
     enable_gpu: bool = False,
     enable_internet: bool = False,
+    dataset_sources: list[str] = None,
+    accelerator: str = None,
     timeout: int = KAGGLE_RUN_TIMEOUT_SECONDS,
     poll_interval: int = KAGGLE_POLL_INTERVAL_SECONDS,
+    busy_wait_timeout: int = KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS,
 ) -> bytes:
     """Push `source` to <username>/<kernel_name>, run it, and return the bytes of
     `output_filename` from its output. Blocking — call via run_in_threadpool."""
@@ -167,6 +214,16 @@ def run_kernel(
     with httpx.Client(
         base_url=KAGGLE_API_BASE, auth=auth, headers=headers, timeout=KAGGLE_HTTP_TIMEOUT_SECONDS
     ) as client:
+        # A push always starts a run, so an in-flight run (e.g. the deploy warmup)
+        # would otherwise be rejected. Wait for the slug to free up, then push.
+        _wait_until_idle(
+            client,
+            username,
+            kernel_name,
+            timeout=busy_wait_timeout,
+            poll_interval=poll_interval,
+        )
+
         _push(
             client,
             username,
@@ -175,6 +232,8 @@ def run_kernel(
             source,
             enable_gpu=enable_gpu,
             enable_internet=enable_internet,
+            dataset_sources=dataset_sources,
+            accelerator=accelerator,
         )
         _wait_until_complete(
             client, username, kernel_name, timeout=timeout, poll_interval=poll_interval

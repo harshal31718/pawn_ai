@@ -349,3 +349,17 @@ This becomes your interview script and project history.
 **Tests:** Backend 66 passed (added `test_resolver.py`, `test_normalize_fallback.py`). Frontend `npm run build` clean. Backend + frontend images rebuilt and running (8001/5174 healthy).
 **Commit:** (uncommitted — working tree changes on dev branch)
 **Note:** Earlier `drive.py` client_id/secret fix was baked into the image with this rebuild (the dev `watch` sync wasn't running, so prior `restart` hadn't picked it up).
+
+### 2026-06-28 — Image-gen pipeline working (T4 fix + deploy auto-queue) [imageLab]
+
+**Context:** Milestone A.0 image generation (SDXL on the user's own Kaggle account) had the kernel transport working but two blockers stopped end-to-end generation.
+
+**Built / fixed:**
+- **T4 GPU fix** (`core/kaggle.py`): runs always landed on a P100 (Pascal) and failed with CUDA kernel mismatch / `Torch not compiled with CUDA enabled`. Root cause: the `/kernels/push` body sent the GPU type under `accelerator`, which Kaggle silently ignores → default P100. The wire field is `machineShape` (the SDK's `machine_shape` / CLI `--accelerator`; valid values `NvidiaTeslaT4`, `NvidiaTeslaP100`, `Tpu1VmV38`). Changed `body["accelerator"]` → `body["machineShape"]`. `generate_image` already passes `NvidiaTeslaT4`. Verified live: image returned in ~127s.
+- **Deploy → "Kaggle is busy" auto-queue** (`core/kaggle.py`, `constants.py`): a Kaggle push always starts a run, so the deploy warmup leaves the slug `queued`/`running` for ~1–2 min; clicking Generate during that window hit the pre-flight busy check and errored instantly. Replaced the immediate raise with `_wait_until_idle(...)` — polls `/kernels/status` until the slug reaches any terminal state (complete *or* failed, so a failed warmup doesn't block), bounded by new `KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS = 300`; only raises "still busy" if it never frees. `run_kernel` gains a `busy_wait_timeout` param. Generate now transparently queues behind the warmup.
+- **Frontend** (`ImageLabPage.tsx`): running indicator now notes it "waits for warmup if just deployed"; Generate stays enabled (backend queues).
+
+**Decisions:** Backend auto-queue chosen over a frontend cooldown/readiness-poll — no time guessing, no new endpoint, robust to variable warmup duration (user-approved plan).
+**Issues:** Public Kaggle API has no documented value for dual T4 (T4×2) — issue #821 unanswered; we use a single T4. Image quality not yet tuned (out of scope for now).
+**Tests:** 13 `test_generate.py` tests passing (3 new `_wait_until_idle` tests: waits-through-inflight, times-out, proceeds-on-non-200). Frontend `npm run build` clean.
+**Commit:** (this commit)

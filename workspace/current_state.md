@@ -1,8 +1,8 @@
 # PAWN — Current State
 
 Last updated: 2026-06-28
-Active step: PERF-2 done — optimistic client cache + fail-proof sync (instant conversation UX over Drive) ✓ — manual verify → commit → merge dev→main
-Phase: Phase MU — Multi-User / Auth / BYOK / Drive (all code steps complete; perf hardening for Drive latency)
+Active step: Milestone A.0 (imageLab) — Kaggle SDXL image generation working end-to-end ✓ (T4 GPU fix + deploy auto-queue)
+Phase: imageLab branch — experimental Kaggle-backed image generation (Milestone A.0). Phase MU code complete on dev/main.
 
 ---
 
@@ -54,6 +54,12 @@ Phase: Phase MU — Multi-User / Auth / BYOK / Drive (all code steps complete; p
   - `App.tsx` rewired to the store: new-chat/switch/delete/rename are instant and optimistic; messages are keyed by conversation (a stream writes to its captured conv even after switching away); the post-send full-list refetch is replaced by a local `commitTurn` + one quiet, debounced title-only merge (fixes glitchy/disappearing messages). `Sidebar.tsx` shows pending-sync dots + an offline banner.
 - PERF-2a: Draft "New Chat" — clicking New Chat opens a frontend-only draft (welcome page, no sidebar row); nothing is created on Drive/Supabase/local and no sync op is enqueued until the first message is sent (`promoteDraft` + the chat route's lazy-create materialize it). At most one draft → no duplicate/empty chats. See `workspace/decisions/draft_new_chat.md`.
 
+### imageLab — Milestone A.0: Kaggle SDXL image generation (2026-06-28)
+
+- Image-gen pipeline working end-to-end: prompt → push template notebook to the user's Kaggle account → SDXL run on a **T4 GPU** → `out.png` fetched and returned as base64 (`core/generate.py`, `core/kaggle.py`, `routes/generate.py`, `kaggle_templates/image_gen/notebook.ipynb`, `components/ImageLabPage.tsx`). Verified live (~127s/image).
+- **T4 fix:** the push body must send the GPU type as `machineShape` (not `accelerator`, which Kaggle ignores → default P100). Valid values: `NvidiaTeslaT4`, `NvidiaTeslaP100`, `Tpu1VmV38`.
+- **Deploy auto-queue:** since a Kaggle push always starts a run, the deploy warmup leaves the slug busy; `run_kernel` now waits for it to free up (`_wait_until_idle`, bounded by `KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS = 300`) instead of erroring "Kaggle is busy".
+
 Test/build status: 57 backend tests passing (added chat lazy-create test); frontend `npm run build` passes clean. **Manual browser verification of the optimistic + draft flow under slow Drive still pending.**
 
 ---
@@ -79,6 +85,7 @@ Test/build status: 57 backend tests passing (added chat lazy-create test); front
 - [x] BYOK per-user keys + settings UI
 - [x] 429 rate-limit countdown UI
 - [x] End-to-end verified live — OAuth login + Drive-backed conversations + BYOK LLM reply (2026-06-27)
+- [x] Kaggle SDXL image generation (imageLab, Milestone A.0) — T4 GPU, deploy auto-queue; verified live (2026-06-28)
 
 ---
 
@@ -108,6 +115,7 @@ Test/build status: 57 backend tests passing (added chat lazy-create test); front
 - Client conversation cache is per-browser. Cross-device divergence is reconciled only via `mergeServerMeta` on next load (last-write-wins on title); genuine multi-device editing is not synced live.
 - Reasoning `trace[]` is not persisted to the client cache (final message text only) — traces disappear on reload.
 - localStorage cache keeps message arrays for the 30 most-recent conversations (LRU, ~4 MB cap); older conversations re-fetch their messages from Drive on next open.
+- **imageLab:** dual T4 (T4×2) isn't reachable via the public Kaggle API (issue #821 unanswered) — we use a single T4. SDXL image quality is not yet tuned (steps/guidance/resolution defaults). First Generate after a deploy holds the HTTP request open through the warmup wait (per-user lock already serializes this).
 
 ---
 
