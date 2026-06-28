@@ -127,3 +127,34 @@ def test_chat_auto_titling_trigger(client):
 
     updated_meta = storage.get_conversation_meta(conv_id, user_id=TEST_USER_ID)
     assert updated_meta["title"] == "Generated Title Output"
+
+
+def test_chat_lazy_creates_unknown_conversation(client):
+    """POST /chat with a client-owned conversation_id that doesn't exist yet must
+    lazy-create it (no 404) and persist the turn — the optimistic-UI fail-proof path."""
+    conv_id = "client-owned-conv-abc123"
+
+    async def mock_stream(*args, **kwargs):
+        yield "Hi"
+        yield " there"
+
+    with patch("app.core.normalize.stream_llm", side_effect=mock_stream):
+        with client.stream(
+            "POST",
+            "/chat",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+                "conversation_id": conv_id,
+            },
+        ) as resp:
+            assert resp.status_code == 200
+            resp.read()
+
+    meta = storage.get_conversation_meta(conv_id, user_id=TEST_USER_ID)
+    assert meta is not None
+    assert meta["id"] == conv_id
+
+    messages = storage.load_messages(conv_id, user_id=TEST_USER_ID)
+    assert len(messages) == 2
+    assert messages[0] == {"role": "user", "content": "hello"}
+    assert messages[1]["role"] == "assistant"

@@ -1,4 +1,5 @@
 from typing import Optional
+from starlette.concurrency import run_in_threadpool
 from app.core.normalize import chat_stream
 from app.core.drive_factory import get_drive_for_user
 from app.storage import conversations as local_storage
@@ -25,6 +26,7 @@ async def summarize_history(
     messages: list[dict],
     resolver: Optional[Resolver] = None,
     rate_limiter: Optional[EndpointRateLimiter] = None,
+    user_id: Optional[str] = None,
 ) -> str:
     """
     Generates a concise bullet-point summary of the messages list using the fastest available model.
@@ -51,7 +53,7 @@ async def summarize_history(
     try:
         model_id = resolver.pick_model_by_capability("fast")
         summary_text = ""
-        async for token in chat_stream(model_id, msgs, resolver, rate_limiter):
+        async for token in chat_stream(model_id, msgs, resolver, rate_limiter, user_id=user_id):
             summary_text += token
         cleaned = summary_text.strip()
         if cleaned:
@@ -70,28 +72,28 @@ async def summarize_conversation_task(
     Loads all messages for the conversation, generates a summary, and writes it to disk.
     Ingests the summary into the memory vector index (RAG).
     """
-    drive = get_drive_for_user(user_id) if user_id else None
+    drive = await run_in_threadpool(get_drive_for_user, user_id) if user_id else None
     if drive:
-        messages = conversations_drive.load_messages(drive, conv_id)
+        messages = await run_in_threadpool(conversations_drive.load_messages, drive, conv_id)
     else:
-        messages = local_storage.load_messages(conv_id, user_id=user_id)
+        messages = await run_in_threadpool(local_storage.load_messages, conv_id, user_id=user_id)
     if not messages:
         return
 
-    summary = await summarize_history(messages, resolver, rate_limiter)
+    summary = await summarize_history(messages, resolver, rate_limiter, user_id=user_id)
     if summary:
         if drive:
-            conversations_drive.save_summary(drive, conv_id, summary)
+            await run_in_threadpool(conversations_drive.save_summary, drive, conv_id, summary)
         else:
-            local_storage.save_summary(conv_id, summary, user_id=user_id)
-        
+            await run_in_threadpool(local_storage.save_summary, conv_id, summary, user_id=user_id)
+
         if user_id:
             try:
                 from app.memory.embed import embed
                 from app.memory.index import add_chunk
 
-                embedding = await embed(summary)
-                add_chunk(user_id, conv_id, summary, embedding)
+                embedding = await embed(summary, user_id=user_id)
+                await run_in_threadpool(add_chunk, user_id, conv_id, summary, embedding)
             except Exception as e:
                 import sys
                 print(f"Failed to index summary for RAG: {e}", file=sys.stderr)

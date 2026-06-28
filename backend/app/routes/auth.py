@@ -132,6 +132,11 @@ async def callback(code: str, request: Request):
         }
     ).execute()
 
+    # Drop any cached DriveStorage built from now-stale tokens so the next request
+    # rebuilds from these fresh ones.
+    from app.core.drive_factory import evict_user
+    evict_user(user_id)
+
     # Issue session JWT
     token = create_token(user_id, email)
 

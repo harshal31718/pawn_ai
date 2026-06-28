@@ -1,8 +1,8 @@
 # PAWN — Current State
 
-Last updated: 2026-06-27
-Active step: Pipeline verified live (login + Drive + BYOK reply) ✓ — commit setup fixes → merge dev→main
-Phase: Phase MU — Multi-User / Auth / BYOK / Drive (all code steps complete; verified live)
+Last updated: 2026-06-28
+Active step: PERF-2 done — optimistic client cache + fail-proof sync (instant conversation UX over Drive) ✓ — manual verify → commit → merge dev→main
+Phase: Phase MU — Multi-User / Auth / BYOK / Drive (all code steps complete; perf hardening for Drive latency)
 
 ---
 
@@ -43,8 +43,18 @@ Phase: Phase MU — Multi-User / Auth / BYOK / Drive (all code steps complete; v
 - BK-1: BYOK — `core/key_store.py` (AES-GCM encrypt, exception-safe reads), `routes/keys.py` (GET/PUT/DELETE; key values never returned).
 - BK-2: `resolver.pick(model_id, user_id=None)` prefers user BYOK key over shared secret (keyed endpoints first, falls back to all if none keyed); `normalize.chat_stream(..., user_id=None)`; graph nodes + chat.py thread user_id.
 - BK-3: `components/ApiKeysSection.tsx` (per-provider BYOK manage) integrated into `SettingsPage.tsx`; Profile shows real email + Sign out; Sidebar shows real email.
+- BK-4: BYOK-only key resolution — `resolver` no longer falls back to shared `secrets/*` provider keys; `pick()` returns only endpoints with the user's BYOK key and raises a clear "configure your key in Settings" error otherwise. Embeddings (`memory/embed.py`) use the user's `google` BYOK key (`user_id` threaded through `retrieve`/`summarize`). Shared provider secret files retained but unused (deletable later).
 
-Test/build status: 54 backend tests passing; frontend `npm run build` passes clean.
+### Phase MU — Drive-latency perf hardening (2026-06-28)
+
+- PERF-1: Stop blocking the event loop — all synchronous Drive (`googleapiclient`) + Supabase (`supabase-py`) calls moved off the async loop via `run_in_threadpool` / `asyncio.to_thread` across `chat.py`, `conversations.py`, `upload.py`, `memory/summarize.py`, `memory/retrieve.py`. `storage/drive.py` gains a 20 s socket timeout (`AuthorizedHttp` + `httplib2`), a re-entrant lock (the instance is now shared), and a file-ID cache so reads go by ID (`get_media`, strongly consistent) instead of eventually-consistent name queries. `core/drive_factory.py` caches `DriveStorage` per user (TTL + `evict_user`, evicted on Drive re-link). `core/key_store.py` caches decrypted keys + `prefetch()` (warmed once per chat off-loop).
+- PERF-2: Instant conversation UX (optimistic UI + client cache + fail-proof sync) — the client is now the source of truth.
+  - Client-owned conversation UUIDs (`crypto.randomUUID`); backend `POST /conversations` accepts an `id` (idempotent `_create`), and `/chat` lazy-creates the conversation when missing instead of 404 (so the first message always materializes it).
+  - New frontend store layer: `src/store/conversationCache.ts` (localStorage list+messages cache, debounced save, LRU + ~4 MB cap, corruption-safe, `mergeServerMeta` reconciliation), `src/store/syncQueue.ts` (persisted retry queue: create/rename/delete with backoff, 404-as-success, drains on `online`, survives reloads), `src/store/useConversationStore.ts` (single owner of list/messages/active selection), `src/store/ids.ts`.
+  - `App.tsx` rewired to the store: new-chat/switch/delete/rename are instant and optimistic; messages are keyed by conversation (a stream writes to its captured conv even after switching away); the post-send full-list refetch is replaced by a local `commitTurn` + one quiet, debounced title-only merge (fixes glitchy/disappearing messages). `Sidebar.tsx` shows pending-sync dots + an offline banner.
+- PERF-2a: Draft "New Chat" — clicking New Chat opens a frontend-only draft (welcome page, no sidebar row); nothing is created on Drive/Supabase/local and no sync op is enqueued until the first message is sent (`promoteDraft` + the chat route's lazy-create materialize it). At most one draft → no duplicate/empty chats. See `workspace/decisions/draft_new_chat.md`.
+
+Test/build status: 57 backend tests passing (added chat lazy-create test); frontend `npm run build` passes clean. **Manual browser verification of the optimistic + draft flow under slow Drive still pending.**
 
 ---
 
@@ -95,6 +105,9 @@ Test/build status: 54 backend tests passing; frontend `npm run build` passes cle
 - Until Supabase is configured, `get_drive_for_user()` returns None (→ local filesystem storage) and memory retrieve/add gracefully no-op. Tests rely on this fallback.
 - Drive `append_messages` rewrites the whole `messages.jsonl` per call (Drive has no partial append) — fine at normal scale, inefficient for very long chats.
 - `memory_chunks` ivfflat index uses `lists = 10` — tune up as data grows.
+- Client conversation cache is per-browser. Cross-device divergence is reconciled only via `mergeServerMeta` on next load (last-write-wins on title); genuine multi-device editing is not synced live.
+- Reasoning `trace[]` is not persisted to the client cache (final message text only) — traces disappear on reload.
+- localStorage cache keeps message arrays for the 30 most-recent conversations (LRU, ~4 MB cap); older conversations re-fetch their messages from Drive on next open.
 
 ---
 

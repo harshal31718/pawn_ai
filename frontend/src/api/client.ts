@@ -36,20 +36,30 @@ export async function streamChat(
   modelId?: string,
   docId?: string,
   conversationId?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const { onToken, onDone, onError, onRateLimit, onStep, onMemoryHit, onModelCall, onProviderSwitch } =
     callbacks
 
-  const res = await fetch(`${BASE_URL}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({
-      messages,
-      ...(modelId ? { model_id: modelId } : {}),
-      ...(docId ? { doc_id: docId } : {}),
-      ...(conversationId ? { conversation_id: conversationId } : {}),
-    }),
-  })
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        messages,
+        ...(modelId ? { model_id: modelId } : {}),
+        ...(docId ? { doc_id: docId } : {}),
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+      }),
+      signal,
+    })
+  } catch (err) {
+    // User aborted before/while connecting — stop silently.
+    if (err instanceof DOMException && err.name === 'AbortError') return
+    onError(err instanceof Error ? err.message : 'Request failed')
+    return
+  }
 
   if (res.status === 401) {
     // Token expired or missing — trigger re-login
@@ -77,6 +87,7 @@ export async function streamChat(
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      if (signal?.aborted) return
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
@@ -125,6 +136,11 @@ export async function streamChat(
         }
       }
     }
+  } catch (err) {
+    // Aborted mid-stream — stop silently without surfacing an error.
+    if (err instanceof DOMException && err.name === 'AbortError') return
+    onError(err instanceof Error ? err.message : 'Stream interrupted')
+    return
   } finally {
     reader.releaseLock()
   }
@@ -175,11 +191,12 @@ export async function fetchConversations(): Promise<ConversationMeta[]> {
   return res.json()
 }
 
-export async function createConversation(title?: string, modelId?: string): Promise<ConversationMeta> {
+export async function createConversation(title?: string, modelId?: string, id?: string): Promise<ConversationMeta> {
   const res = await fetch(`${BASE_URL}/conversations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
+      ...(id ? { id } : {}),
       ...(title ? { title } : {}),
       ...(modelId ? { model_id: modelId } : {}),
     }),
@@ -199,6 +216,8 @@ export async function deleteConversation(convId: string): Promise<void> {
     method: 'DELETE',
     headers: authHeaders(),
   })
+  // DELETE is idempotent: a 404 means it's already gone — treat as success.
+  if (res.status === 404) return
   if (!res.ok) throw new Error(`Failed to delete conversation: ${convId}`)
 }
 

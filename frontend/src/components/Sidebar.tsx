@@ -4,6 +4,8 @@ import type { ConversationMeta } from '../api/client'
 interface Props {
   conversations: ConversationMeta[]
   activeId: string | null
+  pendingIds?: Set<string>
+  syncError?: string | null
   onSelect: (id: string) => void
   onCreate: () => void
   onDelete: (id: string) => void
@@ -19,6 +21,8 @@ interface Props {
 export default function Sidebar({
   conversations,
   activeId,
+  pendingIds,
+  syncError,
   onSelect,
   onCreate,
   onDelete,
@@ -65,12 +69,9 @@ export default function Sidebar({
   }
 
   const handleNewChat = () => {
-    const emptyChat = conversations.find((c) => c.message_count === 0)
-    if (emptyChat) {
-      onSelect(emptyChat.id)
-    } else {
-      onCreate()
-    }
+    // Dedupe-to-empty is handled race-free in the store (createConversation),
+    // since the optimistic conv is inserted synchronously.
+    onCreate()
     onClose()
   }
 
@@ -128,6 +129,16 @@ export default function Sidebar({
                 <span className="py-1">New chat</span>
               </button>
             </div>
+
+            {/* Offline / unsynced changes banner */}
+            {syncError && (
+              <div className="px-3 pb-2 shrink-0">
+                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                  <span className="truncate">{syncError}</span>
+                </div>
+              </div>
+            )}
 
             {/* Search Option */}
             <div className="px-3 pb-2 shrink-0">
@@ -201,6 +212,14 @@ export default function Sidebar({
                         <span className="flex-1 truncate pr-8 select-none" onDoubleClick={(e) => handleStartRename(conv, e)}>
                           {conv.title}
                         </span>
+                      )}
+
+                      {/* Pending-sync indicator (op queued, not yet acknowledged) */}
+                      {!isEditing && pendingIds?.has(conv.id) && (
+                        <span
+                          title="Syncing…"
+                          className="shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"
+                        />
                       )}
 
                       {/* Inline Actions (visible on item hover) */}

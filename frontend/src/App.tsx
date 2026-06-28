@@ -11,28 +11,18 @@ import {
   healthCheck,
   streamChat,
   uploadDoc,
-  fetchConversations,
-  createConversation,
-  fetchConversation,
-  deleteConversation,
-  updateConversationTitle,
   fetchRegistryModels,
-  type ConversationMeta,
   type RegistryModel
 } from './api/client'
-
-let nextId = 1
+import { useConversationStore } from './store/useConversationStore'
+import { mid } from './store/ids'
 
 function AppContent() {
   const { user, logout } = useAuth()
   const [rateLimitCountdown, setRateLimitCountdown] = useState<number | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState('gemini-2.5-flash')
   const [models, setModels] = useState<RegistryModel[]>([])
-
-  const [conversations, setConversations] = useState<ConversationMeta[]>([])
-  const [activeConvId, setActiveConvId] = useState<string | null>(null)
 
   // Document upload states
   const [attachedDoc, setAttachedDoc] = useState<{ id: string; name: string } | null>(null)
@@ -52,9 +42,32 @@ function AppContent() {
   const [aiBubbleColor, setAiBubbleColor] = useState(() => localStorage.getItem('pawn-ai-bubble') || '')
   const [backgroundEffect, setBackgroundEffect] = useState(() => localStorage.getItem('pawn-bg-effect') !== 'false')
 
+  // Conversation list + messages + active selection live in the store: optimistic,
+  // localStorage-cached, with Drive persistence draining in the background.
+  const {
+    conversations,
+    activeConvId,
+    messages,
+    pendingIds,
+    syncError,
+    selectConversation,
+    createConversation,
+    promoteDraft,
+    deleteConversation,
+    renameConversation,
+    setMessagesFor,
+    bumpAfterTurn,
+    setStreaming,
+    quietTitleRefresh,
+  } = useConversationStore(user?.id ?? null, defaultModel)
+
   const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
 
   const streamingIdRef = useRef<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const lastUserRef = useRef<{ id: string; content: string } | null>(null)
+  const streamConvIdRef = useRef<string | null>(null)
+  const [draft, setDraft] = useState('')
 
   // Sync theme to document element
   useEffect(() => {
@@ -122,71 +135,19 @@ function AppContent() {
         }
       })
       .catch((err) => console.error('Failed to fetch registry models:', err))
-
-    // Pull saved chats
-    refreshConversations()
+    // Conversation list + active selection are bootstrapped by useConversationStore.
   }, [])
 
-  // 2. Load conversation history when selection changes
+  // When the active conversation changes, sync the model picker to its model and
+  // drop any attached document (document context is per-thread). Messages are owned
+  // by the store and render instantly from cache — no awaited fetch here.
   useEffect(() => {
     if (!activeConvId) return
-
-    let active = true
-    fetchConversation(activeConvId)
-      .then((detail) => {
-        if (!active) return
-
-        // Map backend history to local message model
-        const mapped = detail.messages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({
-            id: String(nextId++),
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-          }))
-
-        setMessages(mapped)
-        setSelectedProvider(detail.meta.model_id || 'gemini-2.5-flash')
-        setAttachedDoc(null) // Clear document context on thread switch
-      })
-      .catch((err) => {
-        console.error(`Error loading conversation ${activeConvId}:`, err)
-      })
-
-    return () => {
-      active = false
-    }
+    const conv = conversations.find((c) => c.id === activeConvId)
+    if (conv?.model_id) setSelectedProvider(conv.model_id)
+    setAttachedDoc(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConvId])
-
-  async function refreshConversations(selectId?: string) {
-    try {
-      const list = await fetchConversations()
-      setConversations(list)
-
-      if (list.length > 0) {
-        const targetId = selectId || activeConvId || list[0].id
-        const exists = list.some((c) => c.id === targetId)
-        const nextId = exists ? targetId : list[0].id
-        setActiveConvId(nextId)
-      } else {
-        await handleCreate()
-      }
-    } catch (err) {
-      console.error('Error listing conversations:', err)
-    }
-  }
-
-  async function handleCreate() {
-    try {
-      const newConv = await createConversation(undefined, defaultModel)
-      setConversations((prev) => [newConv, ...prev])
-      setActiveConvId(newConv.id)
-      setMessages([])
-      setAttachedDoc(null)
-    } catch (err) {
-      console.error('Error creating conversation:', err)
-    }
-  }
 
   function handleSaveDisplayName(name: string) {
     setDisplayName(name)
@@ -215,57 +176,63 @@ function AppContent() {
     })
   }
 
-  async function handleDelete(id: string) {
-    try {
-      await deleteConversation(id)
-      const list = conversations.filter((c) => c.id !== id)
-      setConversations(list)
-
-      if (activeConvId === id) {
-        if (list.length > 0) {
-          setActiveConvId(list[0].id)
-        } else {
-          await handleCreate()
-        }
-      }
-    } catch (err) {
-      console.error('Error deleting conversation:', err)
-    }
-  }
-
-  async function handleRename(id: string, newTitle: string) {
-    try {
-      await updateConversationTitle(id, newTitle)
-      setConversations((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, title: newTitle } : c))
+  function handleStop() {
+    abortRef.current?.abort()
+    abortRef.current = null
+    const assistantId = streamingIdRef.current
+    const userInfo = lastUserRef.current
+    const convId = streamConvIdRef.current
+    // Undo the in-flight turn in the conversation it was streaming into: drop the
+    // streaming assistant + the user message...
+    if (convId) {
+      setMessagesFor(convId, (prev) =>
+        prev.filter((m) => m.id !== assistantId && m.id !== userInfo?.id),
       )
-    } catch (err) {
-      console.error('Error renaming conversation:', err)
     }
+    // ...and put the user's text back in the box so they can edit/resend.
+    if (userInfo) setDraft(userInfo.content)
+    setIsStreaming(false)
+    streamingIdRef.current = null
+    lastUserRef.current = null
+    streamConvIdRef.current = null
+    setStreaming(null)
   }
 
   async function handleSend(content: string) {
     if (isStreaming || isUploading) return
 
-    const userMsg: Message = { id: String(nextId++), role: 'user', content }
-    const assistantId = String(nextId++)
+    // Capture the target conversation now (closure) so the streamed turn always
+    // lands in this conversation even if the user switches away mid-stream. If
+    // there's no active conversation yet, create one instantly (client UUID).
+    const convId = activeConvId ?? createConversation()
+    // If this is the unsaved draft, materialize it now (adds the sidebar row;
+    // the chat route lazy-creates it on Drive). No-op for already-real convs.
+    promoteDraft(convId)
+    streamConvIdRef.current = convId
+
+    const userMsg: Message = { id: mid(), role: 'user', content }
+    const assistantId = mid()
     streamingIdRef.current = assistantId
+    lastUserRef.current = { id: userMsg.id, content }
+    setStreaming(convId)
 
-    setMessages((prev) => [
-      ...prev,
-      userMsg,
-      { id: assistantId, role: 'assistant', content: '' },
-    ])
-    setIsStreaming(true)
+    const controller = new AbortController()
+    abortRef.current = controller
 
-    // For persistent threads, we send the history which includes the userMsg.
-    // The backend loads from disk and appends userMsg itself.
+    // History to send = this conversation's current messages + the new user turn.
     const history = [...messages, userMsg]
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({
         role: m.role,
         content: m.content,
       }))
+
+    setMessagesFor(convId, (prev) => [
+      ...prev,
+      userMsg,
+      { id: assistantId, role: 'assistant', content: '' },
+    ])
+    setIsStreaming(true)
 
     await streamChat(
       history,
@@ -282,27 +249,31 @@ function AppContent() {
           }, 1000)
         },
         onToken: (delta) => {
-          setMessages((prev) =>
+          setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, content: m.content + delta } : m,
             ),
           )
         },
         onDone: (viaProvider) => {
-          setMessages((prev) =>
+          setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, viaProvider } : m,
             ),
           )
           setIsStreaming(false)
           streamingIdRef.current = null
-          // Refresh list to pull updated message count & automatic title after it completes
-          setTimeout(() => {
-            refreshConversations(activeConvId || undefined)
-          }, 800)
+          abortRef.current = null
+          lastUserRef.current = null
+          streamConvIdRef.current = null
+          setStreaming(null)
+          // Update list meta locally (count/order) instead of a disruptive full
+          // refetch, then quietly merge the server's auto-generated title.
+          bumpAfterTurn(convId)
+          quietTitleRefresh()
         },
         onError: (err) => {
-          setMessages((prev) =>
+          setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? { ...m, content: `Error: ${err}` }
@@ -311,9 +282,11 @@ function AppContent() {
           )
           setIsStreaming(false)
           streamingIdRef.current = null
+          streamConvIdRef.current = null
+          setStreaming(null)
         },
         onStep: (label, detail) => {
-          setMessages((prev) =>
+          setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
@@ -333,7 +306,7 @@ function AppContent() {
           )
         },
         onMemoryHit: (summary) => {
-          setMessages((prev) =>
+          setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
@@ -352,7 +325,7 @@ function AppContent() {
           )
         },
         onModelCall: (model, purpose) => {
-          setMessages((prev) =>
+          setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
@@ -373,21 +346,16 @@ function AppContent() {
         },
         onProviderSwitch: (from, to) => {
           const noticeMsg: Message = {
-            id: String(nextId++),
+            id: mid(),
             role: 'notice',
             content: `Failing over: ${from} → ${to}`,
           }
-          setMessages((prev) => {
+          setMessagesFor(convId, (prev) => {
             const idx = prev.findIndex((m) => m.id === assistantId)
-            if (idx !== -1) {
-              const next = [...prev]
-              next.splice(idx, 0, noticeMsg)
-              return next
-            }
-            return [...prev, noticeMsg]
-          })
-          setMessages((prev) =>
-            prev.map((m) =>
+            const withNotice = idx !== -1
+              ? [...prev.slice(0, idx), noticeMsg, ...prev.slice(idx)]
+              : [...prev, noticeMsg]
+            return withNotice.map((m) =>
               m.id === assistantId
                 ? {
                   ...m,
@@ -402,13 +370,14 @@ function AppContent() {
                   ],
                 }
                 : m,
-            ),
-          )
+            )
+          })
         },
       },
       selectedProvider,
       attachedDoc?.id || undefined,
-      activeConvId || undefined,
+      convId,
+      controller.signal,
     )
   }
 
@@ -432,10 +401,12 @@ function AppContent() {
       <Sidebar
         conversations={conversations}
         activeId={activeConvId}
-        onSelect={(id) => { setActiveConvId(id); setIsSettingsOpen(false) }}
-        onCreate={() => { handleCreate(); setIsSettingsOpen(false) }}
-        onDelete={handleDelete}
-        onRename={handleRename}
+        pendingIds={pendingIds}
+        syncError={syncError}
+        onSelect={(id) => { selectConversation(id); setIsSettingsOpen(false) }}
+        onCreate={() => { createConversation(); setIsSettingsOpen(false) }}
+        onDelete={deleteConversation}
+        onRename={renameConversation}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onOpen={() => setIsSidebarOpen(true)}
@@ -573,7 +544,10 @@ function AppContent() {
                     </div>
                   )}
                   <MessageInput
+                    value={draft}
+                    onChange={setDraft}
                     onSend={handleSend}
+                    onStop={handleStop}
                     disabled={isStreaming || rateLimitCountdown !== null}
                     onUpload={handleUpload}
                     isUploading={isUploading}
@@ -619,7 +593,10 @@ function AppContent() {
                 </div>
               )}
               <MessageInput
+                value={draft}
+                onChange={setDraft}
                 onSend={handleSend}
+                onStop={handleStop}
                 disabled={isStreaming || rateLimitCountdown !== null}
                 onUpload={handleUpload}
                 isUploading={isUploading}

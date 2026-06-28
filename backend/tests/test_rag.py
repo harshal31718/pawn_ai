@@ -93,7 +93,7 @@ def test_retrieve_fuses_vector_and_fts():
     fts_rows = [{"id": 2, "conv_id": "conv-B", "text": "Database vector search."}]
     db = _fake_db(vec_rows=vec_rows, fts_rows=fts_rows)
 
-    async def mock_embed(text):
+    async def mock_embed(text, *args, **kwargs):
         return emb
 
     with patch("app.memory.retrieve.get_db", return_value=db):
@@ -119,7 +119,7 @@ def test_retrieve_falls_back_to_fts_when_embedding_fails():
     fts_rows = [{"id": 5, "conv_id": "conv-A", "text": "UniqueKeywordHere token."}]
     db = _fake_db(vec_rows=[], fts_rows=fts_rows)
 
-    async def mock_embed_fail(text):
+    async def mock_embed_fail(text, *args, **kwargs):
         raise Exception("API key expired")
 
     with patch("app.memory.retrieve.get_db", return_value=db):
@@ -134,7 +134,7 @@ def test_retrieve_falls_back_to_fts_when_embedding_fails():
 
 def test_retrieve_returns_empty_when_supabase_unavailable():
     """If Supabase is unreachable, retrieve degrades to an empty list."""
-    async def mock_embed(text):
+    async def mock_embed(text, *args, **kwargs):
         return [0.0] * 768
 
     with patch("app.memory.retrieve.get_db", side_effect=Exception("no supabase")):
@@ -151,7 +151,7 @@ def test_chat_yields_memory_hit_events(client):
     vec_rows = [{"id": 1, "conv_id": "past-conv", "text": "Remember that Bob loves blue cheese."}]
     db = _fake_db(vec_rows=vec_rows, fts_rows=[])
 
-    async def mock_embed(text):
+    async def mock_embed(text, *args, **kwargs):
         return emb
 
     async def mock_stream(*args, **kwargs):

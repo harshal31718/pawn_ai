@@ -1,14 +1,22 @@
 import os
 import httpx
-from app.config import GEMINI_API_KEY
 
 EMBED_BACKEND = os.getenv("PAWN_EMBED_BACKEND", "gemini")
 OLLAMA_URL = os.getenv("PAWN_OLLAMA_URL", "http://localhost:11434")
 
-async def _gemini_embed(text: str) -> list[float]:
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not configured.")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+
+def _resolve_gemini_key(user_id: str | None) -> str:
+    """Return the user's Google BYOK key (from Settings), or "" if none."""
+    if not user_id:
+        return ""
+    from app.core import key_store
+    return key_store.get_key(user_id, "google") or ""
+
+
+async def _gemini_embed(text: str, api_key: str) -> list[float]:
+    if not api_key:
+        raise ValueError("No Google API key configured for embeddings.")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={api_key}"
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             url,
@@ -39,13 +47,17 @@ async def _ollama_embed(text: str) -> list[float]:
         data = resp.json()
         return data["embedding"]
 
-async def embed(text: str) -> list[float]:
+async def embed(text: str, user_id: str | None = None) -> list[float]:
     """
     Retrieves 768-dimensional embedding vector for the given text.
+
+    Uses the user's Google BYOK key (configured in Settings) for the Gemini
+    backend. Raises if no key is configured, unless Ollama fallback is enabled.
     """
     if EMBED_BACKEND == "gemini":
         try:
-            return await _gemini_embed(text)
+            api_key = _resolve_gemini_key(user_id)
+            return await _gemini_embed(text, api_key)
         except Exception as e:
             if os.getenv("PAWN_EMBED_FALLBACK_TO_OLLAMA") == "true":
                 return await _ollama_embed(text)

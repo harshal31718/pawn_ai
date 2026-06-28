@@ -31,3 +31,12 @@ def bypass_auth():
 
     with patch.object(AuthMiddleware, "dispatch", _mock_dispatch):
         yield
+
+
+@pytest.fixture(autouse=True)
+def stub_byok_key():
+    """Provider keys are now BYOK-only (no shared-secret fallback). Give the test
+    user a key for every provider so resolver.pick() returns endpoints. Tests that
+    assert the no-key path can override this with a narrower patch."""
+    with patch("app.core.key_store.get_key", return_value="TEST-BYOK-KEY"):
+        yield

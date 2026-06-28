@@ -3,7 +3,10 @@ import ModelSwitcher from './ModelSwitcher'
 import type { RegistryModel } from '../api/client'
 
 interface Props {
+  value: string
+  onChange: (value: string) => void
   onSend: (content: string) => void
+  onStop?: () => void
   disabled?: boolean
   onUpload?: (file: File) => void
   isUploading?: boolean
@@ -13,7 +16,10 @@ interface Props {
 }
 
 export default function MessageInput({
+  value,
+  onChange,
   onSend,
+  onStop,
   disabled = false,
   onUpload,
   isUploading = false,
@@ -21,10 +27,19 @@ export default function MessageInput({
   onChangeProvider,
   models = [],
 }: Props) {
-  const [value, setValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isMultiLine, setIsMultiLine] = useState(false)
+  const prevDisabledRef = useRef(disabled)
+
+  // When streaming ends with text in the box (i.e. a stopped message was
+  // restored), refocus the textarea so the user can resume editing.
+  useEffect(() => {
+    if (prevDisabledRef.current && !disabled && value.trim()) {
+      textareaRef.current?.focus()
+    }
+    prevDisabledRef.current = disabled
+  }, [disabled, value])
 
   const showSend = value.trim().length > 0 || disabled
 
@@ -62,7 +77,7 @@ export default function MessageInput({
     const trimmed = value.trim()
     if (!trimmed || disabled || isUploading) return
     onSend(trimmed)
-    setValue('')
+    onChange('')
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -107,7 +122,7 @@ export default function MessageInput({
           placeholder="Ask anything ..."
           rows={1}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={disabled || isUploading}
         />
@@ -163,7 +178,13 @@ export default function MessageInput({
           ${showSend ? 'max-w-[36px] opacity-100' : 'max-w-0 opacity-0'}
         `}>
           {disabled ? (
-            <div className="relative h-9 w-9 flex items-center justify-center">
+            <button
+              type="button"
+              onClick={() => onStop?.()}
+              disabled={!onStop}
+              className="relative h-9 w-9 flex items-center justify-center group active:scale-95 cursor-pointer disabled:cursor-default"
+              title="Stop generating"
+            >
               <svg
                 className="absolute inset-0 w-9 h-9 animate-spin"
                 viewBox="0 0 36 36"
@@ -178,10 +199,10 @@ export default function MessageInput({
                   strokeDasharray="62 32"
                 />
               </svg>
-              <div className="w-7 h-7 rounded-full bg-theme-user-bubble flex items-center justify-center">
+              <div className="w-7 h-7 rounded-full bg-theme-user-bubble flex items-center justify-center transition-transform group-hover:scale-105">
                 <div className="w-3 h-3 rounded-[3px] bg-theme-user-bubble-text" />
               </div>
-            </div>
+            </button>
           ) : (
             <button
               type="button"

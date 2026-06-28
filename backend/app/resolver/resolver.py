@@ -11,23 +11,24 @@ class Resolver:
         self._secrets = secrets
 
     def _resolve_key(self, ep, user_id: Optional[str]) -> str:
-        """Resolve the API key for an endpoint: user's BYOK key first, then shared secret."""
-        if user_id:
-            # Import here to avoid a hard dependency on Supabase at import time / in tests.
-            from app.core import key_store
-            user_key = key_store.get_key(user_id, ep.provider)
-            if user_key:
-                return user_key
-        return self._secrets.get(ep.secret) or ""
+        """Resolve the API key for an endpoint from the user's BYOK keys (Settings).
+
+        Only per-user keys configured in Settings are used — there is no shared
+        Docker-secret fallback. Returns "" when the user has no key for the provider.
+        """
+        if not user_id:
+            return ""
+        # Import here to avoid a hard dependency on Supabase at import time / in tests.
+        from app.core import key_store
+        return key_store.get_key(user_id, ep.provider) or ""
 
     def pick(self, model_id: str, user_id: Optional[str] = None) -> List[Tuple[str, str, Dict[str, str], str, str]]:
         """
         Picks all available endpoints for a canonical model_id, sorted by priority.
         If model_id is a known provider name or alias, we pick all active endpoints for that provider.
-        When user_id is given, the user's BYOK key for each provider is preferred over the
-        shared Docker secret. Endpoints with a usable key come first; if no endpoint has any
-        key (e.g. in tests / unconfigured dev), all available endpoints are returned so the
-        legacy shared-key path is preserved.
+        Endpoints are keyed exclusively with the user's BYOK key (configured in Settings).
+        Only endpoints with a usable key are returned; if the user has no key for any
+        available provider, a NoEndpointError is raised prompting them to add one.
         Returns a list of tuples: (base_url, provider_model_id, headers, endpoint_id, provider)
         """
         provider_map = {
@@ -52,18 +53,22 @@ class Resolver:
             raise NoEndpointError(f"All endpoints for '{model_id}' are rate-limited or inactive.")
 
         keyed = []
-        unkeyed = []
+        missing_providers = set()
         for ep in available:
             api_key = self._resolve_key(ep, user_id)
+            if not api_key:
+                missing_providers.add(ep.provider)
+                continue
             provider = _detect_provider(ep.base_url)
             headers = _provider_headers(provider, api_key, ep.base_url)
-            entry = (ep.base_url, ep.provider_model_id, headers, ep.id, ep.provider)
-            if api_key:
-                keyed.append(entry)
-            else:
-                unkeyed.append(entry)
-        # Prefer endpoints with a usable key; fall back to all available if none have one.
-        return keyed or unkeyed
+            keyed.append((ep.base_url, ep.provider_model_id, headers, ep.id, ep.provider))
+
+        if not keyed:
+            provs = ", ".join(sorted(missing_providers)) or model_id
+            raise NoEndpointError(
+                f"No API key configured for {provs}. Add your provider key in Settings to use this model."
+            )
+        return keyed
 
     def pick_by_capability(self, level: str, visibility: str = "user") -> List[Tuple[str, str, Dict[str, str], str, str]]:
         """

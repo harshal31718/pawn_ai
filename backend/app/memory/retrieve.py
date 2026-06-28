@@ -12,6 +12,7 @@ Graceful degradation: if embedding fails, falls back to FTS only. If Supabase is
 unreachable, returns []. Memory is always scoped by user_id.
 """
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from app.db.supabase_client import get_db
@@ -31,7 +32,7 @@ async def retrieve(
     """
     # 1. Generate query embedding (graceful fallback to FTS-only on failure)
     try:
-        query_vector = await embed(query)
+        query_vector = await embed(query, user_id=user_id)
     except Exception:
         query_vector = None
 
@@ -47,15 +48,17 @@ async def retrieve(
     # 2. Vector search candidates (pgvector cosine via RPC)
     if query_vector:
         try:
-            res = db.rpc(
-                "match_memory_chunks",
-                {
-                    "query_embedding": query_vector,
-                    "match_user_id": user_id,
-                    "exclude_conv_id": active_conv_id,
-                    "match_count": candidate_k,
-                },
-            ).execute()
+            res = await asyncio.to_thread(
+                lambda: db.rpc(
+                    "match_memory_chunks",
+                    {
+                        "query_embedding": query_vector,
+                        "match_user_id": user_id,
+                        "exclude_conv_id": active_conv_id,
+                        "match_count": candidate_k,
+                    },
+                ).execute()
+            )
             for r in res.data or []:
                 vec_results.append(
                     {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}
@@ -65,15 +68,17 @@ async def retrieve(
 
     # 3. Full-text search candidates (Postgres FTS via RPC)
     try:
-        res = db.rpc(
-            "search_memory_chunks",
-            {
-                "query_text": query,
-                "match_user_id": user_id,
-                "exclude_conv_id": active_conv_id,
-                "match_count": candidate_k,
-            },
-        ).execute()
+        res = await asyncio.to_thread(
+            lambda: db.rpc(
+                "search_memory_chunks",
+                {
+                    "query_text": query,
+                    "match_user_id": user_id,
+                    "exclude_conv_id": active_conv_id,
+                    "match_count": candidate_k,
+                },
+            ).execute()
+        )
         for r in res.data or []:
             fts_results.append(
                 {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}

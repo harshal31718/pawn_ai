@@ -258,3 +258,72 @@ This becomes your interview script and project history.
 **Tests:** 56 backend tests passing (47 prior + 7 keys + 2 net new rag mocks/agent). Frontend `npm run build` passes clean.
 **Blocked on (manual):** Supabase project + `supabase/schema.sql`; Google OAuth2 credentials. Then verify end-to-end and merge dev → main.
 **Commit:** (uncommitted — working tree changes on dev branch)
+
+### 2026-06-27 — BK-4: BYOK-only key resolution (drop shared-secret fallback)
+
+**Built:** Provider API keys now come *exclusively* from the user's Settings-configured BYOK keys (Supabase `key_store`); the shared `secrets/*` provider keys are no longer used for LLM or embedding calls.
+- `resolver._resolve_key` — removed the `self._secrets.get(ep.secret)` fallback; returns only the user's BYOK key (or "" when none).
+- `resolver.pick` — returns only endpoints that carry a usable BYOK key. When the user has no key for any available provider, raises `NoEndpointError("No API key configured for {provider}. Add your provider key in Settings to use this model.")` instead of silently returning unkeyed endpoints.
+- `memory/embed.py` — `embed(text, user_id=None)` resolves the Gemini embedding key from the user's `google` BYOK key (`_resolve_gemini_key`); dropped the `from app.config import GEMINI_API_KEY` import. Ollama fallback unchanged.
+- `memory/retrieve.py` / `memory/summarize.py` — thread `user_id` into `embed()`; `summarize_history(..., user_id)` passes it to `chat_stream` so summaries use BYOK too.
+- Tests: `conftest.py` adds an autouse `stub_byok_key` fixture (patches `key_store.get_key` → `"TEST-BYOK-KEY"`) so the test user "has" keys; `test_keys.py` `test_resolver_falls_back_to_shared_secret` → `test_resolver_raises_when_no_byok_key`; `test_rag.py` mock_embed signatures accept `*args, **kwargs` for the new `user_id` kwarg.
+
+**Decisions:** Kept the now-unused `secrets` constructor param on `Resolver` (and the shared secret files themselves) for backward compatibility — the dependency is removed in behaviour, files can be deleted later. Embeddings degrade gracefully without a key: `retrieve()` already catches embed failures (FTS-only) and summary indexing runs in a background task.
+**Issues:** Compose uses `develop.watch` (sync), not a bind mount — running container kept old code until `docker compose up -d --build backend`. Verified live: BYOK key → endpoints resolved without shared key; no key → clear NoEndpointError.
+**Tests:** 56 backend tests passing.
+**Commit:** (uncommitted — working tree changes on dev branch)
+
+### 2026-06-28 — Perf fix: stop blocking the event loop on Drive/Supabase I/O
+
+**Symptom:** After enabling login, chats had long load times, intermittent "no replies", and history that randomly disappeared. Worked sometimes, broke under any concurrency.
+
+**Root cause:** The multi-user path (commit 410e4b7) introduced synchronous, blocking I/O — Google Drive (`googleapiclient`) and Supabase (`supabase-py`) — called directly inside `async def` routes and async LangGraph nodes. FastAPI runs on a single event loop; a blocking call there freezes *every* concurrent request. A single chat with a `conversation_id` did ~12 serial Drive round-trips (meta + messages + summary, each re-resolving folders by name) before the LLM even started, plus blocking Supabase calls for BYOK keys (per reasoning step) and memory retrieval. No timeouts meant a stalled Drive call hung the request forever. Drive's eventually-consistent name queries (`find_file` right after a write) returned None → "disappearing history".
+
+**Built:**
+- `storage/drive.py` — socket timeout (`AuthorizedHttp(creds, httplib2.Http(timeout=20))`); re-entrant lock guards all API access (the instance is now shared across threadpool workers, and googleapiclient's transport isn't thread-safe); file-ID cache so reads go by ID via `get_media` (strongly consistent) instead of name queries; caches cleared on delete.
+- `core/drive_factory.py` — per-user `DriveStorage` cache (TTL 10 min live / 30 s for not-linked) + `evict_user()`; avoids refetching tokens and rebuilding the service every request. `auth.py` evicts on (re)link.
+- `core/key_store.py` — short-TTL decrypted-key cache + `prefetch(user_id)` (one query warms all providers); `set_key`/`delete_key` evict.
+- Routes (`chat.py`, `conversations.py`, `upload.py`) and `memory/summarize.py` — every blocking Drive/Supabase/`key_store`/PDF-parse call moved off the loop via `run_in_threadpool`; conversation reads batched into a single hop. `chat.py` warms the key cache once per request.
+- `memory/retrieve.py` — the two Supabase RPCs wrapped in `asyncio.to_thread`.
+
+**Decisions:** Kept Drive as the conversation store (per user direction) and fixed it in place rather than migrating to local FS/Supabase. Consistency relies on the cached instance's file-ID map surviving across requests; the brief not-linked cache window is self-healing.
+**Issues:** Caching `None` from a Supabase blip could mask a linked user's Drive (showing empty local storage); mitigated with a short 30 s TTL on negative results and a 10 min TTL on live instances.
+**Tests:** 56 backend tests passing (unchanged).
+**Commit:** (uncommitted — working tree changes on dev branch)
+**Next (manual verify):** Live test under Docker with a linked Drive — concurrent chats, no event-loop stalls, history persists across reloads.
+
+### 2026-06-28 — PERF-2: Instant conversation UX (optimistic UI + client cache + fail-proof sync)
+
+**Symptom (Drive mode):** New chat slow + created duplicates; switching laggy ("won't open then suddenly loads"); delete slow/unreliable (row lingered, double-clicked); messages glitched/disappeared after send.
+
+**Root cause:** Every conversation action awaited slow Drive round-trips with no client cache, and `onDone` ran a full-list refetch that *reset* `activeConvId`, re-firing the load effect and reloading messages from eventually-consistent Drive — clobbering the just-streamed turn.
+
+**Design (user-approved plan):** Make the client the source of truth. Client-owned UUIDs + localStorage cache drive the UI instantly; Drive persistence drains in a fail-proof background queue; server fetches become reconciliation merges, never authoritative resets.
+
+**Built:**
+- Backend (2 small edits): `conversations.py` `ConversationCreate.id` + idempotent `_create` (returns existing meta if the id exists); `chat.py` lazy-creates the conversation when `conversation_id` meta is missing instead of 404 (so the first message materializes it). Both storage backends already accept `conv_id`; no test depended on the 404.
+- Frontend store layer (new): `store/ids.ts` (UUID + collision-free message ids), `store/conversationCache.ts` (per-user localStorage cache of list + messages; debounced save; LRU(30) + ~4 MB eviction; corruption-safe load; `mergeServerMeta` merge rules), `store/syncQueue.ts` (persisted create/rename/delete queue with exponential backoff, idempotent ordering, DELETE-404-as-success, drains on `online`, survives reloads), `store/useConversationStore.ts` (single owner of list/messages/active selection + optimistic mutators + bootstrap/reconcile).
+- `client.ts`: `createConversation(..., id?)`; `deleteConversation` treats 404 as success.
+- `App.tsx`: removed `conversations`/`activeConvId`/`messages` local state, the awaiting switch effect, and the `handleCreate`/`handleDelete`/`handleRename`/`refreshConversations` handlers; wired to the store. Messages are keyed by conversation, so a stream writes to its **captured** conv id even if the user switches away. `onDone` now does `bumpAfterTurn` (local list update) + debounced `quietTitleRefresh` (title-only merge) instead of the disruptive full refetch.
+- `Sidebar.tsx`: removed the stale empty-chat dedupe (now race-free in the store); added pending-sync dots + an offline banner.
+
+**Decisions:** Full fail-proof persisted sync queue (not lighter in-memory) and localStorage-persisted messages — both chosen by the user. On switch, trust cache and only background-fetch when a conv has NO cached messages (avoids clobbering just-sent turns under Drive eventual consistency).
+**Issues:** Streaming-during-switch required moving message ownership into the store keyed by conv (App's single `messages` buffer would have appended to the wrong conversation). Multi-device + trace persistence are documented limitations.
+**Tests:** 57 backend tests passing (added `test_chat_lazy_creates_unknown_conversation`); frontend `npm run build` clean.
+**Commit:** (uncommitted — working tree changes on dev branch)
+**Next (manual verify):** Browser test under slow Drive — instant new-chat (no dupes) / switch / delete; messages persist + reconcile after reload; kill backend → ops queue in `localStorage['pawn-syncq:*']` and drain on restart/`online`.
+
+### 2026-06-28 — PERF-2a: Draft "New Chat" (no persistence until first message)
+
+**Change:** New Chat no longer creates anything on the backend. It opens a frontend-only *draft* (welcome page, empty in-memory buffer); the conversation is materialized — sidebar row + Drive file — only when the first message is sent.
+
+**Built:**
+- `store/useConversationStore.ts`: added `draftConvId` state; `createConversation()` now opens/reuses the single draft (no list insert, no `create` enqueue, no network); new `promoteDraft(id)` adds the meta to the list at first send and clears the draft. Persist effect excludes the draft from the localStorage cache.
+- `App.tsx` `handleSend`: calls `promoteDraft(convId)` before streaming (no-op for already-real convs); the chat route's lazy-create writes it to Drive on that request. Sidebar `onCreate` simplified to `createConversation()`.
+- `store/syncQueue.ts`: the `create` op is now unused (commented as defensive/kept).
+- Behavior contract documented in `workspace/decisions/draft_new_chat.md`.
+
+**Decisions:** Sidebar shows NO row for the draft (user choice) — the titled row appears only after the first message. At most one draft → no duplicate empty chats. An unsent draft does not survive reload (nothing to persist).
+**Tests:** No backend change (lazy-create already covered). Frontend `npm run build` clean.
+**Commit:** (uncommitted — working tree changes on dev branch)
+**Next (manual verify):** New Chat → no network request, no sidebar row, welcome page; spam → one draft; first message → row + one `POST /chat` lazy-create; reload → row+messages persist.

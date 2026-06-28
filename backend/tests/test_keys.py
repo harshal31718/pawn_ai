@@ -79,19 +79,17 @@ def test_resolver_prefers_user_byok_key():
     mock_get.assert_called()
 
 
-def test_resolver_falls_back_to_shared_secret():
-    """If the user has no BYOK key, resolver.pick falls back to the shared secret."""
+def test_resolver_raises_when_no_byok_key():
+    """If the user has no BYOK key, resolver.pick raises (no shared-secret fallback)."""
     from app.registry.loader import load_registry
     from app.core.rate_limiter import EndpointRateLimiter
     from app.resolver.resolver import Resolver
+    from app.exceptions import NoEndpointError
 
     registry = load_registry()
     rl = EndpointRateLimiter()
     resolver = Resolver(registry, rl, {"gemini_api_key": "SHARED-KEY"})
 
     with patch("app.core.key_store.get_key", return_value=None):
-        candidates = resolver.pick("google", user_id="user-1")
-
-    assert candidates
-    all_headers = " ".join(str(h) for (_, _, h, _, _) in candidates)
-    assert "SHARED-KEY" in all_headers
+        with pytest.raises(NoEndpointError):
+            resolver.pick("google", user_id="user-1")
