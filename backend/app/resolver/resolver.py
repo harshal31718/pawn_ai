@@ -1,6 +1,7 @@
 from typing import List, Optional, Tuple, Dict
 from app.exceptions import NoEndpointError
 from app.registry.loader import Registry
+from app.registry.schemas import ModelEntry
 from app.core.rate_limiter import EndpointRateLimiter
 from app.core.llm_core import _detect_provider, _provider_headers
 
@@ -70,35 +71,75 @@ class Resolver:
             )
         return keyed
 
-    def pick_by_capability(self, level: str, visibility: str = "user") -> List[Tuple[str, str, Dict[str, str], str, str]]:
+    def _has_usable_endpoint(self, model_id: str, user_id: Optional[str]) -> bool:
+        """True if the model has ≥1 active, non-cooled-down endpoint that the user
+        holds a key for. When user_id is None the key check is skipped (the key is
+        applied later in pick()), preserving the pre-BYOK behavior used by tests."""
+        endpoints = self._registry.endpoints_for(model_id)
+        for ep in endpoints:
+            if not (ep.active and self._rate_limiter.can_use(ep)):
+                continue
+            if user_id is not None and not self._resolve_key(ep, user_id):
+                continue
+            return True
+        return False
+
+    def pick_by_capability(self, level: str, visibility: str = "user", user_id: Optional[str] = None) -> List[Tuple[str, str, Dict[str, str], str, str]]:
         """
         Picks all available endpoints at a given capability level.
+        When user_id is given, only models the user holds a key for are considered.
         Returns a list of tuples: (base_url, provider_model_id, headers, endpoint_id, provider)
         """
         matching = (
-            self._registry.internal_models(level) 
-            if visibility == "internal" 
+            self._registry.internal_models(level)
+            if visibility == "internal"
             else [m for m in self._registry.user_models() if m.capability_level == level]
         )
         for model in matching:
+            if user_id is not None and not self._has_usable_endpoint(model.id, user_id):
+                continue
             try:
-                return self.pick(model.id)
+                return self.pick(model.id, user_id=user_id)
             except NoEndpointError:
                 continue
         raise NoEndpointError(f"No available endpoint at capability level '{level}'")
 
-    def pick_model_by_capability(self, level: str, visibility: str = "user") -> str:
+    def pick_model_by_capability(self, level: str, visibility: str = "user", user_id: Optional[str] = None) -> str:
         """
-        Selects the first canonical model_id matching the capability level that has available endpoints.
+        Selects the first canonical model_id matching the capability level that has
+        available endpoints. When user_id is given, the model must have ≥1 endpoint
+        whose provider the user has configured a key for.
         """
         matching = (
-            self._registry.internal_models(level) 
-            if visibility == "internal" 
+            self._registry.internal_models(level)
+            if visibility == "internal"
             else [m for m in self._registry.user_models() if m.capability_level == level]
         )
         for model in matching:
-            endpoints = self._registry.endpoints_for(model.id)
-            available = [ep for ep in endpoints if ep.active and self._rate_limiter.can_use(ep)]
-            if available:
+            if self._has_usable_endpoint(model.id, user_id):
                 return model.id
         raise NoEndpointError(f"No available model at capability level '{level}'")
+
+    def usable_user_models(self, user_id: Optional[str]) -> List[ModelEntry]:
+        """User-facing models that have ≥1 active endpoint the user holds a key for."""
+        return [
+            m for m in self._registry.user_models()
+            if self._has_usable_endpoint(m.id, user_id)
+        ]
+
+    def fallback_models(self, model_id: str, user_id: Optional[str]) -> List[str]:
+        """Ordered list of model_ids to try for a request: the requested model first,
+        then other usable user models for cross-model failover. Models sharing the
+        requested model's capability_level come before the rest. De-duplicated."""
+        ordered: List[str] = [model_id]
+        requested = self._registry.get_model(model_id)
+        level = requested.capability_level if requested else None
+
+        usable = self.usable_user_models(user_id)
+        same_level = [m.id for m in usable if level is not None and m.capability_level == level]
+        others = [m.id for m in usable if m.id not in same_level]
+
+        for mid in same_level + others:
+            if mid not in ordered:
+                ordered.append(mid)
+        return ordered

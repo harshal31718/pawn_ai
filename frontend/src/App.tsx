@@ -12,6 +12,7 @@ import {
   streamChat,
   uploadDoc,
   fetchRegistryModels,
+  getKeys,
   type RegistryModel
 } from './api/client'
 import { useConversationStore } from './store/useConversationStore'
@@ -19,10 +20,15 @@ import { mid } from './store/ids'
 
 function AppContent() {
   const { user, logout } = useAuth()
-  const [rateLimitCountdown, setRateLimitCountdown] = useState<number | null>(null)
-  const [isStreaming, setIsStreaming] = useState(false)
+  // Rate-limit cooldowns are per-conversation (epoch-ms when the lock lifts) so a
+  // rate-limited chat never blocks the others.
+  const [rateLimitUntil, setRateLimitUntil] = useState<Record<string, number>>({})
+  const [now, setNow] = useState(() => Date.now())
   const [selectedProvider, setSelectedProvider] = useState('gemini-2.5-flash')
   const [models, setModels] = useState<RegistryModel[]>([])
+  // Providers the user has saved a BYOK key for. The picker only offers models
+  // served by at least one of these.
+  const [configuredProviders, setConfiguredProviders] = useState<string[]>([])
 
   // Document upload states
   const [attachedDoc, setAttachedDoc] = useState<{ id: string; name: string } | null>(null)
@@ -50,6 +56,7 @@ function AppContent() {
     messages,
     pendingIds,
     syncError,
+    streamingConvIds,
     selectConversation,
     createConversation,
     promoteDraft,
@@ -63,11 +70,31 @@ function AppContent() {
 
   const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
 
-  const streamingIdRef = useRef<string | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
-  const lastUserRef = useRef<{ id: string; content: string } | null>(null)
-  const streamConvIdRef = useRef<string | null>(null)
+  // One registry of in-flight streams, keyed by conversation id, so multiple chats
+  // can generate concurrently — each with its own AbortController and undo info.
+  const streamsRef = useRef<
+    Map<string, { assistantId: string; controller: AbortController; userMsgId: string; userContent: string }>
+  >(new Map())
   const [draft, setDraft] = useState('')
+
+  // Derived per-active-conversation locks for the composer.
+  const isActiveStreaming = activeConvId ? streamingConvIds.has(activeConvId) : false
+  const activeRateLimitUntil = activeConvId ? rateLimitUntil[activeConvId] : undefined
+  const rateLimitCountdown =
+    activeRateLimitUntil && activeRateLimitUntil > now
+      ? Math.ceil((activeRateLimitUntil - now) / 1000)
+      : null
+
+  // Only models served by a provider the user has a key for are usable.
+  const availableModels = models.filter((m) =>
+    m.providers?.some((p) => configuredProviders.includes(p)),
+  )
+
+  function refreshKeys() {
+    getKeys()
+      .then(setConfiguredProviders)
+      .catch((err) => console.error('Failed to fetch configured providers:', err))
+  }
 
   // Sync theme to document element
   useEffect(() => {
@@ -111,6 +138,26 @@ function AppContent() {
     }
   }, [userBubbleColor, aiBubbleColor])
 
+  // Tick once a second while any conversation is rate-limited so the countdown
+  // updates and expired entries get pruned. Idle (no locks) → no interval.
+  useEffect(() => {
+    if (Object.keys(rateLimitUntil).length === 0) return
+    const interval = setInterval(() => {
+      const t = Date.now()
+      setNow(t)
+      setRateLimitUntil((prev) => {
+        const next: Record<string, number> = {}
+        let changed = false
+        for (const [cid, until] of Object.entries(prev)) {
+          if (until > t) next[cid] = until
+          else changed = true
+        }
+        return changed ? next : prev
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [rateLimitUntil])
+
   // 1. Initialise on mount
   useEffect(() => {
     healthCheck()
@@ -135,6 +182,9 @@ function AppContent() {
         }
       })
       .catch((err) => console.error('Failed to fetch registry models:', err))
+
+    // Which providers the user has keys for — drives the model picker filter.
+    refreshKeys()
     // Conversation list + active selection are bootstrapped by useConversationStore.
   }, [])
 
@@ -148,6 +198,16 @@ function AppContent() {
     setAttachedDoc(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConvId])
+
+  // Keep the active selection and the default model usable: if the current pick
+  // isn't served by any configured provider, coerce to the first available model.
+  useEffect(() => {
+    if (availableModels.length === 0) return
+    const ids = availableModels.map((m) => m.model_id)
+    if (!ids.includes(selectedProvider)) setSelectedProvider(availableModels[0].model_id)
+    if (!ids.includes(defaultModel)) handleSaveDefaultModel(availableModels[0].model_id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableModels, selectedProvider, defaultModel])
 
   function handleSaveDisplayName(name: string) {
     setDisplayName(name)
@@ -177,29 +237,25 @@ function AppContent() {
   }
 
   function handleStop() {
-    abortRef.current?.abort()
-    abortRef.current = null
-    const assistantId = streamingIdRef.current
-    const userInfo = lastUserRef.current
-    const convId = streamConvIdRef.current
-    // Undo the in-flight turn in the conversation it was streaming into: drop the
-    // streaming assistant + the user message...
-    if (convId) {
-      setMessagesFor(convId, (prev) =>
-        prev.filter((m) => m.id !== assistantId && m.id !== userInfo?.id),
-      )
-    }
+    // Stop targets whichever conversation is currently being viewed.
+    const convId = activeConvId
+    if (!convId) return
+    const stream = streamsRef.current.get(convId)
+    if (!stream) return
+    stream.controller.abort()
+    // Undo the in-flight turn: drop the streaming assistant + the user message...
+    setMessagesFor(convId, (prev) =>
+      prev.filter((m) => m.id !== stream.assistantId && m.id !== stream.userMsgId),
+    )
     // ...and put the user's text back in the box so they can edit/resend.
-    if (userInfo) setDraft(userInfo.content)
-    setIsStreaming(false)
-    streamingIdRef.current = null
-    lastUserRef.current = null
-    streamConvIdRef.current = null
-    setStreaming(null)
+    setDraft(stream.userContent)
+    setStreaming(convId, false)
+    streamsRef.current.delete(convId)
   }
 
   async function handleSend(content: string) {
-    if (isStreaming || isUploading) return
+    // Block only a second send into the conversation already streaming, not globally.
+    if ((activeConvId && streamingConvIds.has(activeConvId)) || isUploading) return
 
     // Capture the target conversation now (closure) so the streamed turn always
     // lands in this conversation even if the user switches away mid-stream. If
@@ -208,16 +264,19 @@ function AppContent() {
     // If this is the unsaved draft, materialize it now (adds the sidebar row;
     // the chat route lazy-creates it on Drive). No-op for already-real convs.
     promoteDraft(convId)
-    streamConvIdRef.current = convId
 
     const userMsg: Message = { id: mid(), role: 'user', content }
     const assistantId = mid()
-    streamingIdRef.current = assistantId
-    lastUserRef.current = { id: userMsg.id, content }
-    setStreaming(convId)
 
     const controller = new AbortController()
-    abortRef.current = controller
+    // Register this stream so concurrent chats each track their own state.
+    streamsRef.current.set(convId, {
+      assistantId,
+      controller,
+      userMsgId: userMsg.id,
+      userContent: content,
+    })
+    setStreaming(convId, true)
 
     // History to send = this conversation's current messages + the new user turn.
     const history = [...messages, userMsg]
@@ -232,21 +291,16 @@ function AppContent() {
       userMsg,
       { id: assistantId, role: 'assistant', content: '' },
     ])
-    setIsStreaming(true)
 
     await streamChat(
       history,
       {
         onRateLimit: (retryAfter) => {
-          setIsStreaming(false)
-          streamingIdRef.current = null
-          setRateLimitCountdown(retryAfter)
-          const interval = setInterval(() => {
-            setRateLimitCountdown((prev) => {
-              if (prev === null || prev <= 1) { clearInterval(interval); return null }
-              return prev - 1
-            })
-          }, 1000)
+          setStreaming(convId, false)
+          streamsRef.current.delete(convId)
+          const until = Date.now() + retryAfter * 1000
+          setNow(Date.now())
+          setRateLimitUntil((prev) => ({ ...prev, [convId]: until }))
         },
         onToken: (delta) => {
           setMessagesFor(convId, (prev) =>
@@ -261,12 +315,8 @@ function AppContent() {
               m.id === assistantId ? { ...m, viaProvider } : m,
             ),
           )
-          setIsStreaming(false)
-          streamingIdRef.current = null
-          abortRef.current = null
-          lastUserRef.current = null
-          streamConvIdRef.current = null
-          setStreaming(null)
+          setStreaming(convId, false)
+          streamsRef.current.delete(convId)
           // Update list meta locally (count/order) instead of a disruptive full
           // refetch, then quietly merge the server's auto-generated title.
           bumpAfterTurn(convId)
@@ -280,10 +330,8 @@ function AppContent() {
                 : m,
             ),
           )
-          setIsStreaming(false)
-          streamingIdRef.current = null
-          streamConvIdRef.current = null
-          setStreaming(null)
+          setStreaming(convId, false)
+          streamsRef.current.delete(convId)
         },
         onStep: (label, detail) => {
           setMessagesFor(convId, (prev) =>
@@ -422,9 +470,10 @@ function AppContent() {
           isDark={isDark}
           displayName={displayName}
           onSaveDisplayName={handleSaveDisplayName}
-          models={models}
+          models={availableModels}
           defaultModel={defaultModel}
           onSaveDefaultModel={handleSaveDefaultModel}
+          onKeysChanged={refreshKeys}
           userBubbleColor={userBubbleColor}
           onChangeUserBubble={handleChangeUserBubble}
           aiBubbleColor={aiBubbleColor}
@@ -486,7 +535,7 @@ function AppContent() {
             </div>
           </header>
 
-          <ChatWindow messages={messages} isStreaming={isStreaming} />
+          <ChatWindow messages={messages} isStreaming={isActiveStreaming} />
 
           {/* Radial glow behind greeting — only when no messages */}
           {messages.length === 0 && (
@@ -525,7 +574,7 @@ function AppContent() {
                       <button
                         type="button"
                         onClick={() => setAttachedDoc(null)}
-                        disabled={isStreaming}
+                        disabled={isActiveStreaming}
                         className="ml-1 text-theme-text-muted hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
                         title="Remove attachment"
                       >
@@ -543,17 +592,29 @@ function AppContent() {
                       Rate limited — retrying in {rateLimitCountdown}s
                     </div>
                   )}
+                  {models.length > 0 && availableModels.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-medium hover:opacity-90 transition-opacity text-left"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+                      </svg>
+                      No provider keys yet — add one in Settings to choose a model.
+                    </button>
+                  )}
                   <MessageInput
                     value={draft}
                     onChange={setDraft}
                     onSend={handleSend}
                     onStop={handleStop}
-                    disabled={isStreaming || rateLimitCountdown !== null}
+                    disabled={isActiveStreaming || rateLimitCountdown !== null}
                     onUpload={handleUpload}
                     isUploading={isUploading}
                     selectedProvider={selectedProvider}
                     onChangeProvider={setSelectedProvider}
-                    models={models}
+                    models={availableModels}
                   />
                 </div>
               </div>
@@ -573,7 +634,7 @@ function AppContent() {
                   <button
                     type="button"
                     onClick={() => setAttachedDoc(null)}
-                    disabled={isStreaming}
+                    disabled={isActiveStreaming}
                     className="ml-1 text-theme-text-muted hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
                     title="Remove attachment"
                   >
@@ -597,12 +658,12 @@ function AppContent() {
                 onChange={setDraft}
                 onSend={handleSend}
                 onStop={handleStop}
-                disabled={isStreaming || rateLimitCountdown !== null}
+                disabled={isActiveStreaming || rateLimitCountdown !== null}
                 onUpload={handleUpload}
                 isUploading={isUploading}
                 selectedProvider={selectedProvider}
                 onChangeProvider={setSelectedProvider}
-                models={models}
+                models={availableModels}
               />
             </div>
           </div>

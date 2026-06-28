@@ -29,6 +29,8 @@ from googleapiclient.discovery import Resource, build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
+from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+
 # Hard socket timeout (seconds) for every Drive HTTP round-trip. Without this,
 # a stalled connection hangs the calling thread indefinitely ("no replies").
 _DRIVE_TIMEOUT = 20
@@ -73,10 +75,16 @@ class DriveStorage:
             except ValueError:
                 pass
 
+        # client_id/client_secret are REQUIRED for google-auth to refresh an
+        # expired access token — without them the refresh raises RefreshError
+        # ("credentials do not contain the necessary fields") and every Drive
+        # call fails once the initial token expires (~1h after linking).
         self._creds = Credentials(
             token=access_token,
             refresh_token=refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
             expiry=expiry,
         )
         self._lock = threading.RLock()

@@ -11,7 +11,7 @@ const PROVIDERS: { id: string; label: string; hint: string }[] = [
   { id: 'openrouter',  label: 'OpenRouter',      hint: 'openrouter.ai/keys' },
 ]
 
-export default function ApiKeysSection() {
+export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () => void }) {
   const [configured, setConfigured] = useState<string[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
@@ -36,6 +36,7 @@ export default function ApiKeysSection() {
       await apiSetKey(provider, value)
       setDrafts((d) => ({ ...d, [provider]: '' }))
       await refresh()
+      onKeysChanged?.()
     } catch {
       setError(`Failed to save ${provider} key.`)
     } finally {
@@ -49,6 +50,7 @@ export default function ApiKeysSection() {
     try {
       await apiDeleteKey(provider)
       await refresh()
+      onKeysChanged?.()
     } catch {
       setError(`Failed to delete ${provider} key.`)
     } finally {

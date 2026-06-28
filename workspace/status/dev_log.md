@@ -327,3 +327,25 @@ This becomes your interview script and project history.
 **Tests:** No backend change (lazy-create already covered). Frontend `npm run build` clean.
 **Commit:** (uncommitted — working tree changes on dev branch)
 **Next (manual verify):** New Chat → no network request, no sidebar row, welcome page; spam → one draft; first message → row + one `POST /chat` lazy-create; reload → row+messages persist.
+
+### 2026-06-28 — Per-conversation streaming (concurrent chats)
+
+**Built:** "Is generating" and the rate-limit cooldown were global single values, so sending in one chat blocked sending in every other chat while it streamed. Made both per-conversation. Store: `streamingConvIdRef` (single) → `streamingConvIds: Set<string>` state + ref; `setStreaming(convId, on)` add/removes; `selectConversation` refetch-skip guard uses `.has(id)`. App: removed the global `isStreaming` and the four singleton stream refs (`abortRef`/`streamingIdRef`/`lastUserRef`/`streamConvIdRef`), replaced with one `streamsRef: Map<convId, {assistantId, controller, userMsgId, userContent}>`. Composer/ChatWindow now gate on `isActiveStreaming` (active conv only). Rate limit moved from one `rateLimitCountdown` to `rateLimitUntil: Record<convId, epochMs>` with a single 1s ticker; the active conv's remaining time is derived.
+**Decisions:** `handleStop` targets the conversation currently being viewed (each has its own AbortController). Send is blocked only for the conv already streaming, not globally. `isUploading` stays global (active-conv attachment action). Per-conversation drafts remain out of scope — `draft` is still one shared input for the active conv.
+**Tests:** No backend change. Frontend `npm run build` clean (tsc + vite).
+**Commit:** (uncommitted — working tree changes on dev branch)
+**Next (manual verify):** Open chat A, send long prompt; while streaming switch to B and send → both stream; switching back to A still shows live tokens + Stop; Stop restores A's text; rate-limit A → only A's composer shows countdown, B sendable; second send into a streaming chat still blocked.
+
+### 2026-06-28 — Key-aware model selection + cross-model rate-limit failover
+
+**Built:** Fixed two BYOK issues: (1) selecting a Google model still errored "No API key configured for cerebras", and (2) no fallback when a provider was rate-limited.
+- **Root cause of cerebras error:** when the user's Gemini endpoint got rate-limited, the agent's `pick_model_by_capability("fast")` (graph.py) fell through to the next available fast model — GLM 4.7 (Cerebras) — because it only checked `active`+`can_use`, never whether the user had a key. `normalize.chat_stream → resolver.pick(user_id)` then rejected it.
+- **resolver.py:** `pick_model_by_capability`/`pick_by_capability` now take `user_id` and only consider models with ≥1 endpoint the user holds a key for (new `_has_usable_endpoint`). Added `usable_user_models(user_id)` and `fallback_models(model_id, user_id)` (requested model first, then other usable models, same capability_level first).
+- **normalize.py:** extracted `_stream_one_model` (per-endpoint failover, unchanged) and rewrote `chat_stream` to iterate `fallback_models` — on rate-limit/no-endpoint *before the first token*, it switches to another usable model (new `on_model_switch` callback); mid-stream errors still propagate (can't restart a partial reply).
+- **graph.py:** agent/ask_model nodes pass `user_id` and fall back to `state["user_model_id"]` on `NoEndpointError`; all three model-calling nodes pass `on_model_switch` (reuses the existing "Failing over" provider_switch notice). `DummyResolver` updated.
+- **Frontend:** `App.tsx` fetches the user's configured providers via `getKeys()` and derives `availableModels` (models served by ≥1 keyed provider); the composer picker + Settings default-model list now show only usable models. Selection/default coerce to a usable model when the current pick isn't available. Empty-state hint links to Settings. Key add/remove triggers `onKeysChanged` → re-fetch so the picker updates without reload.
+
+**Decisions:** `/registry/models` stays the global catalogue; per-user filtering is a frontend view concern. Cross-model fallback only triggers before the first token. "grok" = Groq (no separate xAI provider).
+**Tests:** Backend 66 passed (added `test_resolver.py`, `test_normalize_fallback.py`). Frontend `npm run build` clean. Backend + frontend images rebuilt and running (8001/5174 healthy).
+**Commit:** (uncommitted — working tree changes on dev branch)
+**Note:** Earlier `drive.py` client_id/secret fix was baked into the image with this rebuild (the dev `watch` sync wasn't running, so prior `restart` hadn't picked it up).

@@ -46,6 +46,7 @@ export interface ConversationStore {
   pendingIds: Set<string>
   syncError: string | null
   draftConvId: string | null
+  streamingConvIds: Set<string>
   selectConversation: (id: string) => void
   createConversation: () => string
   promoteDraft: (id: string) => void
@@ -53,7 +54,7 @@ export interface ConversationStore {
   renameConversation: (id: string, title: string) => void
   setMessagesFor: (convId: string, updater: (prev: Message[]) => Message[]) => void
   bumpAfterTurn: (convId: string) => void
-  setStreaming: (convId: string | null) => void
+  setStreaming: (convId: string, on: boolean) => void
   quietTitleRefresh: () => void
 }
 
@@ -84,6 +85,9 @@ export function useConversationStore(
   const [draftConvId, setDraftConvId] = useState<string | null>(null)
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
   const [syncError, setSyncError] = useState<string | null>(null)
+  // Which conversations are currently generating. Per-conversation so multiple
+  // chats can stream concurrently; the composer only locks the active one.
+  const [streamingConvIds, setStreamingConvIds] = useState<Set<string>>(new Set())
 
   // Refs mirror state for stale-free reads inside callbacks.
   const conversationsRef = useRef(conversations)
@@ -92,7 +96,7 @@ export function useConversationStore(
   const draftConvIdRef = useRef(draftConvId)
   const defaultModelRef = useRef(defaultModel)
   const lruRef = useRef<string[]>(hydrated.current.lru)
-  const streamingConvIdRef = useRef<string | null>(null)
+  const streamingConvIdsRef = useRef<Set<string>>(streamingConvIds)
   const fetchSeqRef = useRef(0)
   const syncRef = useRef<SyncQueue | null>(null)
   const titleTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -160,7 +164,7 @@ export function useConversationStore(
       // another device). A known conv (even empty []) is trusted from cache so a
       // slow/eventually-consistent Drive read can never clobber on-screen messages.
       const haveCached = messagesByConvRef.current[id] !== undefined
-      if (!haveCached && streamingConvIdRef.current !== id) {
+      if (!haveCached && !streamingConvIdsRef.current.has(id)) {
         void backgroundLoadDetail(id, seq)
       }
     },
@@ -258,8 +262,14 @@ export function useConversationStore(
     })
   }, [])
 
-  const setStreaming = useCallback((convId: string | null) => {
-    streamingConvIdRef.current = convId
+  const setStreaming = useCallback((convId: string, on: boolean) => {
+    setStreamingConvIds((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(convId)
+      else next.delete(convId)
+      streamingConvIdsRef.current = next
+      return next
+    })
   }, [])
 
   // ── Sync queue lifecycle + mount bootstrap ──────────────────────────────────
@@ -306,6 +316,7 @@ export function useConversationStore(
     pendingIds,
     syncError,
     draftConvId,
+    streamingConvIds,
     selectConversation,
     createConversation,
     promoteDraft,

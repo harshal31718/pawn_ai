@@ -9,6 +9,7 @@ from app.agent.parser import parse_action
 from app.core import normalize
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
+from app.exceptions import NoEndpointError
 
 class DummyRateLimiter:
     def can_use(self, endpoint) -> bool: return True
@@ -20,10 +21,12 @@ class DummyRateLimiter:
 class DummyResolver:
     def pick(self, model_id, user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
-    def pick_by_capability(self, level, visibility="internal"):
+    def pick_by_capability(self, level, visibility="internal", user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
-    def pick_model_by_capability(self, level, visibility="internal"):
+    def pick_model_by_capability(self, level, visibility="internal", user_id=None):
         return "gemini-2.5-flash"
+    def fallback_models(self, model_id, user_id=None):
+        return [model_id]
 
 class AgentState(TypedDict):
     conversation_id: str
@@ -182,12 +185,21 @@ async def agent_node(
     )
     
     await adispatch_custom_event("step", {"label": "Thinking", "detail": f"step {step_count + 1}"})
-    
-    model_id = resolver.pick_model_by_capability("fast")
-    
+
+    user_id = state.get("user_id")
+    # Pick a fast model the user actually has a key for; fall back to their selected
+    # model if no keyed fast model exists.
+    try:
+        model_id = resolver.pick_model_by_capability("fast", user_id=user_id)
+    except NoEndpointError:
+        model_id = state["user_model_id"]
+
     async def on_switch(from_p, to_p):
         await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
-        
+
+    async def on_model_switch(from_m, to_m):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+
     response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
@@ -195,7 +207,8 @@ async def agent_node(
         resolver=resolver,
         rate_limiter=rate_limiter,
         on_provider_switch=on_switch,
-        user_id=state.get("user_id"),
+        user_id=user_id,
+        on_model_switch=on_model_switch,
     ):
         response += token
 
@@ -247,18 +260,25 @@ async def ask_model_node(
 
     from app.agent.routing import PURPOSE_TO_LEVEL
     level = PURPOSE_TO_LEVEL.get(purpose, "balanced")
-    model_id = resolver.pick_model_by_capability(level)
+    # Pick a model at this tier the user has a key for; fall back to their selection.
+    try:
+        model_id = resolver.pick_model_by_capability(level, user_id=user_id)
+    except NoEndpointError:
+        model_id = state["user_model_id"]
 
     candidates = resolver.pick(model_id, user_id=user_id)
     active_provider = candidates[0][4] if candidates else "unknown"
     active_provider_model = candidates[0][1] if candidates else "unknown"
-    
+
     await adispatch_custom_event("model_call", {"model": f"{active_provider}:{active_provider_model}", "purpose": purpose})
     await adispatch_custom_event("step", {"label": "Drafting" if purpose == "draft" else "Critiquing", "detail": purpose})
-    
+
     async def on_switch(from_p, to_p):
         await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
-        
+
+    async def on_model_switch(from_m, to_m):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+
     response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
@@ -267,6 +287,7 @@ async def ask_model_node(
         rate_limiter=rate_limiter,
         on_provider_switch=on_switch,
         user_id=user_id,
+        on_model_switch=on_model_switch,
     ):
         response += token
 
@@ -300,11 +321,15 @@ async def final_node(
     initial_provider = candidates[0][4] if candidates else "unknown"
     
     await adispatch_custom_event("final_provider", {"provider": initial_provider})
-    
+
     async def on_switch(from_p, to_p):
         await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
         await adispatch_custom_event("final_provider", {"provider": to_p})
-        
+
+    async def on_model_switch(from_m, to_m):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+        await adispatch_custom_event("final_provider", {"provider": to_m})
+
     full_response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
@@ -313,6 +338,7 @@ async def final_node(
         rate_limiter=rate_limiter,
         on_provider_switch=on_switch,
         user_id=user_id,
+        on_model_switch=on_model_switch,
     ):
         full_response += token
         await adispatch_custom_event("token", {"delta": token})

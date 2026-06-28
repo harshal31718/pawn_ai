@@ -27,6 +27,7 @@ interface Props {
   models: RegistryModel[]
   defaultModel: string
   onSaveDefaultModel: (id: string) => void
+  onKeysChanged?: () => void
   userBubbleColor: string
   onChangeUserBubble: (id: string) => void
   aiBubbleColor: string
@@ -70,7 +71,7 @@ const EXTRAS_ITEMS = [
 export default function SettingsPage({
   onClose, theme, onChangeTheme, isDark,
   displayName, onSaveDisplayName,
-  models, defaultModel, onSaveDefaultModel,
+  models, defaultModel, onSaveDefaultModel, onKeysChanged,
   userBubbleColor, onChangeUserBubble,
   aiBubbleColor, onChangeAiBubble,
   backgroundEffect, onToggleBackgroundEffect,
@@ -291,7 +292,7 @@ export default function SettingsPage({
           </section>
 
           {/* ── API Keys (BYOK) ── */}
-          <ApiKeysSection />
+          <ApiKeysSection onKeysChanged={onKeysChanged} />
 
           {/* ── Chat Defaults ── */}
           <section>
