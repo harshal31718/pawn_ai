@@ -17,6 +17,101 @@ export async function healthCheck(): Promise<{ status: string }> {
 }
 
 /**
+ * Milestone A.0 — Kaggle round-trip proof. Sends an integer to the backend,
+ * which runs the `findCube` kernel on the user's Kaggle account and returns the
+ * cube. Proves the deploy→push→poll→output transport before any image model.
+ * Throws on failure (caller renders the message verbatim).
+ */
+export interface CubeResult {
+  input: number
+  result: number
+  via?: string
+}
+
+/** Status of the user's Kaggle config — shape only, never the token. */
+export interface KaggleConfigStatus {
+  has_creds: boolean
+  kernels?: Record<string, boolean>
+}
+
+function handle401(res: Response): boolean {
+  if (res.status === 401) {
+    localStorage.removeItem('pawn-token')
+    localStorage.removeItem('pawn-user')
+    window.location.reload()
+    return true
+  }
+  return false
+}
+
+async function errorDetail(res: Response): Promise<string> {
+  let detail = `Request failed: ${res.status}`
+  try {
+    const body = await res.json()
+    if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+  } catch {
+    /* non-JSON error body — keep the status message */
+  }
+  return detail
+}
+
+/** Read whether the user has Kaggle creds saved (no secret values returned). */
+export async function getKaggleConfig(): Promise<KaggleConfigStatus> {
+  const res = await fetch(`${BASE_URL}/keys/kaggle`, { headers: { ...authHeaders() } })
+  if (handle401(res)) throw new Error('Session expired')
+  if (res.status === 404) return { has_creds: false }
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+/** Save the user's Kaggle username + API token (token is write-only). */
+export async function setKaggleConfig(cfg: { username: string; api_token: string }): Promise<void> {
+  const res = await fetch(`${BASE_URL}/keys/kaggle`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+/** Remove the user's Kaggle creds. */
+export async function deleteKaggleConfig(): Promise<void> {
+  const res = await fetch(`${BASE_URL}/keys/kaggle`, { method: 'DELETE', headers: { ...authHeaders() } })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok && res.status !== 404) throw new Error(await errorDetail(res))
+}
+
+export async function runKaggleCube(input: number, signal?: AbortSignal): Promise<CubeResult> {
+  const res = await fetch(`${BASE_URL}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ input, modality: 'cube' }),
+    signal,
+  })
+
+  if (res.status === 401) {
+    localStorage.removeItem('pawn-token')
+    localStorage.removeItem('pawn-user')
+    window.location.reload()
+    throw new Error('Session expired')
+  }
+
+  if (!res.ok) {
+    let detail = `Request failed: ${res.status}`
+    try {
+      const body = await res.json()
+      if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+    } catch {
+      /* non-JSON error body — keep the status message */
+    }
+    throw new Error(detail)
+  }
+
+  return res.json()
+}
+
+/**
  * Typed SSE event callbacks.
  */
 export interface StreamChatCallbacks {

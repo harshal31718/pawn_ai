@@ -9,6 +9,7 @@ All reads are exception-safe: get_key()/list_providers() return None/[] if
 Supabase is unavailable, so the resolver can fall back to shared Docker secrets.
 """
 
+import json
 import sys
 import threading
 import time
@@ -133,3 +134,52 @@ def delete_key(user_id: str, provider: str) -> None:
         "provider", provider
     ).execute()
     _evict(user_id, provider)
+
+
+# --- Kaggle config (dict payload) -------------------------------------------
+# Unlike LLM providers (single string key), Kaggle needs a structured payload
+# (username + api_token + managed kernel slugs). It is JSON-encoded, encrypted
+# with the same AES-GCM path, and stored in the same `user_api_keys` table under
+# provider="kaggle". Not cached (read once per slow generation — caching adds no
+# value and would pollute the str-typed key cache).
+
+_KAGGLE_PROVIDER = "kaggle"
+
+
+def set_kaggle(user_id: str, config: dict) -> None:
+    """Encrypt and upsert the user's Kaggle config dict."""
+    db = get_db()
+    db.table("user_api_keys").upsert(
+        {
+            "user_id": user_id,
+            "provider": _KAGGLE_PROVIDER,
+            "key_enc": encrypt(json.dumps(config)),
+        }
+    ).execute()
+
+
+def get_kaggle(user_id: str) -> Optional[dict]:
+    """Fetch and decrypt the user's Kaggle config dict, or None if absent."""
+    try:
+        db = get_db()
+        result = (
+            db.table("user_api_keys")
+            .select("key_enc")
+            .eq("user_id", user_id)
+            .eq("provider", _KAGGLE_PROVIDER)
+            .single()
+            .execute()
+        )
+        if not result.data:
+            return None
+        return json.loads(decrypt(result.data["key_enc"]))
+    except Exception:
+        return None
+
+
+def delete_kaggle(user_id: str) -> None:
+    """Delete the user's Kaggle config."""
+    db = get_db()
+    db.table("user_api_keys").delete().eq("user_id", user_id).eq(
+        "provider", _KAGGLE_PROVIDER
+    ).execute()

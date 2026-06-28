@@ -4,6 +4,7 @@ import ChatWindow from './components/ChatWindow'
 import MessageInput from './components/MessageInput'
 import Sidebar from './components/Sidebar'
 import SettingsPage from './components/SettingsPage'
+import ImageLabPage from './components/ImageLabPage'
 import InteractiveGridBackground from './components/InteractiveGridBackground'
 import LoginPage from './pages/LoginPage'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
@@ -42,6 +43,8 @@ function AppContent() {
     return 'system'
   })
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  // Milestone A.0 — throwaway Kaggle/Image Lab view (swaps in place of chat, like Settings).
+  const [isImageLabOpen, setIsImageLabOpen] = useState(false)
   const [displayName, setDisplayName] = useState(() => user?.name || localStorage.getItem('pawn-display-name') || 'User')
   const [defaultModel, setDefaultModel] = useState(() => localStorage.getItem('pawn-default-model') || 'gemini-2.5-flash')
   const [userBubbleColor, setUserBubbleColor] = useState(() => localStorage.getItem('pawn-user-bubble') || '')
@@ -451,14 +454,15 @@ function AppContent() {
         activeId={activeConvId}
         pendingIds={pendingIds}
         syncError={syncError}
-        onSelect={(id) => { selectConversation(id); setIsSettingsOpen(false) }}
-        onCreate={() => { createConversation(); setIsSettingsOpen(false) }}
+        onSelect={(id) => { selectConversation(id); setIsSettingsOpen(false); setIsImageLabOpen(false) }}
+        onCreate={() => { createConversation(); setIsSettingsOpen(false); setIsImageLabOpen(false) }}
         onDelete={deleteConversation}
         onRename={renameConversation}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onOpen={() => setIsSidebarOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen((v) => !v)}
+        onOpenSettings={() => { setIsSettingsOpen((v) => !v); setIsImageLabOpen(false) }}
+        onOpenImageLab={() => { setIsImageLabOpen(true); setIsSettingsOpen(false) }}
         displayName={displayName}
         email={user?.email || ''}
       />
@@ -484,6 +488,8 @@ function AppContent() {
           email={user?.email || ''}
           onLogout={logout}
         />
+      ) : isImageLabOpen ? (
+        <ImageLabPage onClose={() => setIsImageLabOpen(false)} />
       ) : (
         <div className="flex-1 flex flex-col h-full overflow-hidden relative">
           {backgroundEffect && <InteractiveGridBackground darkMode={isDark} />}
