@@ -109,9 +109,14 @@ async def generate_artifact(req: GenerateRequest, request: Request):
         # Non-blocking: create a durable job row (de-duped per user+model) and run
         # the slow Kaggle round-trip as a fire-and-forget background task, returning
         # the job id immediately. Unknown model → UnknownModelError (400) here.
-        job_id, created = await run_in_threadpool(
-            image_session.create_cold_job, user_id, req.model, req.prompt.strip()
-        )
+        # RuntimeError → 400: raised when a live warm session already exists for this
+        # model (cold job would waste a GPU slot alongside the running warm kernel).
+        try:
+            job_id, created = await run_in_threadpool(
+                image_session.create_cold_job, user_id, req.model, req.prompt.strip()
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         if created:
             _spawn_bg(_run_cold_job_bg(user_id, req.model, job_id))
         return {"job_id": job_id, "status": "queued"}

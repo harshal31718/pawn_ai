@@ -13,11 +13,11 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch) — **CODE COMPLETE (W.0–W.3)**
-**Active step:** Live-verify warm SDXL + FLUX sessions, then merge imageLab → dev. Before multi-user: scoped per-session JWT (deferred).
-**Last completed:** W.3 (imageLab) — real SDXL warm serve-loop (warm sessions generate images, not echo); 134 backend tests green
+**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch)
+**Active step:** W.4 — Session startup observability (next to implement)
+**Last completed:** W.3 (imageLab) — real SDXL warm serve-loop; 134 backend tests green. Live-verified: SDXL warm session generates images; FLUX warm session generates images (confirmed via Generations panel). Issues found: false "Session ended" (heartbeat stale), GPU slot exhaustion, no startup phase visibility.
 **Branch:** imageLab (merges → dev)
-**Plan:** `workspace/plan/plan_v5_warm_session.md`
+**Plan:** `workspace/plan/plan_v7_image_lab_fixes.md` (W.4/W.5/W.6)
 
 > Phase MU (below) is code-complete on dev/main and live-verified (OAuth + Drive + BYOK).
 > imageLab Milestones A.0/A.1 are tracked in `workspace/plan/plan_v4_kaggle_image.md`.
@@ -323,6 +323,28 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
   invariant test. No frontend change (already MIME-aware). 134 backend tests green; anon-key-only
   injection still verified for sdxl. **Live verify pending:** SDXL → Start warm session → `Warm` in
   ~1–2 min → Generate returns an image in seconds.
+
+---
+
+- [ ] **W.4 — Session startup observability** *(plan_v7)*
+  Notebooks patch `installing` → `loading_model` → `ready` at phase boundaries.
+  `_LIVE_STATUSES` extended with the two new statuses. `SessionBar` shows
+  phase-specific messages ("Waiting for GPU…" / "Installing…" / "Loading model…").
+  No schema changes. Demo: SessionBar cycles through all phases during FLUX warm-up.
+
+- [ ] **W.5 — Independent per-model panels** *(plan_v7)*
+  Remove tab switcher from `ImageLabPage`. Render all models simultaneously as
+  stacked `ModelPanel` components — each owns its own jobs poll (model-filtered),
+  `SessionBar`, `ImageGenerator`, and `GenerationsPanel`. No cross-model job mixing.
+  Demo: SDXL generate → only SDXL panel updates; FLUX panel unaffected.
+
+- [ ] **W.6 — Session liveness + cold-vs-warm routing fixes** *(plan_v7)*
+  `IMAGE_SESSION_HEARTBEAT_STALE_SECONDS`: 30 → 90 (fixes false "Session ended"
+  during FLUX warm generation). `create_cold_job` guards against warm session
+  already live (prevents GPU slot waste). Kaggle GPU limit error surfaced as
+  clear, actionable message. `SessionBar` confirms before re-Start if session
+  exists. Demo: warm FLUX session stays "Warm ●" throughout generation; cold
+  Generate blocked while session is live; GPU limit error is human-readable.
 
 ---
 

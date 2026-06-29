@@ -94,31 +94,22 @@ export default function ImageLabPage({ onClose }: Props) {
 
   const [hasCreds, setHasCreds] = useState(false)
   const [activeModelId, setActiveModelId] = useState(MODELS[0].id)
-  // Deploy state is tracked per model so each tab remembers its own status, and
-  // persisted so a one-time deploy keeps Generate clickable across reloads.
   const [connected, setConnected] = useState<Record<string, boolean>>(loadDeployed)
 
-  // Shared, server-backed jobs list (all models) — the single source of truth for
-  // the Generations monitor AND for server-derived button state (a model with an
-  // active job can't be re-submitted, and this survives a refresh).
-  const [jobs, setJobs] = useState<JobResult[]>([])
-  const refreshJobs = useCallback(async () => {
+  // Shared jobs list across all models for the unified Generations history.
+  const [allJobs, setAllJobs] = useState<JobResult[]>([])
+  const refreshAllJobs = useCallback(async () => {
     try {
-      setJobs(await listJobs(undefined, 30))
-    } catch {
-      /* transient — keep the last list */
-    }
+      setAllJobs(await listJobs(undefined, 30))
+    } catch { /* keep last */ }
   }, [])
 
   useEffect(() => {
     if (!hasCreds) return
-    refreshJobs()
-    const id = setInterval(refreshJobs, IMAGE_JOB_POLL_INTERVAL_MS)
+    refreshAllJobs()
+    const id = setInterval(refreshAllJobs, IMAGE_JOB_POLL_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [hasCreds, refreshJobs])
-
-  const activeModel = MODELS.find((m) => m.id === activeModelId) ?? MODELS[0]
-  const isConnected = !!connected[activeModel.id]
+  }, [hasCreds, refreshAllJobs])
 
   function markConnected(id: string, value: boolean) {
     setConnected((prev) => {
@@ -150,20 +141,22 @@ export default function ImageLabPage({ onClose }: Props) {
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto pt-20 px-6 pb-10">
         <div className="max-w-md mx-auto space-y-5 py-4">
+
+          {/* 1. Kaggle credentials bar */}
           <KaggleCredentials onChange={setHasCreds} />
 
           {hasCreds && (
             <>
-              {/* Horizontal model bar — each title is a button for its panel */}
-              <div className="flex items-center gap-1.5 overflow-x-auto -mx-1 px-1 pb-0.5">
+              {/* 2. Model switch tabs */}
+              <div className="flex items-center gap-1.5">
                 {MODELS.map((m) => {
-                  const active = m.id === activeModel.id
+                  const active = m.id === activeModelId
                   return (
                     <button
                       key={m.id}
                       type="button"
                       onClick={() => setActiveModelId(m.id)}
-                      className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer border ${
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer border ${
                         active
                           ? 'bg-theme-brand text-theme-brand-text border-transparent shadow-sm'
                           : 'bg-theme-surface text-theme-text-muted border-theme-border/60 hover:text-theme-text hover:bg-theme-surface-hover'
@@ -178,25 +171,23 @@ export default function ImageLabPage({ onClose }: Props) {
                 })}
               </div>
 
-              {/* Active model panel — deploy + generate. Keyed by model id so each
-                  model gets its OWN component instance: a running generate on one
-                  model can't leak its busy state into another and disable it. */}
-              <div className="space-y-5">
-                <KaggleConnector
-                  key={`connect-${activeModel.id}`}
-                  model={activeModel}
-                  isConnected={isConnected}
-                  onConnected={() => markConnected(activeModel.id, true)}
-                />
-                <ImageGenerator
-                  key={`gen-${activeModel.id}`}
-                  model={activeModel}
-                  isConnected={isConnected}
-                  jobs={jobs}
-                  onSubmitted={refreshJobs}
-                />
-                <GenerationsPanel jobs={jobs} />
-              </div>
+              {/* Model panels — ALL rendered but only active one is visible.
+                  Hidden panels stay mounted so SessionBar countdown + poll timers
+                  survive tab switches without resetting. */}
+              {MODELS.map((m) => (
+                <div key={m.id} style={{ display: m.id === activeModelId ? undefined : 'none' }}>
+                  <ModelPanel
+                    model={m}
+                    isConnected={!!connected[m.id]}
+                    onConnected={() => markConnected(m.id, true)}
+                    jobs={allJobs.filter((j) => j.model === m.id)}
+                    onSubmitted={refreshAllJobs}
+                  />
+                </div>
+              ))}
+
+              {/* 3. Unified Generations history — all models */}
+              <GenerationsPanel jobs={allJobs} />
             </>
           )}
         </div>
@@ -204,6 +195,33 @@ export default function ImageLabPage({ onClose }: Props) {
     </div>
   )
 }
+
+function ModelPanel({
+  model,
+  isConnected,
+  onConnected,
+  jobs,
+  onSubmitted,
+}: {
+  model: ModelDef
+  isConnected: boolean
+  onConnected: () => void
+  jobs: JobResult[]
+  onSubmitted: () => void
+}) {
+  return (
+    <div className="space-y-4">
+      <KaggleConnector model={model} isConnected={isConnected} onConnected={onConnected} />
+      <ImageGenerator
+        model={model}
+        isConnected={isConnected}
+        jobs={jobs}
+        onSubmitted={onSubmitted}
+      />
+    </div>
+  )
+}
+
 
 /** Kaggle credentials setup — compact, collapses to a single row once saved. */
 function KaggleCredentials({ onChange }: { onChange: (hasCreds: boolean) => void }) {
@@ -419,54 +437,85 @@ function ImageGenerator({
   jobs: JobResult[]
   onSubmitted: () => void
 }) {
-  const [prompt, setPrompt] = useState(model.defaultPrompt)
+  const [prompt, setPrompt] = useState('')
   const [session, setSession] = useState<SessionStatus | null>(null)
-  const [watchId, setWatchId] = useState<string | null>(null)
+  // Set of job IDs submitted this session — watched for inline result display.
+  // The server-backed GenerationsPanel is the source of truth; this just drives
+  // the inline "last completed" preview above the panel.
+  const [watchIds, setWatchIds] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
-  const [result, setResult] = useState<JobResult | null>(null)
+  const [latestResult, setLatestResult] = useState<JobResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // Reset generator state when switching models.
+  // Clear local state when model changes (panel stays mounted, model prop changes).
   useEffect(() => {
-    setPrompt(model.defaultPrompt)
-    setResult(null)
+    setPrompt('')
+    setLatestResult(null)
     setError(null)
-    setWatchId(null)
-  }, [model.id, model.defaultPrompt])
+    setWatchIds(new Set())
+  }, [model.id])
 
-  // Poll the job we just submitted so we can render it inline. (After a refresh
-  // this local watch is lost, but the job still shows in the panel — server-backed.)
+  const live = !!session?.alive
+  // A session is "warm-routable" if it exists and has a session_id — even during
+  // warmup phases (installing / loading_model). Jobs queued now will sit in
+  // Supabase and the kernel picks them up the moment it enters its serve loop.
+  const hasSession = !!session?.session_id
+
+  // Poll all submitted job IDs until each resolves; update inline preview with
+  // the most recently completed one. GenerationsPanel handles the full history.
   useEffect(() => {
-    if (!watchId) return
+    if (watchIds.size === 0) return
     let active = true
     const id = setInterval(async () => {
-      try {
-        const job = await getJob(watchId)
-        if (!active) return
-        if (job.status === 'done' || job.status === 'error') {
-          setResult(job)
-          setWatchId(null)
-          onSubmitted()
-        }
-      } catch {
-        /* keep polling */
+      if (!active) return
+      const settled = new Set<string>()
+      await Promise.all(
+        [...watchIds].map(async (jid) => {
+          try {
+            const job = await getJob(jid)
+            if (job.status === 'done') {
+              settled.add(jid)
+              setLatestResult((prev) => (!prev || job.status === 'done') ? job : prev)
+            } else if (job.status === 'error') {
+              // Don't settle immediately if the session is still alive/warming —
+              // the kernel may have been mid-inference when reap ran and will write
+              // 'done' shortly after. Keep polling until the session is confirmed dead.
+              const sessionAlive = !!session && (session.alive || hasSession)
+              if (!sessionAlive) {
+                settled.add(jid)
+                setLatestResult((prev) => prev ?? job)
+              }
+              // If session is still alive, keep polling — kernel may overwrite error→done.
+            }
+          } catch { /* keep polling */ }
+        })
+      )
+      if (settled.size > 0) {
+        setWatchIds((prev) => {
+          const next = new Set(prev)
+          settled.forEach((id) => next.delete(id))
+          return next
+        })
+        onSubmitted()
       }
     }, IMAGE_JOB_POLL_INTERVAL_MS)
     return () => {
       active = false
       clearInterval(id)
     }
-  }, [watchId, onSubmitted])
+  }, [watchIds, onSubmitted, session, hasSession])
 
-  const live = !!session?.alive
-  // Server-derived: an in-flight job for this model (cold or warm) blocks new
-  // submits and survives a refresh. `submitting` closes the local window between
-  // the click and the server response (before activeJob/watchId are known) so a
-  // fast double-click can't fire two runs.
-  const activeJob = jobs.find(
-    (j) => j.model === model.id && (j.status === 'queued' || j.status === 'running'),
+  // Cold path: one Kaggle container per model — block while one is active.
+  // Warm/warmup path: kernel queues jobs; allow unlimited queuing, only block
+  // the button during the actual HTTP submit (prevents true double-clicks).
+  const coldJobActive = !hasSession && jobs.some(
+    (j) => j.status === 'queued' || j.status === 'running',
   )
-  const busy = !!activeJob || !!watchId || submitting
+  const busy = coldJobActive || submitting
+
+  // Jobs waiting to be picked up by the warm kernel.
+  const queuedCount = jobs.filter((j) => j.status === 'queued').length
+  const runningCount = jobs.filter((j) => j.status === 'running').length
 
   async function handleGenerate() {
     if (!prompt.trim()) {
@@ -475,15 +524,15 @@ function ImageGenerator({
     }
     if (busy) return
     setError(null)
-    setResult(null)
     setSubmitting(true)
     try {
       const { job_id } =
-        live && session?.session_id
+        hasSession && session?.session_id
           ? await submitSessionJob(session.session_id, prompt.trim())
           : await runGenerate(model.id, prompt.trim())
-      setWatchId(job_id)
-      onSubmitted() // refresh shared jobs → button stays disabled, panel shows it
+      setWatchIds((prev) => new Set([...prev, job_id]))
+      setPrompt('') // clear immediately so user can type the next prompt
+      onSubmitted()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed')
     } finally {
@@ -491,7 +540,7 @@ function ImageGenerator({
     }
   }
 
-  const resultIsImage = !!result && (result.mime ?? '').startsWith('image/')
+  const resultIsImage = !!latestResult && (latestResult.mime ?? '').startsWith('image/')
 
   return (
     <div className="p-4 rounded-xl border border-theme-border/60 bg-theme-surface space-y-3">
@@ -513,14 +562,26 @@ function ImageGenerator({
           disabled={!isConnected || busy}
           className="w-full py-2.5 rounded-xl text-xs font-semibold bg-theme-brand text-theme-brand-text shadow-sm hover:opacity-90 disabled:opacity-60 cursor-pointer"
         >
-          {busy
-            ? live
-              ? 'Generating (warm)…'
-              : 'Generating (cold ~14 min)…'
+          {submitting
+            ? 'Queuing…'
             : live
-              ? 'Generate (warm · seconds)'
-              : 'Generate once (cold ~14 min)'}
+              ? 'Generate (warm · queue)'
+              : coldJobActive
+                ? 'Generating (cold ~14 min)…'
+                : 'Generate once (cold ~14 min)'}
         </button>
+        {/* Queue status — only shown during warm sessions */}
+        {live && (queuedCount > 0 || runningCount > 0) && (
+          <div className="flex items-center gap-1.5 text-[11px] text-theme-text-muted">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+            {runningCount > 0 && <span>Generating 1 image…</span>}
+            {queuedCount > 0 && (
+              <span className="text-theme-text-muted/70">
+                {runningCount > 0 ? `· ` : ''}{queuedCount} more queued
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {!isConnected && (
@@ -529,47 +590,37 @@ function ImageGenerator({
         </div>
       )}
 
-      {busy && (
-        <div className="flex items-center gap-2 text-xs text-theme-text-muted">
-          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-          <span>
-            {live
-              ? 'Generating on the warm kernel…'
-              : 'Running a fresh Kaggle container (cold start). Track it in Generations below.'}
-          </span>
-        </div>
-      )}
-
-      {result && result.status === 'done' && resultIsImage && result.image_b64 && (
-        <div className="space-y-2">
+      {/* Inline preview of the most recently completed image */}
+      {latestResult && latestResult.status === 'done' && resultIsImage && latestResult.image_b64 && (
+        <div className="space-y-1.5">
+          <div className="text-[10px] font-medium text-theme-text-muted truncate">
+            Latest: {latestResult.prompt}
+          </div>
           <div className="rounded-xl overflow-hidden border border-theme-border/60 bg-theme-bg flex justify-center">
             <img
-              src={`data:${result.mime};base64,${result.image_b64}`}
-              alt={result.prompt ?? prompt}
+              src={`data:${latestResult.mime};base64,${latestResult.image_b64}`}
+              alt={latestResult.prompt ?? ''}
               className="max-w-full h-auto object-contain max-h-[300px]"
             />
           </div>
           <div className="text-[10px] text-theme-text-muted">
-            {result.via ? `via ${result.via}` : 'returned from Kaggle'}
+            {latestResult.via ? `via ${latestResult.via}` : 'returned from Kaggle'}
           </div>
         </div>
       )}
 
-      {result && result.status === 'done' && !resultIsImage && (
+      {latestResult && latestResult.status === 'done' && !resultIsImage && (
         <div className="p-2 rounded-lg bg-theme-bg border border-theme-border/60 text-theme-text text-xs break-words">
           {(() => {
-            try {
-              return result.image_b64 ? atob(result.image_b64) : ''
-            } catch {
-              return result.image_b64 ?? ''
-            }
+            try { return latestResult.image_b64 ? atob(latestResult.image_b64) : '' }
+            catch { return latestResult.image_b64 ?? '' }
           })()}
         </div>
       )}
 
-      {((result && result.status === 'error') || error) && (
+      {((latestResult && latestResult.status === 'error') || error) && (
         <div className="p-3 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 text-xs text-red-800 dark:text-red-300 font-medium break-words">
-          {error ?? result?.error ?? 'Generation failed'}
+          {error ?? latestResult?.error ?? 'Generation failed'}
         </div>
       )}
     </div>

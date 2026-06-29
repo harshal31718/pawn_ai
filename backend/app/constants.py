@@ -41,7 +41,7 @@ KAGGLE_SESSION_SLUG = "pawn-session-poc"
 # How often the persistent kernel polls Supabase for work / writes a heartbeat.
 KAGGLE_SESSION_POLL_INTERVAL_SECONDS = 3
 # A 'ready' session whose heartbeat is older than this is considered dead.
-IMAGE_SESSION_HEARTBEAT_STALE_SECONDS = 30
+IMAGE_SESSION_HEARTBEAT_STALE_SECONDS = 90  # 3× typical FLUX inference time (~30–90 s)
 # Hard backstop on a session's duration (Kaggle's max batch run-time guardrail).
 IMAGE_SESSION_MAX_DURATION_MINUTES = 120
 # Backend/UI poll cadence while waiting for a durable job to finish.

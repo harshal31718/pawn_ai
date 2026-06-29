@@ -75,10 +75,19 @@ export default function SessionBar({
     return () => clearInterval(id)
   }, [live, session?.expires_at])
 
-  const starting = session?.status === 'starting'
-  const ended = !!session && !live && !starting
+  const WARMUP_STATUSES = new Set(['starting', 'installing', 'loading_model'])
+  const STARTUP_MESSAGES: Record<string, string> = {
+    starting: 'Waiting for Kaggle GPU…',
+    installing: 'Installing dependencies (1–2 min)…',
+    loading_model: 'Loading model onto GPU (FLUX: ~7 min · SDXL: ~2 min)…',
+  }
+  const warmingUp = !!session && WARMUP_STATUSES.has(session.status)
+  const ended = !!session && !live && !warmingUp
 
   async function handleStart() {
+    if (session && !window.confirm(
+      'A session already exists for this model. Starting a new one will stop it on Kaggle. Continue?'
+    )) return
     setBusy(true)
     setError(null)
     try {
@@ -130,7 +139,7 @@ export default function SessionBar({
         )}
       </div>
 
-      {!live && !starting && (
+      {!live && !warmingUp && (
         <div className="flex items-center gap-1.5 flex-wrap">
           <select
             value={duration}
@@ -162,10 +171,10 @@ export default function SessionBar({
         </div>
       )}
 
-      {starting && (
+      {warmingUp && (
         <div className="flex items-center gap-2 text-[11px] text-amber-600 dark:text-amber-400">
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-          <span>Loading the model on Kaggle (~10 min, one-time)…</span>
+          <span>{STARTUP_MESSAGES[session!.status] ?? 'Starting…'}</span>
         </div>
       )}
 

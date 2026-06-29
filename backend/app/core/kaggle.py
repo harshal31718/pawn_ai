@@ -87,6 +87,12 @@ def _raise_for_status(resp: httpx.Response, op: str) -> None:
             "kaggle.com → Settings → Phone Verification."
         )
     if resp.status_code >= 400:
+        body = (resp.text or "").strip()
+        if "Maximum batch GPU session count" in body:
+            raise KaggleError(
+                "Kaggle GPU limit reached (max 2 concurrent GPU sessions). "
+                "Stop an active warm session or wait for a running job to finish, then retry."
+            )
         raise KaggleError(f"Kaggle {op} failed: HTTP {resp.status_code}")
 
 

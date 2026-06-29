@@ -148,7 +148,7 @@ export async function runKaggleImage(
 // submit a job, poll the job row for the echoed result, stop.
 
 export interface SessionStatus {
-  status: string // none | starting | ready | stopping | ended | error
+  status: string // none | starting | installing | loading_model | ready | stopping | ended | error
   alive: boolean
   session_id?: string
   expires_at?: string | null
