@@ -406,3 +406,16 @@ This becomes your interview script and project history.
 **Tests/build:** 132 backend passing (new `test_image_jobs.py`: create/de-dup, run_cold_job transitions, reap, list, non-blocking route, `/generate/jobs`; `test_generate.py`/`test_image_session.py` updated to the job contract + extend/FLUX-GPU-start tests). Frontend `npm run build` clean.
 **Live verify pending:** Image Lab → FLUX → Start warm session → first image ~10 min, later images in seconds; Extend/Stop; cold Generate still returns an image (now job-polled).
 **Commit:** (this commit)
+
+### 2026-06-29 — W.2: Image Lab UI (session controls + Generations monitor) [imageLab]
+
+**Built (frontend):**
+- **Job-driven `ImageGenerator`** (`ImageLabPage.tsx`): submit → poll `getJob` → inline render. **Server-derived button state** — parent lifts a shared `listJobs` poll (all models); Generate is disabled while that model has a `queued`/`running` job, so a refresh / second tab can't fire a duplicate (the double-submit bug, now structurally prevented). Routes to `submitSessionJob` when a warm session is live (fast) else cold `runGenerate`. Added a local `submitting` guard for the click→response window.
+- **`GenerationsPanel.tsx`** (new): collapsible monitor of all jobs across models/sessions, newest first — model badge, prompt, status chip (running spinner), relative time; done image jobs lazily fetch their PNG via `getJob` → thumbnail + View lightbox + Download. Server-backed → a navigated-away result reappears here (lost-result bug visibly fixed).
+- **`SessionBar.tsx`** (new): per-model warm-session lifecycle — duration/cap picker, Start, live countdown, Extend +30, Stop, "session ended" CTA; re-attaches on mount via `getSessionStatus`; reports the live session up to the generator. `SessionPocPanel` deleted (superseded).
+
+**Review:** code-reviewer PASS (0 critical). WARN fixes applied: (1) double-submit window → local `submitting` guard on top of the server-derived `busy`; (2) always-on 1s ticker → gated on a live countdown; (3) hardcoded lightbox download filename → derived from the image mime. Deferred (documented): frontend unit tests (project has none — gate is `npm run build`); GenerationsPanel lazy-image fan-out is bounded by the 30-job list cap (fine for the trial).
+
+**Tests/build:** 132 backend tests still green (no backend change); frontend `npm run build` clean. **Phase W code-complete (W.0/W.1/W.2).**
+**Live verify pending:** full warm-FLUX flow + monitor; refresh mid-generate → job re-attaches in the panel and Generate stays disabled. Then merge imageLab → dev. Scoped per-session JWT remains the gate before multi-user.
+**Commit:** (this commit)

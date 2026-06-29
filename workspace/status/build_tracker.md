@@ -13,9 +13,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch)
-**Active step:** W.2 — Image Lab UI (session controls + Generations monitor panel)
-**Last completed:** W.1 (imageLab) — warm FLUX serve-loop + unified durable job layer (lost-result bug fixed at backend); 132 backend tests green
+**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch) — **CODE COMPLETE (W.0/W.1/W.2)**
+**Active step:** Live-verify W.1/W.2 end-to-end, then merge imageLab → dev. Before multi-user: scoped per-session JWT (deferred).
+**Last completed:** W.2 (imageLab) — Image Lab UI: job-driven generator + server-derived button state, GenerationsPanel monitor, session bar (countdown/Extend/Stop); `npm run build` clean, 132 backend tests green
 **Branch:** imageLab (merges → dev)
 **Plan:** `workspace/plan/plan_v5_warm_session.md`
 
@@ -301,12 +301,19 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
   **Live verify pending:** Image Lab → FLUX → Start warm session → first image ~10 min, later in
   **seconds**; Extend/Stop work; cold Generate still returns an image (now job-polled).
 
-- [ ] **W.2 — Image Lab UI (session controls + Generations monitor panel)**
-  Job-driven `ImageGenerator` (submit → poll job id); new `components/GenerationsPanel.tsx` (all jobs
-  across models, status chips + thumbnails + view/download); session bar (duration/cap picker, live
-  countdown, Extend, Stop, "session ended" CTA); **server-derived button state** (disabled while a
-  model has an active job → no duplicate submit, survives refresh); `client.ts` job/session helpers.
-  Demo: full warm-session flow + monitor panel live; `npm run build` clean.
+- [x] **W.2 — Image Lab UI (session controls + Generations monitor panel)** ✓
+  Job-driven `ImageGenerator` (submit → poll job id, inline render); **server-derived button state**
+  (parent lifts a shared `listJobs` poll → disabled while a model has a queued/running job → no
+  duplicate submit, survives refresh; + a local submitting guard for the click→response window);
+  new `components/GenerationsPanel.tsx` (all jobs across models/sessions, status chips, lazy
+  thumbnails + View lightbox + Download); new `components/SessionBar.tsx` (duration/cap picker, live
+  countdown, Extend +30, Stop, "session ended" CTA; re-attaches on refresh); `SessionPocPanel`
+  deleted (superseded). `npm run build` clean; 132 backend tests green. code-reviewer PASS (0 critical;
+  WARN fixes applied: double-submit guard, gated countdown ticker, mime-derived download filename).
+  **Deferred (documented):** frontend unit tests (project has none — gate is `npm run build`);
+  GenerationsPanel lazy-image fan-out capped at 30 (fine for trial).
+  **Live verify pending:** full warm-FLUX flow + monitor panel; refresh mid-generate → job
+  re-attaches in the panel + button stays disabled (the double-submit bug, visibly fixed).
 
 ---
 

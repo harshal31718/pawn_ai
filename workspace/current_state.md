@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-29
-Active step: Phase W / W.2 (imageLab) — Image Lab UI (session controls + Generations monitor panel). W.0 (loop proof) + W.1 (warm FLUX serve-loop + durable job layer) done. Plan: `workspace/plan/plan_v5_warm_session.md`.
+Active step: Phase W CODE COMPLETE (W.0/W.1/W.2) — live-verify W.1/W.2 end-to-end, then merge imageLab → dev. Scoped per-session JWT deferred (mandatory before multi-user). Plan: `workspace/plan/plan_v5_warm_session.md`.
 Phase: imageLab branch — Phase W (warm/persistent Kaggle sessions + durable job tracking). Targets the top deferred item: FLUX ~820s/image. Milestone A.1 (multi-model SDXL/FLUX) is live; Phase MU code complete on dev/main.
 
 > **Phase W goal:** keep one Kaggle container warm so repeat images are fast (user-set timer + image
@@ -93,7 +93,14 @@ Phase: imageLab branch — Phase W (warm/persistent Kaggle sessions + durable jo
 - **Review:** code-reviewer PASS (fixed a CRITICAL — `asyncio.create_task` kept only a weak ref → a GC mid-run could drop the worker; now strong-ref'd via `_spawn_bg`); security-auditor PASS (service key never injected; cold-job error truncated to 300 chars).
 - **Deferred (documented):** `supabase_jwt_secret` + scoped per-session JWT — Supabase's new `sb_publishable_*` platform deprecates legacy HS256-secret minting, so the **permissive-anon RLS policy (W.0) is kept for the single-user trial**; the scoped JWT is **mandatory before multi-user**. A real SDXL serve-loop is a follow-up.
 
-Test/build status: **132 backend tests passing** (new `test_image_jobs.py`; `test_generate.py`/`test_image_session.py` updated to the job contract); frontend `npm run build` passes clean. **W.1 live FLUX warm-session run pending** (first image ~10 min, later in seconds). W.0 loop already live-verified. Manual browser verification of the optimistic + draft flow under slow Drive still pending.
+### imageLab — Phase W / W.2: Image Lab UI (session controls + Generations monitor) (2026-06-29)
+
+- **Job-driven generator** (`components/ImageLabPage.tsx` `ImageGenerator`): submit → poll `getJob` → inline render. **Server-derived button state** — the parent lifts a shared `listJobs` poll (all models) and disables Generate while that model has a `queued`/`running` job, so a refresh or second tab can't fire a duplicate (a local `submitting` flag also closes the click→response window). Generate routes to `submitSessionJob` when a warm session is live (fast), else cold `runGenerate`.
+- **`components/GenerationsPanel.tsx`** (new): collapsible monitor of every job across models/sessions, newest first — model badge, prompt, status chip (spinner while running), relative time; done image jobs lazily fetch their PNG via `getJob` for a thumbnail + View lightbox + Download. Server-backed → results survive refresh/tab-switch (a navigated-away result reappears here — the lost-result bug, now visibly fixed).
+- **`components/SessionBar.tsx`** (new): warm-session lifecycle for a model — duration (30/60/120) + optional image cap, Start, live countdown, **Extend +30**, **Stop**, "session ended" CTA; re-attaches to a live session on mount via `getSessionStatus`. Reports the live session up to the generator. `SessionPocPanel` (W.0/W.1 stand-in) deleted.
+- **Review:** code-reviewer PASS (0 critical). WARN fixes applied: double-submit guard (`submitting`), gated the 1s countdown ticker, mime-derived download filename. Deferred (documented): frontend unit tests (the project has none — its gate is `npm run build`); GenerationsPanel lazy-image fan-out is bounded by the 30-job list cap.
+
+Test/build status: **132 backend tests passing**; frontend `npm run build` passes clean. **Phase W is code-complete (W.0/W.1/W.2).** Pending: live W.1/W.2 end-to-end (warm FLUX first image ~10 min then seconds; refresh-mid-generate re-attach), then merge imageLab → dev. W.0 loop already live-verified. Manual browser verification of the optimistic + draft flow under slow Drive still pending.
 
 ---
 
@@ -121,7 +128,8 @@ Test/build status: **132 backend tests passing** (new `test_image_jobs.py`; `tes
 - [x] Kaggle SDXL image generation (imageLab, Milestone A.0) — T4 GPU, deploy auto-queue; verified live (2026-06-28)
 - [x] Kaggle FLUX.1-schnell image generation (imageLab, Milestone A.1) — 2× T4 bf16 shard, model-switch UI; verified live ~820s/image (2026-06-29). Perf optimization deferred.
 - [x] Warm-session loop proof (imageLab, Phase W / W.0) — CPU echo kernel + Supabase rendezvous; **LIVE-VERIFIED 2026-06-29** (kernel reached Warm, live countdown + heartbeat, 2 echo jobs round-tripped). The persistent-loop assumption is proven. Note: new sb_publishable_* keys enforce RLS → permissive anon policy added on the two tables.
-- [x] Warm FLUX serve-loop + durable job layer (imageLab, Phase W / W.1) — non-blocking job-tracked generate (de-dup, GC-safe worker), `extend_session`, `GET /generate/jobs`, FLUX persistent notebook; 132 tests green (2026-06-29). Live warm-FLUX run + full monitor UI (W.2) pending. Scoped per-session JWT deferred (mandatory before multi-user).
+- [x] Warm FLUX serve-loop + durable job layer (imageLab, Phase W / W.1) — non-blocking job-tracked generate (de-dup, GC-safe worker), `extend_session`, `GET /generate/jobs`, FLUX persistent notebook; 132 tests green (2026-06-29). Live warm-FLUX run pending. Scoped per-session JWT deferred (mandatory before multi-user).
+- [x] Image Lab UI (imageLab, Phase W / W.2) — job-driven generator with server-derived button state (no duplicate submit, survives refresh), `GenerationsPanel` monitor (thumbnails/lightbox/download), `SessionBar` (countdown/Extend/Stop); `npm run build` clean (2026-06-29). Live end-to-end verification pending.
 
 ---
 

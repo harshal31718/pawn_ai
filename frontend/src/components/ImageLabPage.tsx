@@ -1,13 +1,19 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   getKaggleConfig,
   setKaggleConfig,
   deleteKaggleConfig,
   connectKaggle,
-  runKaggleImage,
-  type ImageResult,
+  runGenerate,
+  submitSessionJob,
+  getJob,
+  listJobs,
+  IMAGE_JOB_POLL_INTERVAL_MS,
+  type JobResult,
+  type SessionStatus,
 } from '../api/client'
-import SessionPocPanel from './SessionPocPanel'
+import SessionBar from './SessionBar'
+import GenerationsPanel from './GenerationsPanel'
 
 interface Props {
   onClose: () => void
@@ -92,6 +98,25 @@ export default function ImageLabPage({ onClose }: Props) {
   // persisted so a one-time deploy keeps Generate clickable across reloads.
   const [connected, setConnected] = useState<Record<string, boolean>>(loadDeployed)
 
+  // Shared, server-backed jobs list (all models) — the single source of truth for
+  // the Generations monitor AND for server-derived button state (a model with an
+  // active job can't be re-submitted, and this survives a refresh).
+  const [jobs, setJobs] = useState<JobResult[]>([])
+  const refreshJobs = useCallback(async () => {
+    try {
+      setJobs(await listJobs(undefined, 30))
+    } catch {
+      /* transient — keep the last list */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!hasCreds) return
+    refreshJobs()
+    const id = setInterval(refreshJobs, IMAGE_JOB_POLL_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [hasCreds, refreshJobs])
+
   const activeModel = MODELS.find((m) => m.id === activeModelId) ?? MODELS[0]
   const isConnected = !!connected[activeModel.id]
 
@@ -167,10 +192,10 @@ export default function ImageLabPage({ onClose }: Props) {
                   key={`gen-${activeModel.id}`}
                   model={activeModel}
                   isConnected={isConnected}
+                  jobs={jobs}
+                  onSubmitted={refreshJobs}
                 />
-                {isConnected && (
-                  <SessionPocPanel key={`session-${activeModel.id}`} model={activeModel.id} />
-                )}
+                <GenerationsPanel jobs={jobs} />
               </div>
             </>
           )}
@@ -376,71 +401,125 @@ function KaggleConnector({
   )
 }
 
-/** Generates image from user text prompts */
-function ImageGenerator({ model, isConnected }: { model: ModelDef; isConnected: boolean }) {
+/**
+ * Job-driven generator (Phase W.2). Submission returns a durable job id; the
+ * button's busy state is DERIVED FROM THE SERVER jobs list (disabled while this
+ * model has a queued/running job), so a refresh or second tab can't fire a
+ * duplicate run. A warm session routes Generate to the live kernel (fast); with
+ * no session it runs a single cold image. Results also persist in the panel below.
+ */
+function ImageGenerator({
+  model,
+  isConnected,
+  jobs,
+  onSubmitted,
+}: {
+  model: ModelDef
+  isConnected: boolean
+  jobs: JobResult[]
+  onSubmitted: () => void
+}) {
   const [prompt, setPrompt] = useState(model.defaultPrompt)
-  const [status, setStatus] = useState<'idle' | 'running'>('idle')
-  const [result, setResult] = useState<ImageResult | null>(null)
+  const [session, setSession] = useState<SessionStatus | null>(null)
+  const [watchId, setWatchId] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState<JobResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [elapsedMs, setElapsedMs] = useState<number | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
 
   // Reset generator state when switching models.
   useEffect(() => {
     setPrompt(model.defaultPrompt)
     setResult(null)
     setError(null)
-    setElapsedMs(null)
+    setWatchId(null)
   }, [model.id, model.defaultPrompt])
 
-  useEffect(() => () => abortRef.current?.abort(), [])
+  // Poll the job we just submitted so we can render it inline. (After a refresh
+  // this local watch is lost, but the job still shows in the panel — server-backed.)
+  useEffect(() => {
+    if (!watchId) return
+    let active = true
+    const id = setInterval(async () => {
+      try {
+        const job = await getJob(watchId)
+        if (!active) return
+        if (job.status === 'done' || job.status === 'error') {
+          setResult(job)
+          setWatchId(null)
+          onSubmitted()
+        }
+      } catch {
+        /* keep polling */
+      }
+    }, IMAGE_JOB_POLL_INTERVAL_MS)
+    return () => {
+      active = false
+      clearInterval(id)
+    }
+  }, [watchId, onSubmitted])
+
+  const live = !!session?.alive
+  // Server-derived: an in-flight job for this model (cold or warm) blocks new
+  // submits and survives a refresh. `submitting` closes the local window between
+  // the click and the server response (before activeJob/watchId are known) so a
+  // fast double-click can't fire two runs.
+  const activeJob = jobs.find(
+    (j) => j.model === model.id && (j.status === 'queued' || j.status === 'running'),
+  )
+  const busy = !!activeJob || !!watchId || submitting
 
   async function handleGenerate() {
     if (!prompt.trim()) {
       setError('Enter a prompt.')
       return
     }
-    setStatus('running')
+    if (busy) return
     setError(null)
     setResult(null)
-    setElapsedMs(null)
-    const startedAt = Date.now()
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
+    setSubmitting(true)
     try {
-      const res = await runKaggleImage(prompt.trim(), model.id, ctrl.signal)
-      setResult(res)
-      setElapsedMs(Date.now() - startedAt)
+      const { job_id } =
+        live && session?.session_id
+          ? await submitSessionJob(session.session_id, prompt.trim())
+          : await runGenerate(model.id, prompt.trim())
+      setWatchId(job_id)
+      onSubmitted() // refresh shared jobs → button stays disabled, panel shows it
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
       setError(err instanceof Error ? err.message : 'Generation failed')
-      setElapsedMs(Date.now() - startedAt)
     } finally {
-      setStatus('idle')
+      setSubmitting(false)
     }
   }
 
-  const running = status === 'running'
+  const resultIsImage = !!result && (result.mime ?? '').startsWith('image/')
 
   return (
-    <div className="p-4 rounded-xl border border-theme-border/60 bg-theme-surface space-y-4">
+    <div className="p-4 rounded-xl border border-theme-border/60 bg-theme-surface space-y-3">
       <h2 className="text-xs font-semibold text-theme-text">{model.heading}</h2>
+
+      {isConnected && <SessionBar model={model.id} onSession={setSession} />}
 
       <div className="space-y-2">
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          disabled={!isConnected || running}
+          disabled={!isConnected || busy}
           placeholder="Describe the image you want to generate..."
           className="w-full h-20 px-3 py-2 rounded-xl text-sm bg-theme-bg border border-theme-border/60 text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-border disabled:opacity-60 resize-none"
         />
         <button
           type="button"
           onClick={handleGenerate}
-          disabled={!isConnected || running}
+          disabled={!isConnected || busy}
           className="w-full py-2.5 rounded-xl text-xs font-semibold bg-theme-brand text-theme-brand-text shadow-sm hover:opacity-90 disabled:opacity-60 cursor-pointer"
         >
-          {running ? 'Generating (takes ~1-2 min)...' : 'Generate Image'}
+          {busy
+            ? live
+              ? 'Generating (warm)…'
+              : 'Generating (cold ~14 min)…'
+            : live
+              ? 'Generate (warm · seconds)'
+              : 'Generate once (cold ~14 min)'}
         </button>
       </div>
 
@@ -450,35 +529,47 @@ function ImageGenerator({ model, isConnected }: { model: ModelDef; isConnected: 
         </div>
       )}
 
-      {running && (
+      {busy && (
         <div className="flex items-center gap-2 text-xs text-theme-text-muted">
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-          <span>Notebook running on Kaggle GPU (waits for warmup if just deployed). Awaiting output...</span>
+          <span>
+            {live
+              ? 'Generating on the warm kernel…'
+              : 'Running a fresh Kaggle container (cold start). Track it in Generations below.'}
+          </span>
         </div>
       )}
 
-      {result && !running && (
+      {result && result.status === 'done' && resultIsImage && result.image_b64 && (
         <div className="space-y-2">
           <div className="rounded-xl overflow-hidden border border-theme-border/60 bg-theme-bg flex justify-center">
             <img
-              src={`data:${result.mime};base64,${result.image}`}
-              alt={prompt}
+              src={`data:${result.mime};base64,${result.image_b64}`}
+              alt={result.prompt ?? prompt}
               className="max-w-full h-auto object-contain max-h-[300px]"
             />
           </div>
           <div className="text-[10px] text-theme-text-muted">
             {result.via ? `via ${result.via}` : 'returned from Kaggle'}
-            {elapsedMs != null && ` · ${(elapsedMs / 1000).toFixed(1)}s`}
           </div>
         </div>
       )}
 
-      {error && !running && (
+      {result && result.status === 'done' && !resultIsImage && (
+        <div className="p-2 rounded-lg bg-theme-bg border border-theme-border/60 text-theme-text text-xs break-words">
+          {(() => {
+            try {
+              return result.image_b64 ? atob(result.image_b64) : ''
+            } catch {
+              return result.image_b64 ?? ''
+            }
+          })()}
+        </div>
+      )}
+
+      {((result && result.status === 'error') || error) && (
         <div className="p-3 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 text-xs text-red-800 dark:text-red-300 font-medium break-words">
-          {error}
-          {elapsedMs != null && (
-            <div className="mt-1 text-[10px] opacity-70">after {(elapsedMs / 1000).toFixed(1)}s</div>
-          )}
+          {error ?? result?.error ?? 'Generation failed'}
         </div>
       )}
     </div>
