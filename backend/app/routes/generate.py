@@ -34,6 +34,19 @@ def _lock_for(key: str) -> asyncio.Lock:
     return lock
 
 
+# Strong refs to in-flight background workers. asyncio keeps only WEAK refs to
+# tasks, so without holding them here a GC cycle could collect a running cold-job
+# worker mid-Kaggle-call and silently drop the job (it would stay 'running' until
+# reaped) — exactly the lost-result class of bug W.1 fixes.
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_bg(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
 class GenerateRequest(BaseModel):
     modality: str = "image"
     input: int | None = None
@@ -58,6 +71,11 @@ class SessionJobRequest(BaseModel):
 
 class SessionStopRequest(BaseModel):
     session_id: str
+
+
+class SessionExtendRequest(BaseModel):
+    session_id: str
+    add_minutes: int = 30
 
 
 @router.post("/connect")
@@ -88,11 +106,15 @@ async def generate_artifact(req: GenerateRequest, request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Field 'prompt' is required for the image modality.",
             )
-        # Unknown model id is validated inside generate_image → UnknownModelError (400).
-        async with _lock_for(f"{user_id}:{req.model}"):
-            return await run_in_threadpool(
-                generate.generate_image, user_id, req.prompt.strip(), req.model
-            )
+        # Non-blocking: create a durable job row (de-duped per user+model) and run
+        # the slow Kaggle round-trip as a fire-and-forget background task, returning
+        # the job id immediately. Unknown model → UnknownModelError (400) here.
+        job_id, created = await run_in_threadpool(
+            image_session.create_cold_job, user_id, req.model, req.prompt.strip()
+        )
+        if created:
+            _spawn_bg(_run_cold_job_bg(user_id, req.model, job_id))
+        return {"job_id": job_id, "status": "queued"}
 
     else:
         raise HTTPException(
@@ -102,8 +124,22 @@ async def generate_artifact(req: GenerateRequest, request: Request):
 
 
 # --- Warm sessions + durable jobs (Phase W) ---------------------------------
-# W.0 proves the persistent Kaggle loop + Supabase rendezvous with a CPU echo
-# kernel. Supabase work is blocking → off-loaded to the threadpool.
+# Every generation is a durable image_jobs row tracked from the server, so the UI
+# survives refresh/tab-switch and the button derives from job state (no duplicate
+# submit). Supabase/Kaggle work is blocking → off-loaded to the threadpool.
+
+
+async def _run_cold_job_bg(user_id: str, model: str, job_id: str) -> None:
+    """Fire-and-forget worker: serialise same-model cold runs behind the per-
+    (user, model) lock (single-writer slug), then run the blocking round-trip."""
+    async with _lock_for(f"{user_id}:{model}"):
+        await run_in_threadpool(image_session.run_cold_job, job_id)
+
+
+@router.get("/jobs")
+async def list_jobs(request: Request, model: str | None = None, limit: int = 20):
+    user_id = request.state.user_id
+    return await run_in_threadpool(image_session.list_jobs, user_id, model, limit)
 
 
 @router.post("/session/start")
@@ -145,6 +181,14 @@ async def session_stop(req: SessionStopRequest, request: Request):
     user_id = request.state.user_id
     await run_in_threadpool(image_session.stop_session, user_id, req.session_id)
     return {"status": "ok"}
+
+
+@router.post("/session/extend")
+async def session_extend(req: SessionExtendRequest, request: Request):
+    user_id = request.state.user_id
+    return await run_in_threadpool(
+        image_session.extend_session, user_id, req.session_id, req.add_minutes
+    )
 
 
 @router.get("/job/{job_id}")

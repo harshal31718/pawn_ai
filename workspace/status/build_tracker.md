@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch)
-**Active step:** W.1 — warm session backend + FLUX persistent notebook + unified job tracking
-**Last completed:** W.0 (imageLab) — persistent Kaggle loop proof (CPU echo) + Supabase rendezvous; 117 backend tests green
+**Active step:** W.2 — Image Lab UI (session controls + Generations monitor panel)
+**Last completed:** W.1 (imageLab) — warm FLUX serve-loop + unified durable job layer (lost-result bug fixed at backend); 132 backend tests green
 **Branch:** imageLab (merges → dev)
 **Plan:** `workspace/plan/plan_v5_warm_session.md`
 
@@ -285,14 +285,21 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
   Supabase's new sb_publishable_* key enforces RLS → added a permissive anon policy on the two
   tables (commit 043a7f3). The persistent-loop assumption is PROVEN.
 
-- [ ] **W.1 — Warm session backend + FLUX persistent notebook + unified job tracking**
-  `image_flux_session/notebook.ipynb` (load once → serve loop); full session manager; **cold
-  one-shot path retrofitted to a durable background job** (`POST /generate` → `{job_id}`,
-  fire-and-forget worker, per-`(user,model)` de-dup); `GET /generate/job/{id}` + `/generate/jobs`;
-  `supabase_jwt_secret` (scoped per-session JWT — service key never injected);
-  `tests/test_image_session.py` + `tests/test_image_jobs.py`.
-  Demo: cold Generate → refresh → job re-attaches in the panel and the result persists (bug fixed);
-  warm FLUX session → first image ~10 min, later images in **seconds**. `pytest` green.
+- [x] **W.1 — Warm session backend + FLUX persistent notebook + unified job tracking** ✓
+  `image_flux_session/notebook.ipynb` (load FLUX once → Supabase serve-loop); session manager made
+  registry-driven (FLUX→GPU serve-loop, SDXL→CPU echo) + `extend_session`; **cold one-shot path
+  retrofitted to a durable background job** (`POST /generate` → `{job_id}`, GC-safe fire-and-forget
+  worker behind the per-`(user,model)` lock, de-dup); `GET /generate/jobs` (+ `/job/{id}` from W.0);
+  constants (job poll, cold-job reap wall-clock); `reap_stale_jobs`. Frontend: `runGenerate`/poll
+  contract, `extendSession`/`listJobs` helpers, `SessionPocPanel` renders PNG (FLUX) or echo (SDXL).
+  132 backend tests (new `test_image_jobs.py`); `npm run build` clean. code-reviewer PASS (CRITICAL
+  create_task-GC fixed) + security-auditor PASS (service key never injected).
+  **Deferred (documented):** `supabase_jwt_secret` + scoped per-session JWT — the new Supabase
+  `sb_publishable_*` platform deprecates legacy HS256-secret minting; permissive-anon RLS policy
+  (W.0) kept for the single-user trial; **scoped JWT is MANDATORY before multi-user**. SDXL real
+  serve-loop is a follow-up.
+  **Live verify pending:** Image Lab → FLUX → Start warm session → first image ~10 min, later in
+  **seconds**; Extend/Stop work; cold Generate still returns an image (now job-polled).
 
 - [ ] **W.2 — Image Lab UI (session controls + Generations monitor panel)**
   Job-driven `ImageGenerator` (submit → poll job id); new `components/GenerationsPanel.tsx` (all jobs

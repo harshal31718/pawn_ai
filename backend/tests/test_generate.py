@@ -27,28 +27,34 @@ def test_generate_cube_happy(client):
     mock_gen.assert_called_once_with("test-user-id", 5)
 
 
-def test_generate_image_happy(client):
-    result = {"image": "b64encoded", "mime": "image/png", "via": "kaggle:u/pawn_image_sdxl"}
-    with patch("app.routes.generate.generate.generate_image", return_value=result) as mock_gen:
+def test_generate_image_returns_job_id(client):
+    """Image generation is now non-blocking: POST returns a job id immediately
+    (the slow Kaggle round-trip runs as a background worker)."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-1", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
         resp = client.post("/generate", json={"modality": "image", "prompt": "a futuristic city"})
     assert resp.status_code == 200
-    assert resp.json()["image"] == "b64encoded"
+    assert resp.json() == {"job_id": "job-1", "status": "queued"}
     # Model defaults to sdxl when omitted.
-    mock_gen.assert_called_once_with("test-user-id", "a futuristic city", "sdxl")
+    mk.assert_called_once_with("test-user-id", "sdxl", "a futuristic city")
 
 
 def test_generate_image_passes_model_through(client):
-    result = {"image": "b64", "mime": "image/png", "via": "kaggle:u/pawn_image_flux"}
-    with patch("app.routes.generate.generate.generate_image", return_value=result) as mock_gen:
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-2", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
         resp = client.post(
             "/generate", json={"modality": "image", "prompt": "a city", "model": "flux"}
         )
     assert resp.status_code == 200
-    mock_gen.assert_called_once_with("test-user-id", "a city", "flux")
+    assert resp.json()["job_id"] == "job-2"
+    mk.assert_called_once_with("test-user-id", "flux", "a city")
 
 
 def test_generate_unknown_model_400(client):
-    """An unknown model id is rejected (UnknownModelError → HTTP 400)."""
+    """An unknown model id is rejected (UnknownModelError → HTTP 400) before any
+    job row is created."""
     resp = client.post(
         "/generate", json={"modality": "image", "prompt": "x", "model": "nope"}
     )

@@ -10,16 +10,21 @@ import {
 } from '../api/client'
 
 /**
- * Phase W.0 — minimal warm-session control that proves the persistent Kaggle
- * loop + Supabase rendezvous with a CPU echo kernel (no GPU/model). Start a
- * session, submit a job, watch the kernel echo it back, and stop. The full
- * session bar + Generations monitor land in W.2.
+ * Phase W warm-session control. Start a session (the kernel loads once, then
+ * serves a Supabase work-loop), submit prompts, watch them complete in seconds
+ * while the container stays warm, and stop. FLUX runs the real GPU serve-loop
+ * (returns a PNG); SDXL runs the cheap CPU echo (returns text). The full session
+ * bar + cross-model Generations monitor land in W.2.
  */
 const DURATIONS = [30, 60, 120]
 const STATUS_POLL_MS = 3000
 const JOB_POLL_MS = 3000
 
-function decodeEcho(job: JobResult): string {
+function isImage(job: JobResult): boolean {
+  return (job.mime ?? '').startsWith('image/')
+}
+
+function decodeText(job: JobResult): string {
   if (!job.image_b64) return ''
   try {
     return atob(job.image_b64)
@@ -42,7 +47,7 @@ export default function SessionPocPanel({ model }: { model: string }) {
   const [duration, setDuration] = useState(30)
   const [maxImages, setMaxImages] = useState('')
   const [session, setSession] = useState<SessionStatus | null>(null)
-  const [prompt, setPrompt] = useState('hello from the warm loop')
+  const [prompt, setPrompt] = useState('a red apple on a wooden table')
   const [job, setJob] = useState<JobResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -138,7 +143,7 @@ export default function SessionPocPanel({ model }: { model: string }) {
   return (
     <div className="p-4 rounded-xl border border-theme-border/60 bg-theme-surface space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-xs font-semibold text-theme-text">Warm Session (POC · CPU echo)</h2>
+        <h2 className="text-xs font-semibold text-theme-text">Warm Session</h2>
         {session && session.status !== 'none' && (
           <span
             className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
@@ -156,8 +161,8 @@ export default function SessionPocPanel({ model }: { model: string }) {
       </div>
 
       <p className="text-[11px] text-theme-text-muted leading-relaxed">
-        Proves the persistent loop: PAWN pushes a CPU kernel that loops on Supabase,
-        echoing each prompt back. No GPU or model — that arrives in W.1.
+        The kernel loads once, then serves prompts from a Supabase work-loop —
+        first image pays the warm-up, later ones return in seconds while it stays warm.
       </p>
 
       {!live && (
@@ -202,7 +207,7 @@ export default function SessionPocPanel({ model }: { model: string }) {
       {live && (
         <div className="space-y-2">
           <div className="flex items-center justify-between text-[11px] text-theme-text-muted">
-            <span>🟢 Warm · {session?.images_done ?? 0} echoed{session?.max_images ? ` / ${session.max_images}` : ''}</span>
+            <span>🟢 Warm · {session?.images_done ?? 0} done{session?.max_images ? ` / ${session.max_images}` : ''}</span>
             <button
               type="button"
               onClick={handleStop}
@@ -224,7 +229,7 @@ export default function SessionPocPanel({ model }: { model: string }) {
             disabled={busy || !prompt.trim()}
             className="w-full py-2 rounded-xl text-xs font-semibold bg-theme-brand text-theme-brand-text shadow-sm hover:opacity-90 disabled:opacity-60 cursor-pointer"
           >
-            {busy && job?.status !== 'done' ? 'Waiting for echo…' : 'Submit echo job'}
+            {busy && job?.status !== 'done' ? 'Generating…' : 'Generate (warm)'}
           </button>
         </div>
       )}
@@ -235,9 +240,18 @@ export default function SessionPocPanel({ model }: { model: string }) {
             Job <span className="font-mono">{job.status}</span>
             {job.via ? ` · via ${job.via}` : ''}
           </div>
-          {job.status === 'done' && (
+          {job.status === 'done' && isImage(job) && job.image_b64 && (
+            <div className="rounded-lg overflow-hidden border border-theme-border/60 bg-theme-bg flex justify-center">
+              <img
+                src={`data:${job.mime};base64,${job.image_b64}`}
+                alt={job.prompt ?? 'generated image'}
+                className="max-w-full h-auto object-contain max-h-[300px]"
+              />
+            </div>
+          )}
+          {job.status === 'done' && !isImage(job) && (
             <div className="p-2 rounded-lg bg-theme-bg border border-theme-border/60 text-theme-text break-words">
-              {decodeEcho(job)}
+              {decodeText(job)}
             </div>
           )}
           {job.status === 'error' && job.error && (

@@ -153,6 +153,61 @@ def test_start_session_injects_anon_key_never_service_key():
     assert "service-secret-key" not in json.dumps(payload)
 
 
+def test_start_session_flux_uses_gpu_and_dataset():
+    """The FLUX warm session pushes the serve-loop notebook with the GPU + dataset."""
+    from app.core.image_models import IMAGE_MODELS
+
+    db = _FakeDB()
+    captured = {}
+
+    def fake_deploy(**kwargs):
+        captured.update(kwargs)
+
+    cfg = {"username": "alice", "api_token": "tok"}
+    with patch("app.core.image_session.key_store.get_kaggle", return_value=cfg), \
+         patch("app.core.image_session.get_db", return_value=db), \
+         patch("app.core.image_session.config.SUPABASE_URL", "https://proj.supabase.co"), \
+         patch("app.core.image_session.config.SUPABASE_ANON_KEY", "anon-public-key"), \
+         patch("app.core.image_session.kaggle.deploy_kernel", side_effect=fake_deploy):
+        image_session.start_session("user-1", "flux", 60, None)
+
+    flux = IMAGE_MODELS["flux"]
+    assert captured["kernel_name"] == flux.session_slug == "pawn-flux-session"
+    assert captured["enable_gpu"] is True
+    assert captured["dataset_sources"] == [flux.dataset]
+    assert captured["accelerator"] == flux.accelerator
+
+
+def test_extend_session_bumps_expiry_capped():
+    from app.constants import IMAGE_SESSION_MAX_DURATION_MINUTES
+
+    now = datetime.now(timezone.utc)
+    sess = {
+        "id": "s1",
+        "user_id": "user-1",
+        "status": "ready",
+        "heartbeat_at": _iso(now),
+        "expires_at": _iso(now + timedelta(minutes=10)),
+    }
+    db = _FakeDB(rows={"image_sessions": [sess]})
+    with patch("app.core.image_session.get_db", return_value=db):
+        out = image_session.extend_session("user-1", "s1", 30)
+    new_exp = image_session._parse_ts(out["expires_at"])
+    assert new_exp > now + timedelta(minutes=35)  # bumped from +10 by +30
+    cap = now + timedelta(minutes=IMAGE_SESSION_MAX_DURATION_MINUTES)
+    assert new_exp <= cap + timedelta(seconds=5)
+
+
+def test_extend_session_dead_session_raises():
+    from app.exceptions import NotConfiguredError
+
+    dead = {"id": "s1", "user_id": "user-1", "status": "ended"}
+    db = _FakeDB(rows={"image_sessions": [dead]})
+    with patch("app.core.image_session.get_db", return_value=db):
+        with pytest.raises(NotConfiguredError):
+            image_session.extend_session("user-1", "s1", 30)
+
+
 def test_start_session_unknown_model_raises():
     from app.exceptions import UnknownModelError
 
@@ -376,6 +431,17 @@ def test_route_session_stop(client):
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
     m.assert_called_once_with("test-user-id", "s1")
+
+
+def test_route_session_extend(client):
+    out = {"session_id": "s1", "expires_at": "2026-06-29T02:00:00+00:00"}
+    with patch("app.routes.generate.image_session.extend_session", return_value=out) as m:
+        resp = client.post(
+            "/generate/session/extend", json={"session_id": "s1", "add_minutes": 30}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["expires_at"].endswith("02:00:00+00:00")
+    m.assert_called_once_with("test-user-id", "s1", 30)
 
 
 def test_route_get_job(client):

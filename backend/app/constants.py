@@ -44,4 +44,9 @@ KAGGLE_SESSION_POLL_INTERVAL_SECONDS = 3
 IMAGE_SESSION_HEARTBEAT_STALE_SECONDS = 30
 # Hard backstop on a session's duration (Kaggle's max batch run-time guardrail).
 IMAGE_SESSION_MAX_DURATION_MINUTES = 120
+# Backend/UI poll cadence while waiting for a durable job to finish.
+IMAGE_JOB_POLL_INTERVAL_SECONDS = 3
+# A cold one-shot job 'running' longer than this lost its worker (e.g. a backend
+# restart) — reaped to 'error' so the monitor panel never hangs on a ghost.
+COLD_JOB_MAX_WALLCLOCK_SECONDS = 1200
 

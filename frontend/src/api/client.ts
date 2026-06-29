@@ -98,37 +98,49 @@ export async function connectKaggle(model = 'sdxl'): Promise<void> {
   if (!res.ok) throw new Error(await errorDetail(res))
 }
 
+export const IMAGE_JOB_POLL_INTERVAL_MS = 3000
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t)
+        reject(new DOMException('Aborted', 'AbortError'))
+      },
+      { once: true },
+    )
+  })
+}
+
+/** Submit an image generation. Non-blocking: returns the durable job id; the
+ *  slow Kaggle round-trip runs as a backend worker. (W.1 contract change.) */
+export async function runGenerate(
+  model: string,
+  prompt: string,
+): Promise<{ job_id: string; status: string }> {
+  return postJson('/generate', { modality: 'image', prompt, model })
+}
+
+/** Cold Generate: submit a job, then poll it to completion. Preserves the Lab's
+ *  existing Generate flow on top of the new durable-job backend. Throws
+ *  AbortError if `signal` aborts (the full re-attach/monitor UI lands in W.2). */
 export async function runKaggleImage(
   prompt: string,
   model = 'sdxl',
   signal?: AbortSignal,
 ): Promise<ImageResult> {
-  const res = await fetch(`${BASE_URL}/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ prompt, modality: 'image', model }),
-    signal,
-  })
-
-  if (res.status === 401) {
-    localStorage.removeItem('pawn-token')
-    localStorage.removeItem('pawn-user')
-    window.location.reload()
-    throw new Error('Session expired')
-  }
-
-  if (!res.ok) {
-    let detail = `Request failed: ${res.status}`
-    try {
-      const body = await res.json()
-      if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
-    } catch {
-      /* non-JSON error body */
+  const { job_id } = await runGenerate(model, prompt)
+  for (;;) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    const job = await getJob(job_id)
+    if (job.status === 'done') {
+      return { image: job.image_b64 ?? '', mime: job.mime ?? 'image/png', via: job.via ?? undefined }
     }
-    throw new Error(detail)
+    if (job.status === 'error') throw new Error(job.error || 'Generation failed')
+    await sleep(IMAGE_JOB_POLL_INTERVAL_MS, signal)
   }
-
-  return res.json()
 }
 
 // --- Warm sessions + durable jobs (Phase W) ---------------------------------
@@ -147,6 +159,7 @@ export interface SessionStatus {
 export interface JobResult {
   job_id: string
   status: string // queued | running | done | error
+  session_id?: string | null
   model?: string
   prompt?: string
   image_b64?: string | null
@@ -154,6 +167,8 @@ export interface JobResult {
   via?: string | null
   error?: string | null
   created_at?: string | null
+  done_at?: string | null
+  has_image?: boolean // present in list_jobs summaries (image bytes fetched via getJob)
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -198,6 +213,26 @@ export async function submitSessionJob(
 
 export async function stopSession(sessionId: string): Promise<void> {
   await postJson('/generate/session/stop', { session_id: sessionId })
+}
+
+export async function extendSession(
+  sessionId: string,
+  addMinutes = 30,
+): Promise<{ session_id: string; expires_at: string }> {
+  return postJson('/generate/session/extend', { session_id: sessionId, add_minutes: addMinutes })
+}
+
+/** Job summaries for the monitor panel (newest first, no image bytes). */
+export async function listJobs(model?: string, limit = 20): Promise<JobResult[]> {
+  const params = new URLSearchParams()
+  if (model) params.set('model', model)
+  params.set('limit', String(limit))
+  const res = await fetch(`${BASE_URL}/generate/jobs?${params.toString()}`, {
+    headers: { ...authHeaders() },
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
 }
 
 export async function getJob(jobId: string): Promise<JobResult> {
