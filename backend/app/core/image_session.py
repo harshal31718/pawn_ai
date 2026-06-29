@@ -406,17 +406,37 @@ def run_cold_job(job_id: str) -> None:
 
 
 def reap_stale_jobs(user_id: str) -> None:
-    """Mark a cold job stuck 'running' past the max wall-clock as 'error' so the
-    monitor never hangs on a worker that died (e.g. a backend restart dropped the
-    in-flight task). Best-effort — never blocks the caller."""
-    cutoff = _iso(_now() - timedelta(seconds=COLD_JOB_MAX_WALLCLOCK_SECONDS))
+    """Mark active jobs whose owner is gone as 'error' so the monitor never hangs
+    on a ghost (and the Generate button doesn't stay disabled forever):
+      • cold job (no session) stuck active past the max wall-clock → worker died
+        (e.g. a backend restart dropped the in-flight task);
+      • session job whose session is no longer alive (ended / stopped / expired /
+        stale heartbeat) → the kernel will never pick it up.
+    Best-effort — never blocks the caller."""
+    now = _now()
+    cutoff = _iso(now - timedelta(seconds=COLD_JOB_MAX_WALLCLOCK_SECONDS))
     try:
         db = get_db()
+        # Cold jobs: orphaned worker (queued never started, or running past wall-clock).
         db.table("image_jobs").update(
-            {"status": "error", "error": "worker lost (timed out)", "done_at": _iso(_now())}
-        ).eq("user_id", user_id).is_("session_id", "null").eq("status", "running").lt(
-            "started_at", cutoff
-        ).execute()
+            {"status": "error", "error": "worker lost (timed out)", "done_at": _iso(now)}
+        ).eq("user_id", user_id).is_("session_id", "null").in_(
+            "status", list(_ACTIVE_JOB_STATUSES)
+        ).lt("created_at", cutoff).execute()
+
+        # Session jobs whose session is dead → the kernel won't ever run them.
+        sessions = db.table("image_sessions").select("*").eq("user_id", user_id).execute()
+        dead_ids = [s["id"] for s in (sessions.data or []) if not _is_alive(s)]
+        if dead_ids:
+            db.table("image_jobs").update(
+                {
+                    "status": "error",
+                    "error": "session ended before this job ran",
+                    "done_at": _iso(now),
+                }
+            ).eq("user_id", user_id).in_("session_id", dead_ids).in_(
+                "status", list(_ACTIVE_JOB_STATUSES)
+            ).execute()
     except Exception as e:
         print(f"reap_stale_jobs failed for {user_id}: {e}", file=sys.stderr)
 

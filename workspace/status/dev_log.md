@@ -419,3 +419,10 @@ This becomes your interview script and project history.
 **Tests/build:** 132 backend tests still green (no backend change); frontend `npm run build` clean. **Phase W code-complete (W.0/W.1/W.2).**
 **Live verify pending:** full warm-FLUX flow + monitor; refresh mid-generate → job re-attaches in the panel and Generate stays disabled. Then merge imageLab → dev. Scoped per-session JWT remains the gate before multi-user.
 **Commit:** (this commit)
+
+### 2026-06-29 — Fix: orphaned session jobs hung the panel/button (reap gap) [imageLab]
+
+**Symptom:** Generate button stuck on "Generating (cold ~14 min)…" with nothing actually running on Kaggle; Generations showed "1 active". Root cause: a job submitted to an SDXL warm session stayed `queued` after the session **ended** (kernel exited before picking it up). `reap_stale_jobs` only handled cold jobs (`session_id` null) stuck `running` past the wall-clock — it never reaped **session** jobs whose session is dead, so the server-derived button state stayed disabled forever.
+**Fix** (`core/image_session.py` `reap_stale_jobs`): now also (a) reaps cold jobs stuck in *any* active status (queued or running) past the wall-clock (a queued cold job whose in-process worker died on a backend restart), and (b) reaps queued/running **session** jobs whose session is no longer alive (ended/stopped/expired/stale heartbeat) → marked `error` "session ended before this job ran". Since `list_jobs` calls reap every poll, the panel + button self-heal within ~3s. The pre-existing stuck job was auto-cleared on redeploy.
+**Tests:** 133 backend passing (added `test_reap_stale_jobs_reaps_jobs_of_dead_sessions`; renamed the cold reap test).
+**Commit:** (this commit)

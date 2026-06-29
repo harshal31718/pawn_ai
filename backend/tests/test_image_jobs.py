@@ -182,16 +182,29 @@ def test_list_jobs_returns_metadata_without_image_bytes():
     assert all("image_b64" not in j for j in out)
 
 
-def test_reap_stale_jobs_marks_stuck_running_as_error():
-    """A cold job 'running' past the wall-clock cutoff is transitioned to error."""
+def test_reap_stale_jobs_marks_stuck_cold_as_error():
+    """A cold job stuck active past the wall-clock cutoff is transitioned to error."""
     db = _FakeDB()
     with patch("app.core.image_session.get_db", return_value=db):
         image_session.reap_stale_jobs("user-1")
     assert db.updates, "expected a reap update to be issued"
-    table, vals = db.updates[-1]
+    table, vals = db.updates[0]
     assert table == "image_jobs"
     assert vals["status"] == "error"
     assert "worker lost" in vals["error"]
+
+
+def test_reap_stale_jobs_reaps_jobs_of_dead_sessions():
+    """A queued/running job whose session has ended is reaped so the panel/button
+    don't hang on a job the kernel will never pick up."""
+    db = _FakeDB(rows={"image_sessions": [{"id": "s-dead", "status": "ended"}]})
+    with patch("app.core.image_session.get_db", return_value=db):
+        image_session.reap_stale_jobs("user-1")
+    # Last update targets the dead session's jobs with the session-ended reason.
+    table, vals = db.updates[-1]
+    assert table == "image_jobs"
+    assert vals["status"] == "error"
+    assert "session ended" in vals["error"]
 
 
 # --- Route: non-blocking POST /generate + GET /generate/jobs -----------------
