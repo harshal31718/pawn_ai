@@ -280,8 +280,10 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
   `/generate/job/{id}`); new `supabase_anon_key` secret (public — service key never injected);
   minimal `SessionPocPanel` Lab control. 117 backend tests green (24 new); `npm run build` clean.
   code-reviewer + security-auditor PASS (0 critical). RLS/scoped-JWT deferred to W.1 (documented).
-  **Live verify pending user setup:** run new schema in Supabase + add `secrets/supabase_anon_key`,
-  then Lab → Start session → submit echo job → CPU kernel echoes it back, heartbeats, exits on Stop.
+  **LIVE-VERIFIED (2026-06-29):** Lab → Start warm session → kernel reached Warm with a live
+  countdown + fresh heartbeat, 2 echo jobs round-tripped through Supabase (ECHO: "really" rendered).
+  Supabase's new sb_publishable_* key enforces RLS → added a permissive anon policy on the two
+  tables (commit 043a7f3). The persistent-loop assumption is PROVEN.
 
 - [ ] **W.1 — Warm session backend + FLUX persistent notebook + unified job tracking**
   `image_flux_session/notebook.ipynb` (load once → serve loop); full session manager; **cold

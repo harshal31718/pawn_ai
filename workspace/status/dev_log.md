@@ -382,3 +382,9 @@ This becomes your interview script and project history.
 **Tests:** 117 backend passed (24 new in `test_image_session.py`: manager + all 5 routes, mocked Supabase/Kaggle). Frontend `npm run build` clean.
 **Live verify (manual, pending user setup):** run the new schema in Supabase + add `secrets/supabase_anon_key`, then Image Lab → connect → Start warm session → submit echo job → watch the CPU kernel pick it up, echo back, heartbeat, and exit on Stop/expiry.
 **Commit:** (this commit)
+
+### 2026-06-29 — W.0 LIVE-VERIFIED + new-key RLS gotcha [imageLab]
+
+**Live result:** Image Lab → Start warm session → kernel reached **Warm** with a live countdown (29:12) and fresh heartbeat; 2 echo jobs round-tripped through Supabase (queue → kernel pickup → result write → UI read-back: "ECHO: really"). The load-bearing assumption — a batch-pushed Kaggle kernel can run a long-lived internet loop + Supabase rendezvous — is **PROVEN**.
+**Gotcha caught by the probe (before any Kaggle run):** Supabase's new `sb_publishable_*` key enforces RLS on the anon role, so "RLS off for the trial" didn't hold — the kernel could READ but INSERT/PATCH 401'd (`42501`). Fix: enable RLS + a permissive anon policy on `image_sessions`/`image_jobs` (commit `043a7f3`) — the documented "anon-key-open on the two dedicated tables" trial fallback. Re-probe confirmed READ/INSERT/PATCH/DELETE all succeed with the publishable key. W.1 narrows this to a scoped per-session_id policy.
+**Commit:** 043a7f3 (RLS fix) + tracker/state updates.

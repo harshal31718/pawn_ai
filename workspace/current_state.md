@@ -112,7 +112,7 @@ Test/build status: **117 backend tests passing** (24 new in `test_image_session.
 - [x] End-to-end verified live — OAuth login + Drive-backed conversations + BYOK LLM reply (2026-06-27)
 - [x] Kaggle SDXL image generation (imageLab, Milestone A.0) — T4 GPU, deploy auto-queue; verified live (2026-06-28)
 - [x] Kaggle FLUX.1-schnell image generation (imageLab, Milestone A.1) — 2× T4 bf16 shard, model-switch UI; verified live ~820s/image (2026-06-29). Perf optimization deferred.
-- [x] Warm-session loop proof (imageLab, Phase W / W.0) — CPU echo kernel + Supabase rendezvous; backend + UI code-complete, 117 tests green (2026-06-29). Live end-to-end pending user Supabase schema + anon key.
+- [x] Warm-session loop proof (imageLab, Phase W / W.0) — CPU echo kernel + Supabase rendezvous; **LIVE-VERIFIED 2026-06-29** (kernel reached Warm, live countdown + heartbeat, 2 echo jobs round-tripped). The persistent-loop assumption is proven. Note: new sb_publishable_* keys enforce RLS → permissive anon policy added on the two tables.
 
 ---
 
