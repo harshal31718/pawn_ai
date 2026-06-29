@@ -7,6 +7,112 @@
 **Scope today:** text-to-image, fully automated — PAWN auto-deploys & runs a fixed template kernel in the user's own Kaggle account (user supplies only their Kaggle username + API token).
 **Scope tomorrow:** add text-to-video by adding a second modality, with **no** re-plumbing of routing / storage / auth.
 
+> **Merged 2026-06-28:** the FLUX.1-schnell model-switch plan (formerly
+> `flux_model_switch.md`) is now folded in below as **Milestone A.1**. See the
+> Implementation Tracker for what's live vs pending, and the "Deviations" note for where
+> the build diverged from this plan's original prose.
+
+---
+
+## Implementation Tracker (2026-06-28)
+
+Legend: ✅ implemented & verified · 🟡 implemented but deviates from original plan prose · ⬜ pending
+
+### Milestone A.0 — Kaggle round-trip + SDXL (LIVE)
+
+| Item | Status | Notes |
+|---|---|---|
+| `core/kaggle.py` — `run_kernel`, `_push`, `_wait_until_idle`, `inject_payload`, deploy | ✅ | base64 payload injection; deploy auto-queue via `_wait_until_idle` |
+| `core/generate.py` — `connect_kaggle`, `generate_image` (SDXL), `generate_cube` | ✅ | single-model, SDXL hardcoded to slug `pawn-image-poc` |
+| `routes/generate.py` — `POST /generate` (image + cube), `POST /generate/connect` | 🟡 | returns **plain blocking JSON**, not the SSE `status`/`image`/`done` stream this plan described |
+| `core/key_store.py` — `set_kaggle` / `get_kaggle` / `delete_kaggle` | 🟡 | dedicated kaggle funcs (encrypted JSON), **not** the `VALID_PROVIDERS` dict-payload approach drafted below — functionally equivalent |
+| `routes/keys.py` — `GET/PUT/DELETE /keys/kaggle` | ✅ | shape-only GET (no token returned) |
+| `exceptions.py` — `NotConfiguredError`, `KaggleError` | ✅ | |
+| `kaggle_templates/cube_poc/` + `image_gen/` notebooks | ✅ | cube (CPU) + SDXL (GPU) |
+| `constants.py` — run/poll/busy-wait timeouts, slugs, template paths | ✅ | `KAGGLE_RUN_TIMEOUT_SECONDS=600`, `KAGGLE_POLL_INTERVAL_SECONDS=8`, `KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS=300` |
+| T4 GPU fix (`machineShape`) + deploy auto-queue | ✅ | sending `accelerator` was ignored by Kaggle (→ default P100); fixed to `machineShape` |
+| Frontend Image Lab — `ImageLabPage.tsx`, `App.tsx` arm, Sidebar button, `client.ts` helpers | ✅ | creds entered **in the Image Lab page**, not Settings → API Keys (see Deviations) |
+| Frontend **model-switch UI** — `MODELS[]` tab bar, per-model deploy/generate panels, per-model connect state | 🟡 | UI scaffold built (2026-06-28) but every tab currently calls the **same SDXL** endpoints — no `model` param threaded yet |
+| `tests/test_generate.py`, `tests/test_keys_kaggle.py` | ✅ | Kaggle REST fully mocked |
+
+### Milestone A.1 — Multi-model switch + FLUX.1-schnell (LIVE — verified 2026-06-29)
+
+| Item | Status | Notes |
+|---|---|---|
+| Backend `IMAGE_MODELS` registry (`core/image_models.py`: id → slug/template/dataset/accelerator/params) | ✅ | `get_image_model` raises `UnknownModelError` (→400) on unknown id |
+| `/generate` + `/generate/connect` accept `model` (default `"sdxl"`) | ✅ | model threaded UI → `client.ts` → route → dispatch |
+| Per-`(user_id, model)` lock | ✅ | `routes/generate.py` `_lock_for(f"{user}:{model}")` — SDXL/FLUX independent |
+| FLUX notebook `kaggle_templates/image_flux/notebook.ipynb` | ✅ | bf16, `device_map="balanced"` 2×T4, VAE tiling, 4 steps / guidance 0 / 1024²; install skipped on warmup |
+| `run_timeout` 600 → 900 for FLUX | ✅ | per-model in the registry (`ImageModel.run_timeout`) |
+| Frontend: `flux` tab in `MODELS[]` + `model` threaded through `client.ts` | ✅ | per-model panels keyed by id; deploy state persisted to localStorage |
+| FLUX dispatch/route + kernel tests | ✅ | 22 tests in `test_generate.py` |
+
+#### Bring-up fixes (learned during the live FLUX bring-up, 2026-06-29)
+
+These were the four bugs that stood between "wired" and "working". All fixed:
+
+1. **Kaggle title↔slug invariant** *(the blocker — FLUX generate never started a run)*. Kaggle
+   derives a notebook's slug from its **title**, so the title MUST slugify back to our slug or the
+   push 409s `"title already in use"`. `_kernel_title` now derives the title from the slug
+   (`slug.replace("-"," ").title()` → "Pawn Image Flux" → `pawn-image-flux`). SDXL only ever
+   worked by coincidence (its label slugified to its slug). A test asserts the invariant for every
+   registered model.
+2. **Non-blocking deploy.** `deploy_kernel` was waiting up to 300s for a busy slug to idle → the
+   `/generate/connect` request blocked past the timeout → 502, and the orphaned threadpool worker
+   kept polling, starving the pool so the *other* model's deploy got stuck too. Deploy now does a
+   single push and treats HTTP 409 (run in flight) as "already deployed" — fast and per-model
+   independent.
+3. **Warmup skips the heavy install.** The FLUX notebook ran `pip install -U diffusers transformers
+   accelerate sentencepiece protobuf` on **every** push including the warmup, leaving the slug busy
+   for minutes. Cell-1 now short-circuits on `prompt == "warmup"` (warmup only writes a placeholder
+   PNG), so deploy is near-instant.
+4. **Persisted deploy state + per-model UI isolation.** "Deployed" was session-only React state, so
+   Generate re-locked on every refresh; and the generator components shared one instance, so a
+   running FLUX disabled SDXL's button. Deploy state is now persisted to localStorage; the
+   connector/generator are keyed per model id.
+
+#### Known issue — first-class perf (deferred)
+
+- **FLUX generate is slow: ~820s end-to-end** (verified live, prompt → image). Every push spins a
+  **fresh Kaggle container**, so `pip install -U …` + the **34 GB dataset mount** + the **12B model
+  load** all happen on *every* generate, not just the first. The 4-step inference itself is fast;
+  the cost is environment setup. **To optimize later** (ideas, not yet chosen): a persistent/warm
+  kernel, pre-baked dataset image with deps, caching weights between runs, or keeping the kernel
+  session alive. Tracked as the next focus.
+- The button label still says "~1-2 min" — inaccurate for FLUX (~14 min). Cosmetic; fix with the
+  perf work.
+
+### Milestone B — chat composer integration (PENDING)
+
+| Item | Status |
+|---|---|
+| `+` popover (Attach / Create image), image-mode chip, send-branch | ⬜ |
+| `ImageCard.tsx` + `ImageLightbox`, `Message.tsx` image arm | ⬜ |
+| `streamGenerate` SSE + `types.ts` image union + store `appendImage`/`deleteImage` | ⬜ |
+| SSE progress events on `/generate` (replaces the current blocking JSON) | ⬜ |
+
+### Deviations from this plan's original prose (accepted)
+
+1. **Credentials location** — drafted as a **Settings → API Keys → Kaggle** section
+   (`ApiKeysSection.tsx`). Implemented instead as a **credentials block inside the Image Lab
+   page**. Acceptable for the throwaway-Lab milestone; revisit if Kaggle creds should sit beside
+   BYOK LLM keys for Milestone B.
+2. **Transport** — drafted as SSE (`status` → `image` → `done`). Implemented as a **single
+   blocking JSON response** (the first generate holds the HTTP request open through warmup). SSE
+   progress is deferred to Milestone B.
+3. **key_store shape** — drafted as a dict payload under `VALID_PROVIDERS`. Implemented as
+   dedicated `set_kaggle`/`get_kaggle`/`delete_kaggle` helpers. No behavioural difference.
+
+### ✅ Hard rule — `NvidiaTeslaT4` always grants 2× T4 (2×16 GB)
+
+**Decision (user-confirmed, 2026-06-28):** requesting `machineShape: NvidiaTeslaT4` **always**
+provisions the **dual-T4 box (2×16 GB)**. This is a hard rule the design relies on — FLUX
+(~24 GB bf16) is sharded across both cards via `device_map="balanced"`, and that is the primary,
+expected path. (This supersedes the earlier `current_state.md` note that called dual-T4
+"unreachable" — that finding is retired.) The notebook keeps an in-cell
+`enable_model_cpu_offload()` catch purely as a crash guard against diffusers device-mismatch
+bugs, **not** as a single-card fallback — two cards are assumed present.
+
 ---
 
 ## Context — Why this is being built
@@ -465,6 +571,139 @@ Automated:
 
 - Backend: `pytest backend/tests/test_generate.py backend/tests/test_keys_kaggle.py -v`
 - Frontend: `npm run build` (tsc + vite).
+
+---
+
+## Milestone A.1 — Multi-model switch + FLUX.1-schnell (Kaggle 2× T4)
+
+*(Merged from the former `flux_model_switch.md`. Builds directly on A.0; no chat changes.)*
+
+### Why this is shaped as a switch, not a swap
+
+The Image Lab UI now renders a **horizontal model bar** (`MODELS[]` in `ImageLabPage.tsx`),
+each model a tab with its own Deploy + Generate panel and per-model connection state. The
+backend, however, is still single-model: `generate.py` hardcodes one slug (`pawn-image-poc`),
+one template, one dataset, one accelerator. So FLUX is **added as a second model** (SDXL stays
+selectable for comparison) and the backend learns to **route per model**. Adding a third model
+later = one registry row + one `MODELS[]` entry, no new branching.
+
+### FLUX context & hardware facts
+
+- SDXL base produced washed-out images, and the current notebook mis-tuned it (4 steps /
+  guidance 0.0 / 512×768 — distilled-model settings on a base model). SDXL is kept as a
+  selectable model, no longer the only option.
+- **Decision (user-confirmed):** add **FLUX.1-schnell** (12B rectified-flow transformer,
+  Apache-2.0, ungated, 4-step distilled), mounted as a Kaggle dataset (no per-run HF download).
+- 2× T4 = two separate 16 GB cards (not a 32 GB pool). FLUX (~24 GB bf16) does **not** fit one
+  card → shard across both via diffusers `device_map="balanced"`. **Hard rule:**
+  `NvidiaTeslaT4` always provisions two cards (see the Hard-rule note above) — the design
+  assumes both are present.
+- T4 is Turing: must use **bf16** (fp16 → black/NaN on FLUX). Enable VAE tiling for VAE decode.
+- Expect ~1–3 min/image once weights are mounted.
+
+### Weights source
+
+- Kaggle dataset **`guillaumegaillard/flux1-schnell-diffusers`** (~34 GB, full diffusers
+  layout: `model_index.json`, `transformer/`, `text_encoder/`, `text_encoder_2/` (T5-xxl),
+  `vae/`, tokenizers, scheduler).
+- The official `black-forest-labs/flux/pyTorch/flux.1-schnell/1` is only the single-file
+  transformer (23.8 GB, no text encoders/VAE) → not loadable standalone.
+- Caveat: the community dataset's license is tagged "Unknown" on Kaggle (FLUX weights are
+  Apache-2.0); acceptable for a personal trial.
+- Fallback if the dataset is bad: mount the official transformer + `from_single_file` and pull
+  text encoders/VAE from HF at runtime (internet is already enabled).
+
+### Target flow (model-switch, end to end)
+
+```
+ImageLabPage MODELS[]  ──tab select──▶  activeModel.id ("sdxl" | "flux")
+        ├─ Deploy   →  POST /generate/connect { model }
+        └─ Generate →  POST /generate { modality:"image", model, prompt }
+                              │
+                       routes/generate.py (reads `model`)
+                              │
+                       generate.generate_image(user_id, prompt, model)
+                              │
+                       IMAGE_MODELS[model] → { slug, template, dataset, accelerator, params }
+                              │
+                       kaggle.run_kernel(...)  →  PNG bytes
+```
+
+### Changes
+
+**1. Backend — model registry (the core of the switch).** In `core/generate.py` (or a small
+`image_models.py`):
+```python
+IMAGE_MODELS = {
+  "sdxl": {"slug": "pawn-image-poc",   "template": "image_gen/notebook.ipynb",
+           "dataset": "steubk/stable-diffusion-xl-base-1-0",      "accelerator": "NvidiaTeslaT4"},
+  "flux": {"slug": "pawn-image-flux",  "template": "image_flux/notebook.ipynb",
+           "dataset": "guillaumegaillard/flux1-schnell-diffusers", "accelerator": "NvidiaTeslaT4"},
+}
+```
+- `generate_image(user_id, prompt, model="sdxl")` looks the entry up (unknown id → 400 via the
+  route), injects the prompt into that model's template, calls `run_kernel` with the entry's
+  slug/dataset/accelerator. `enable_gpu=True`, `enable_internet=True` for both.
+- `connect_kaggle(user_id, model="sdxl")` deploys **that model's** notebook to its own slug.
+  Keep the warmup push **dataset-free** (`dataset_sources=[]`) so deploy stays fast — otherwise
+  Kaggle mounts the 34 GB FLUX dataset just to write a placeholder.
+- Default `model="sdxl"` everywhere so existing callers/tests keep working.
+- *(SDXL kept on slug `pawn-image-poc` to avoid redeploy churn; only the new FLUX slug is added.)*
+
+**2. Backend — route accepts `model`.** In `routes/generate.py`: add `model: str = "sdxl"` to
+`GenerateRequest`; image branch passes `req.model`; `/generate/connect` reads `model` and passes
+it through; unknown id → 400. Make the per-user lock key `f"{user_id}:{model}"` so a user can
+work different models without false serialisation (single lock acceptable for v1 if simpler).
+
+**3. Backend — FLUX notebook** `kaggle_templates/image_flux/notebook.ipynb` (new; leave
+`image_gen/notebook.ipynb` SDXL untouched). Keep cell-0 payload decode + warmup short-circuit +
+the `os.walk("/kaggle/input")` `model_index.json` search.
+- Install cell: drop `--no-deps`; `pip install -q -U diffusers transformers accelerate sentencepiece protobuf`.
+- Inference cell:
+  ```python
+  import torch
+  from diffusers import FluxPipeline
+  pipe = FluxPipeline.from_pretrained(target_dir, torch_dtype=torch.bfloat16, device_map="balanced")
+  pipe.vae.enable_tiling()
+  image = pipe(prompt=prompt, num_inference_steps=4, guidance_scale=0.0,
+               max_sequence_length=256, height=1024, width=1024).images[0]
+  ```
+  Write to `/kaggle/working/out.png` (unchanged contract).
+- **In-cell crash guard (not a single-card fallback):** two T4s are always present (hard rule),
+  so `device_map="balanced"` is the expected path. Still wrap the load in try/except as a guard
+  against diffusers device-mismatch / OOM bugs — on failure reload with
+  `pipe.enable_model_cpu_offload()` so a run doesn't hard-fail. This is a bug net, not a
+  capacity assumption.
+
+**4. Backend — `constants.py`:** `KAGGLE_RUN_TIMEOUT_SECONDS` 600 → **900** (first FLUX generate
+mounts ~34 GB + loads a 12B model). `_wait_until_idle` budget stays 300.
+
+**5. Frontend — `ImageLabPage.tsx`:** add a `flux` entry to `MODELS[]`
+(`title: 'FLUX.1-schnell'`, `notebookSlug: 'pawn-image-flux'`, FLUX deploy copy, default
+prompt); pass `activeModel.id` into the deploy + generate calls; update running copy to reflect
+FLUX timing. **`client.ts`:** `connectKaggle(model)` and `runKaggleImage(prompt, model, signal)`
+include `model` in the body (default `"sdxl"` for back-compat); update the two call sites.
+
+**6. Tests — `test_generate.py`:** existing tests stay green (SDXL is default). Add a dispatch
+test asserting `generate_image(..., model="flux")` passes the FLUX dataset + FLUX slug +
+`enable_gpu=True` to `run_kernel`; add a route test (`model:"flux"` reaches dispatch; unknown
+model → 400). No real Kaggle calls.
+
+### Risks / iteration notes (FLUX)
+
+- `device_map="balanced"` for `FluxPipeline` has known device-mismatch bugs across diffusers
+  versions; the cpu-offload catch is the crash guard. May need to pin diffusers or do manual
+  placement across the two cards (T5 on `cuda:1`, transformer on `cuda:0`).
+- 34 GB mount adds cold-run provision time (covered by the 900 s bump + existing deploy queue).
+
+### Verification (FLUX)
+
+1. `cd backend && python -m pytest tests/test_generate.py -q` — all pass (SDXL default intact + FLUX tests).
+2. `cd frontend && npm run build` — type-check passes.
+3. Live: Image Lab → **FLUX.1-schnell** tab → Deploy (fast, dataset-free warmup) → Generate →
+   FLUX image returns (~1–3 min), visibly better than SDXL. Switch to **SDXL** tab → still
+   deploys/generates independently (proves the switch routes, no cross-model clobber). Confirm
+   the Kaggle log shows bf16 + **both T4s** in use (the cpu-offload catch should not trigger).
 
 ---
 

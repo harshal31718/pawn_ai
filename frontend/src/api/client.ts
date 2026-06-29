@@ -88,20 +88,25 @@ export interface ImageResult {
   via?: string
 }
 
-export async function connectKaggle(): Promise<void> {
+export async function connectKaggle(model = 'sdxl'): Promise<void> {
   const res = await fetch(`${BASE_URL}/generate/connect`, {
     method: 'POST',
-    headers: { ...authHeaders() },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ model }),
   })
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
 }
 
-export async function runKaggleImage(prompt: string, signal?: AbortSignal): Promise<ImageResult> {
+export async function runKaggleImage(
+  prompt: string,
+  model = 'sdxl',
+  signal?: AbortSignal,
+): Promise<ImageResult> {
   const res = await fetch(`${BASE_URL}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ prompt, modality: 'image' }),
+    body: JSON.stringify({ prompt, modality: 'image', model }),
     signal,
   })
 

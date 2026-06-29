@@ -35,6 +35,15 @@ class KaggleError(ProviderError):
         super().__init__("kaggle", message)
 
 
+class UnknownModelError(ProviderError):
+    """The requested generation model id isn't in the registry. Maps to HTTP 400."""
+
+    http_status = 400
+
+    def __init__(self, message: str):
+        super().__init__("unknown_model", message)
+
+
 async def provider_error_handler(request: Request, exc: ProviderError) -> JSONResponse:
     status = 429 if exc.kind == "rate_limit" else 502
     return JSONResponse({"error": exc.message}, status_code=status)

@@ -33,6 +33,18 @@ _FAILED = {"error", "cancelacknowledged", "cancelrequested", "cancelled", "cance
 _PLACEHOLDER = "__PAWN_PAYLOAD_B64__"
 
 
+class _KaggleConflict(Exception):
+    """Internal: a push returned HTTP 409 (a kernel version is still being created
+    or a run is in flight). Retriable — wait for the slug to settle and push again.
+
+    Carries Kaggle's response body (`detail`) so a persistent conflict surfaces the
+    real reason instead of a bare "HTTP 409"."""
+
+    def __init__(self, detail: str = ""):
+        self.detail = detail
+        super().__init__(detail)
+
+
 def inject_payload(template_text: str, payload: dict) -> str:
     """Base64-encode `payload` (JSON) and substitute it into the template.
 
@@ -43,6 +55,26 @@ def inject_payload(template_text: str, payload: dict) -> str:
     if _PLACEHOLDER not in template_text:
         raise KaggleError("Template kernel is missing the payload placeholder.")
     return template_text.replace(_PLACEHOLDER, encoded)
+
+
+def _client(username: str, api_token: str) -> httpx.Client:
+    """Build an authed Kaggle REST client.
+
+    General Access Tokens (KGAT_...) authenticate via Bearer; classic
+    username:key pairs use HTTP Basic. Centralised so push/run/deploy agree.
+    """
+    headers: dict[str, str] = {}
+    auth = None
+    if api_token.startswith("KGAT_"):
+        headers["Authorization"] = f"Bearer {api_token}"
+    else:
+        auth = (username, api_token)
+    return httpx.Client(
+        base_url=KAGGLE_API_BASE,
+        auth=auth,
+        headers=headers,
+        timeout=KAGGLE_HTTP_TIMEOUT_SECONDS,
+    )
 
 
 def _raise_for_status(resp: httpx.Response, op: str) -> None:
@@ -93,10 +125,68 @@ def _push(
         # Valid values: NvidiaTeslaT4, NvidiaTeslaP100, Tpu1VmV38.
         body["machineShape"] = accelerator
     resp = client.post("/kernels/push", json=body)
+    if resp.status_code == 409:
+        # A previous version is still ingesting / a run is in flight. Caller retries.
+        # Keep Kaggle's body so a persistent 409 surfaces the actual cause.
+        raise _KaggleConflict((resp.text or "").strip()[:400])
     _raise_for_status(resp, "push")
     data = resp.json()
     if isinstance(data, dict) and data.get("error"):
         raise KaggleError(f"Kaggle push failed: {data['error']}")
+
+
+def _push_when_ready(
+    client: httpx.Client,
+    username: str,
+    kernel_name: str,
+    title: str,
+    source: str,
+    *,
+    enable_gpu: bool,
+    enable_internet: bool,
+    dataset_sources: list[str] = None,
+    accelerator: str = None,
+    busy_wait_timeout: int,
+    poll_interval: int,
+) -> None:
+    """Wait for the slug to be idle, then push — retrying on HTTP 409.
+
+    A push always starts a run, and right after one Kaggle briefly reports the slug
+    as neither running nor queued before the new version registers, so a plain
+    `_wait_until_idle` can return early and the next push 409s. We loop: wait → push,
+    and on 409 wait again, until the slug settles or `busy_wait_timeout` elapses.
+    """
+    deadline = time.monotonic() + busy_wait_timeout
+    last_detail = ""
+    while True:
+        remaining = max(1, int(deadline - time.monotonic()))
+        _wait_until_idle(
+            client, username, kernel_name, timeout=remaining, poll_interval=poll_interval
+        )
+        try:
+            _push(
+                client,
+                username,
+                kernel_name,
+                title,
+                source,
+                enable_gpu=enable_gpu,
+                enable_internet=enable_internet,
+                dataset_sources=dataset_sources,
+                accelerator=accelerator,
+            )
+            return
+        except _KaggleConflict as exc:
+            last_detail = exc.detail or last_detail
+            if time.monotonic() >= deadline:
+                suffix = f" Kaggle said: {last_detail}" if last_detail else ""
+                raise KaggleError(
+                    "Kaggle kept rejecting the push with HTTP 409 (a kernel version "
+                    "is stuck being created, or a run is still in flight). Open "
+                    f"'{username}/{kernel_name}' on kaggle.com and stop/delete the "
+                    f"stuck run, then try again.{suffix}"
+                )
+            time.sleep(poll_interval)
 
 
 def _wait_until_complete(
@@ -186,6 +276,45 @@ def _fetch_output_file(
     return dl.content
 
 
+def deploy_kernel(
+    *,
+    username: str,
+    api_token: str,
+    kernel_name: str,
+    title: str,
+    source: str,
+    enable_gpu: bool = False,
+    enable_internet: bool = False,
+    dataset_sources: list[str] = None,
+    accelerator: str = None,
+) -> None:
+    """First-time setup / warmup: push `source` to <username>/<kernel_name>.
+
+    Deploy's only job is to verify creds and ensure the notebook exists. It does a
+    SINGLE, non-blocking push and never waits for a busy slug to idle: if a run is
+    already in flight (HTTP 409), the notebook already exists, so a verify/warmup
+    deploy is already done. This keeps every model's deploy independent — a slow or
+    stuck run on one slug can't stall (or starve the threadpool for) another model's
+    deploy. Blocking only for the single HTTP call — invoke via run_in_threadpool."""
+    with _client(username, api_token) as client:
+        try:
+            _push(
+                client,
+                username,
+                kernel_name,
+                title,
+                source,
+                enable_gpu=enable_gpu,
+                enable_internet=enable_internet,
+                dataset_sources=dataset_sources,
+                accelerator=accelerator,
+            )
+        except _KaggleConflict:
+            # A run/version is in flight on this slug — it already exists, so for a
+            # warmup/verify deploy we're done. Never block waiting for it to idle.
+            return
+
+
 def run_kernel(
     *,
     username: str,
@@ -204,27 +333,10 @@ def run_kernel(
 ) -> bytes:
     """Push `source` to <username>/<kernel_name>, run it, and return the bytes of
     `output_filename` from its output. Blocking — call via run_in_threadpool."""
-    headers = {}
-    auth = None
-    if api_token.startswith("KGAT_"):
-        headers["Authorization"] = f"Bearer {api_token}"
-    else:
-        auth = (username, api_token)
-
-    with httpx.Client(
-        base_url=KAGGLE_API_BASE, auth=auth, headers=headers, timeout=KAGGLE_HTTP_TIMEOUT_SECONDS
-    ) as client:
+    with _client(username, api_token) as client:
         # A push always starts a run, so an in-flight run (e.g. the deploy warmup)
-        # would otherwise be rejected. Wait for the slug to free up, then push.
-        _wait_until_idle(
-            client,
-            username,
-            kernel_name,
-            timeout=busy_wait_timeout,
-            poll_interval=poll_interval,
-        )
-
-        _push(
+        # would otherwise be rejected (or 409). Wait for the slug to free up, then push.
+        _push_when_ready(
             client,
             username,
             kernel_name,
@@ -234,6 +346,8 @@ def run_kernel(
             enable_internet=enable_internet,
             dataset_sources=dataset_sources,
             accelerator=accelerator,
+            busy_wait_timeout=busy_wait_timeout,
+            poll_interval=poll_interval,
         )
         _wait_until_complete(
             client, username, kernel_name, timeout=timeout, poll_interval=poll_interval

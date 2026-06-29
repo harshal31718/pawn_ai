@@ -28,12 +28,32 @@ def test_generate_cube_happy(client):
 
 
 def test_generate_image_happy(client):
-    result = {"image": "b64encoded", "mime": "image/png", "via": "kaggle:u/pawn-image-poc"}
+    result = {"image": "b64encoded", "mime": "image/png", "via": "kaggle:u/pawn_image_sdxl"}
     with patch("app.routes.generate.generate.generate_image", return_value=result) as mock_gen:
         resp = client.post("/generate", json={"modality": "image", "prompt": "a futuristic city"})
     assert resp.status_code == 200
     assert resp.json()["image"] == "b64encoded"
-    mock_gen.assert_called_once_with("test-user-id", "a futuristic city")
+    # Model defaults to sdxl when omitted.
+    mock_gen.assert_called_once_with("test-user-id", "a futuristic city", "sdxl")
+
+
+def test_generate_image_passes_model_through(client):
+    result = {"image": "b64", "mime": "image/png", "via": "kaggle:u/pawn_image_flux"}
+    with patch("app.routes.generate.generate.generate_image", return_value=result) as mock_gen:
+        resp = client.post(
+            "/generate", json={"modality": "image", "prompt": "a city", "model": "flux"}
+        )
+    assert resp.status_code == 200
+    mock_gen.assert_called_once_with("test-user-id", "a city", "flux")
+
+
+def test_generate_unknown_model_400(client):
+    """An unknown model id is rejected (UnknownModelError → HTTP 400)."""
+    resp = client.post(
+        "/generate", json={"modality": "image", "prompt": "x", "model": "nope"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "unknown_model"
 
 
 def test_generate_connect_happy(client):
@@ -41,7 +61,15 @@ def test_generate_connect_happy(client):
         resp = client.post("/generate/connect")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
-    mock_connect.assert_called_once_with("test-user-id")
+    # No body → defaults to sdxl.
+    mock_connect.assert_called_once_with("test-user-id", "sdxl")
+
+
+def test_generate_connect_with_model(client):
+    with patch("app.routes.generate.generate.connect_kaggle") as mock_connect:
+        resp = client.post("/generate/connect", json={"model": "flux"})
+    assert resp.status_code == 200
+    mock_connect.assert_called_once_with("test-user-id", "flux")
 
 
 def test_generate_not_configured(client):
@@ -102,6 +130,63 @@ def test_generate_cube_dispatch_injects_payload_not_source():
     # The raw integer must NOT appear as interpolated source; payload is base64.
     assert "\"input\": 5" not in captured["source"]
     assert "__PAWN_PAYLOAD_B64__" not in captured["source"]
+
+
+def test_generate_image_dispatch_uses_registry():
+    """generate_image must feed run_kernel the registry entry for the chosen model."""
+    from app.core import generate
+    from app.core.image_models import IMAGE_MODELS
+
+    captured = {}
+
+    def fake_run_kernel(**kwargs):
+        captured.update(kwargs)
+        return b"\x89PNG fake-bytes"
+
+    cfg = {"username": "alice", "api_token": "tok"}
+    with patch("app.core.generate.key_store.get_kaggle", return_value=cfg), \
+         patch("app.core.generate.kaggle.run_kernel", side_effect=fake_run_kernel):
+        out = generate.generate_image("user-1", "a city", "flux")
+
+    flux = IMAGE_MODELS["flux"]
+    assert out["model"] == "flux"
+    assert captured["kernel_name"] == flux.slug == "pawn-image-flux"
+    assert captured["dataset_sources"] == [flux.dataset]
+    assert captured["accelerator"] == flux.accelerator
+    assert captured["enable_gpu"] is True
+    assert captured["timeout"] == flux.run_timeout
+    # Prompt is base64-injected, never interpolated as source.
+    assert "a city" not in captured["source"]
+    assert "__PAWN_PAYLOAD_B64__" not in captured["source"]
+
+
+def test_generate_image_unknown_model_raises():
+    from app.core import generate
+    from app.exceptions import UnknownModelError
+
+    cfg = {"username": "alice", "api_token": "tok"}
+    with patch("app.core.generate.key_store.get_kaggle", return_value=cfg):
+        with pytest.raises(UnknownModelError):
+            generate.generate_image("user-1", "a city", "does-not-exist")
+
+
+def test_connect_kaggle_warmup_is_dataset_free():
+    """Deploy/warmup must not attach the (possibly huge) dataset."""
+    from app.core import generate
+
+    captured = {}
+
+    def fake_deploy(**kwargs):
+        captured.update(kwargs)
+
+    cfg = {"username": "alice", "api_token": "tok"}
+    with patch("app.core.generate.key_store.get_kaggle", return_value=cfg), \
+         patch("app.core.generate.kaggle.deploy_kernel", side_effect=fake_deploy):
+        generate.connect_kaggle("user-1", "flux")
+
+    assert captured["kernel_name"] == "pawn-image-flux"
+    assert captured["dataset_sources"] == []
+    assert captured["enable_gpu"] is False
 
 
 def test_generate_cube_dispatch_not_configured():
@@ -165,3 +250,74 @@ def test_wait_until_idle_proceeds_on_non_200():
             return _FakeResp(404, "")
 
     kaggle._wait_until_idle(_NotFoundClient(), "u", "k", timeout=300, poll_interval=0)
+
+
+class _FakeDeployClient:
+    """Records push/status calls so deploy can be asserted non-blocking."""
+
+    def __init__(self, push_status):
+        self.push_status = push_status
+        self.post_calls = 0
+        self.get_calls = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def post(self, path, json=None):
+        self.post_calls += 1
+
+        class _Resp:
+            status_code = self.push_status
+            text = "{}"
+
+            def json(_self):
+                return {}
+
+        return _Resp()
+
+    def get(self, path, params=None):
+        # A status poll here would mean deploy is waiting on a busy slug — it mustn't.
+        self.get_calls += 1
+        return _FakeResp(200, "running")
+
+
+def test_deploy_kernel_single_push_when_idle():
+    """Deploy is one push, no status polling."""
+    from app.core import kaggle
+
+    fake = _FakeDeployClient(push_status=200)
+    with patch("app.core.kaggle._client", return_value=fake):
+        kaggle.deploy_kernel(
+            username="u", api_token="t", kernel_name="k", title="T", source="src"
+        )
+    assert fake.post_calls == 1
+    assert fake.get_calls == 0
+
+
+def test_kernel_title_slugifies_to_slug():
+    """Kaggle derives a notebook's slug from its title; if they disagree the push
+    409s ("title already in use"). Guard every registered model against that drift."""
+    from app.core import generate
+    from app.core.image_models import IMAGE_MODELS
+
+    for spec in IMAGE_MODELS.values():
+        title = generate._kernel_title(spec)
+        # Kaggle slugify (the part that bit FLUX): lowercase, spaces -> dashes.
+        assert title.lower().replace(" ", "-") == spec.slug, spec.id
+
+
+def test_deploy_kernel_treats_409_as_already_deployed():
+    """A busy slug (HTTP 409) means the notebook already exists — deploy returns
+    success without blocking, so one model's stuck run can't stall another's deploy."""
+    from app.core import kaggle
+
+    fake = _FakeDeployClient(push_status=409)
+    with patch("app.core.kaggle._client", return_value=fake):
+        kaggle.deploy_kernel(
+            username="u", api_token="t", kernel_name="k", title="T", source="src"
+        )
+    assert fake.post_calls == 1  # single attempt
+    assert fake.get_calls == 0  # never waited on the busy slug

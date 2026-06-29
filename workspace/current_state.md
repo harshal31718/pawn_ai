@@ -1,8 +1,8 @@
 # PAWN — Current State
 
-Last updated: 2026-06-28
-Active step: Milestone A.0 (imageLab) — Kaggle SDXL image generation working end-to-end ✓ (T4 GPU fix + deploy auto-queue)
-Phase: imageLab branch — experimental Kaggle-backed image generation (Milestone A.0). Phase MU code complete on dev/main.
+Last updated: 2026-06-29
+Active step: Milestone A.1 (imageLab) — multi-model switch + FLUX.1-schnell working end-to-end ✓ (live-verified). Next: FLUX generation perf (~820s/image is too slow).
+Phase: imageLab branch — experimental Kaggle-backed image generation (Milestone A.1 live). Phase MU code complete on dev/main.
 
 ---
 
@@ -60,7 +60,18 @@ Phase: imageLab branch — experimental Kaggle-backed image generation (Mileston
 - **T4 fix:** the push body must send the GPU type as `machineShape` (not `accelerator`, which Kaggle ignores → default P100). Valid values: `NvidiaTeslaT4`, `NvidiaTeslaP100`, `Tpu1VmV38`.
 - **Deploy auto-queue:** since a Kaggle push always starts a run, the deploy warmup leaves the slug busy; `run_kernel` now waits for it to free up (`_wait_until_idle`, bounded by `KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS = 300`) instead of erroring "Kaggle is busy".
 
-Test/build status: 57 backend tests passing (added chat lazy-create test); frontend `npm run build` passes clean. **Manual browser verification of the optimistic + draft flow under slow Drive still pending.**
+### imageLab — Milestone A.1: multi-model switch + FLUX.1-schnell LIVE (2026-06-29)
+
+- One registry (`core/image_models.py`) drives SDXL + FLUX through the same `generate_image(user_id, prompt, model)` / `connect_kaggle(user_id, model)` path; model id threaded UI → `client.ts` → route → dispatch. Per-`(user, model)` lock keeps models independent. Unknown model → 400.
+- **FLUX.1-schnell verified live** — prompt → image via `kaggle:harshaldodke7/pawn-image-flux` in **~820s**. Notebook `image_flux/`: bf16, `device_map="balanced"` across 2× T4, VAE tiling, 4 steps / guidance 0 / 1024², 900s timeout.
+- **Bring-up bugs fixed (2026-06-29):**
+  1. **Kaggle title↔slug invariant** — Kaggle derives a notebook's slug from its title; FLUX's title slugified to `pawn-image-flux-1-schnell` ≠ our `pawn-image-flux` slug → generate pushes 409'd `"title already in use"` forever, no run started. `_kernel_title` now derives the title from the slug (SDXL only worked by coincidence). Regression test guards all models.
+  2. **Non-blocking deploy** — `deploy_kernel` no longer waits 300s on a busy slug (that blocked `/generate/connect` → 502 and starved the threadpool, coupling SDXL ↔ FLUX). Single push; HTTP 409 = already deployed.
+  3. **Warmup skips heavy install** — FLUX cell-1 short-circuits on `prompt == "warmup"` so deploy is near-instant and doesn't hold the slug busy.
+  4. **Persisted deploy state + per-model UI isolation** — deploy state survives refresh (localStorage); connector/generator keyed per model id so a running FLUX no longer disables SDXL's Generate button.
+- **Known perf issue (deferred, next focus):** ~820s/image — every push spins a fresh Kaggle container, so `pip install` + 34 GB dataset mount + 12B model load run on **every** generate (4-step inference itself is fast). Optimization not yet chosen (warm/persistent kernel, pre-baked deps, weight caching, kept-alive session).
+
+Test/build status: 94 backend tests passing (Milestone A.1 added FLUX dispatch, non-blocking deploy, and slug↔title invariant tests); frontend `npm run build` passes clean. **Manual browser verification of the optimistic + draft flow under slow Drive still pending.**
 
 ---
 
@@ -86,6 +97,7 @@ Test/build status: 57 backend tests passing (added chat lazy-create test); front
 - [x] 429 rate-limit countdown UI
 - [x] End-to-end verified live — OAuth login + Drive-backed conversations + BYOK LLM reply (2026-06-27)
 - [x] Kaggle SDXL image generation (imageLab, Milestone A.0) — T4 GPU, deploy auto-queue; verified live (2026-06-28)
+- [x] Kaggle FLUX.1-schnell image generation (imageLab, Milestone A.1) — 2× T4 bf16 shard, model-switch UI; verified live ~820s/image (2026-06-29). Perf optimization deferred.
 
 ---
 
@@ -115,7 +127,9 @@ Test/build status: 57 backend tests passing (added chat lazy-create test); front
 - Client conversation cache is per-browser. Cross-device divergence is reconciled only via `mergeServerMeta` on next load (last-write-wins on title); genuine multi-device editing is not synced live.
 - Reasoning `trace[]` is not persisted to the client cache (final message text only) — traces disappear on reload.
 - localStorage cache keeps message arrays for the 30 most-recent conversations (LRU, ~4 MB cap); older conversations re-fetch their messages from Drive on next open.
-- **imageLab:** dual T4 (T4×2) isn't reachable via the public Kaggle API (issue #821 unanswered) — we use a single T4. SDXL image quality is not yet tuned (steps/guidance/resolution defaults). First Generate after a deploy holds the HTTP request open through the warmup wait (per-user lock already serializes this).
+- **imageLab:** `machineShape: NvidiaTeslaT4` always provisions a **2× T4 (2×16 GB)** box — treated as a hard rule (the FLUX A.1 plan shards across both cards). The earlier note that dual-T4 was "unreachable" (issue #821) is retired. SDXL image quality is not yet tuned (steps/guidance/resolution defaults). First Generate after a deploy holds the HTTP request open through the warmup wait (per-user lock already serializes this).
+- **imageLab FLUX perf (top deferred item):** ~820s/image. Each generate spins a fresh Kaggle container → `pip install` + 34 GB dataset mount + 12B model load repeat every run (4-step inference is fast). No optimization chosen yet — candidates: warm/persistent kernel, pre-baked deps in the dataset image, weight caching, kept-alive session. The Generate button's "~1-2 min" label is stale for FLUX (~14 min).
+- **imageLab orphan kernel:** the old mismatched FLUX title created a stray `pawn-image-flux-1-schnell` notebook on Kaggle (now unused — title is derived from the slug). Safe to delete manually.
 
 ---
 

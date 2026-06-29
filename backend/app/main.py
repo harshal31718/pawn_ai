@@ -10,6 +10,7 @@ from app.exceptions import (
     NoEndpointError,
     NotConfiguredError,
     KaggleError,
+    UnknownModelError,
     provider_error_handler,
     no_endpoint_error_handler,
     generate_error_handler,
@@ -46,6 +47,7 @@ app.add_exception_handler(NoEndpointError, no_endpoint_error_handler)
 # More specific than ProviderError — registered so subclasses map to 412/502 + code.
 app.add_exception_handler(NotConfiguredError, generate_error_handler)
 app.add_exception_handler(KaggleError, generate_error_handler)
+app.add_exception_handler(UnknownModelError, generate_error_handler)
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
