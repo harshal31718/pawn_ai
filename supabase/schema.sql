@@ -108,11 +108,14 @@ $$;
 -- so PAWN and the kernel rendezvous here: PAWN writes rows with the service key
 -- (bypasses RLS), the kernel reads/writes with the public anon key.
 --
--- W.0 (this step) proves the loop with a CPU echo kernel. RLS is intentionally
--- left DISABLED on these two tables for the single-user trial — the anon key has
--- full access (the documented W.0 fallback). W.1 adds the scoped per-session JWT
--- + RLS policies so a kernel can only touch rows of its own session_id; the
--- service key is NEVER injected into the notebook.
+-- W.0 (this step) proves the loop with a CPU echo kernel. Supabase's new
+-- publishable (sb_publishable_*) key enforces RLS on the anon role, so the two
+-- tables get RLS enabled + a PERMISSIVE anon policy (the documented "anon-key-
+-- open on the two dedicated tables only" single-user-trial fallback) — without
+-- it the kernel could read but never write back results/heartbeats. W.1 replaces
+-- the permissive policy with a scoped per-session JWT policy so a kernel can only
+-- touch rows of its own session_id. The service key is NEVER injected into the
+-- notebook; the backend's service key bypasses RLS server-side.
 
 create table if not exists image_sessions (
   id            uuid primary key default gen_random_uuid(),
@@ -148,3 +151,18 @@ create index if not exists image_jobs_user_idx
   on image_jobs (user_id, created_at desc);
 create index if not exists image_jobs_session_status_idx
   on image_jobs (session_id, status);
+
+-- RLS + permissive anon policy (W.0 single-user-trial fallback; see note above).
+-- The new sb_publishable_* key maps to the anon role and is checked against RLS,
+-- so the kernel needs an explicit policy to insert/update its rows. W.1 narrows
+-- this to a per-session_id (scoped-JWT) policy.
+alter table image_sessions enable row level security;
+alter table image_jobs     enable row level security;
+
+drop policy if exists image_sessions_anon_trial on image_sessions;
+drop policy if exists image_jobs_anon_trial     on image_jobs;
+
+create policy image_sessions_anon_trial on image_sessions
+  for all to anon using (true) with check (true);
+create policy image_jobs_anon_trial on image_jobs
+  for all to anon using (true) with check (true);
