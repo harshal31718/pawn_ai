@@ -363,3 +363,22 @@ This becomes your interview script and project history.
 **Issues:** Public Kaggle API has no documented value for dual T4 (T4×2) — issue #821 unanswered; we use a single T4. Image quality not yet tuned (out of scope for now).
 **Tests:** 13 `test_generate.py` tests passing (3 new `_wait_until_idle` tests: waits-through-inflight, times-out, proceeds-on-non-200). Frontend `npm run build` clean.
 **Commit:** (this commit)
+
+### 2026-06-29 — W.0: persistent Kaggle loop proof (CPU echo) + Supabase rendezvous [imageLab]
+
+**Context:** Phase W Step W.0 — the load-bearing risk for warm sessions is *"can a batch-pushed Kaggle kernel run a long-lived internet loop for tens of minutes?"* De-risked it with the cheapest payload (CPU echo, no GPU/model), exactly as the cube POC de-risked the transport.
+
+**Built:**
+- **Schema** (`supabase/schema.sql`): `image_sessions` + `image_jobs` tables (+ indexes). RLS intentionally left disabled for the single-user W.0 trial (anon key has full access — the documented fallback); scoped per-session JWT + RLS policies are the W.1 deliverable.
+- **CPU echo notebook** (`kaggle_templates/session_poc/notebook.ipynb`): decodes the injected payload, PATCHes `status='ready'`, then loops on Supabase REST (`requests`): heartbeat each iteration, echo any pending job's prompt into `image_b64`, honor stop/timer/cap, exit cleanly.
+- **Session manager** (`core/image_session.py`): `start_session` (evict prior live → insert row → inject anon key + url payload → non-blocking `kaggle.deploy_kernel` push, CPU/internet, no dataset), `get_session_status` (liveness = status + fresh heartbeat + before expiry), `stop_session` (cooperative flag), `submit_session_job` (alive-guard → queued row), `get_job`. All Supabase/Kaggle calls blocking → routes off-load via `run_in_threadpool`.
+- **Routes** (`routes/generate.py`): `POST /generate/session/start|job|stop`, `GET /generate/session/status`, `GET /generate/job/{id}`. Session start reuses the per-`(user,model)` lock.
+- **Config/secrets**: new `supabase_anon_key` (PUBLIC) via `read_secret` + docker-compose `secrets:` block + committed `.example`; real file gitignored. Service key is NEVER injected into the notebook.
+- **Constants**: poll interval (3s), heartbeat-stale (30s), max-duration backstop (120 min), POC slug/template path.
+- **Frontend**: `client.ts` helpers (start/status/job/stop/getJob, typed `SessionStatus`/`JobResult`); minimal `components/SessionPocPanel.tsx` (duration/cap picker, live countdown, submit echo job + poll, Stop) wired into `ImageLabPage` under the active model when connected.
+
+**Security:** Audited (security-auditor PASS, 0 critical) — only the public anon key + url reach the notebook (dedicated test base64-decodes the payload and asserts the service key is absent); payload base64-injected (no code injection from prompt); no key logging. Code-reviewer PASS, 0 critical. WARN fixes applied: `start_session` fails early (412) if Supabase url/anon key missing; `submit_session_job` rejects jobs to a non-live session; conftest seeds `SUPABASE_ANON_KEY`. Deferred to W.1 (documented WARNs): RLS policies + scoped JWT (session_token is inert until then).
+
+**Tests:** 117 backend passed (24 new in `test_image_session.py`: manager + all 5 routes, mocked Supabase/Kaggle). Frontend `npm run build` clean.
+**Live verify (manual, pending user setup):** run the new schema in Supabase + add `secrets/supabase_anon_key`, then Image Lab → connect → Start warm session → submit echo job → watch the CPU kernel pick it up, echo back, heartbeat, and exit on Stop/expiry.
+**Commit:** (this commit)

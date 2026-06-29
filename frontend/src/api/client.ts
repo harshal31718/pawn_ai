@@ -131,6 +131,84 @@ export async function runKaggleImage(
   return res.json()
 }
 
+// --- Warm sessions + durable jobs (Phase W) ---------------------------------
+// W.0 proves the persistent Kaggle loop via a CPU echo kernel: start a session,
+// submit a job, poll the job row for the echoed result, stop.
+
+export interface SessionStatus {
+  status: string // none | starting | ready | stopping | ended | error
+  alive: boolean
+  session_id?: string
+  expires_at?: string | null
+  images_done?: number
+  max_images?: number | null
+}
+
+export interface JobResult {
+  job_id: string
+  status: string // queued | running | done | error
+  model?: string
+  prompt?: string
+  image_b64?: string | null
+  mime?: string | null
+  via?: string | null
+  error?: string | null
+  created_at?: string | null
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function startSession(
+  model: string,
+  durationMinutes: number,
+  maxImages?: number | null,
+): Promise<{ session_id: string; expires_at: string; status: string }> {
+  return postJson('/generate/session/start', {
+    model,
+    duration_minutes: durationMinutes,
+    max_images: maxImages ?? null,
+  })
+}
+
+export async function getSessionStatus(model: string): Promise<SessionStatus> {
+  const res = await fetch(
+    `${BASE_URL}/generate/session/status?model=${encodeURIComponent(model)}`,
+    { headers: { ...authHeaders() } },
+  )
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function submitSessionJob(
+  sessionId: string,
+  prompt: string,
+): Promise<{ job_id: string; status: string }> {
+  return postJson('/generate/session/job', { session_id: sessionId, prompt })
+}
+
+export async function stopSession(sessionId: string): Promise<void> {
+  await postJson('/generate/session/stop', { session_id: sessionId })
+}
+
+export async function getJob(jobId: string): Promise<JobResult> {
+  const res = await fetch(`${BASE_URL}/generate/job/${encodeURIComponent(jobId)}`, {
+    headers: { ...authHeaders() },
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
 export async function runKaggleCube(input: number, signal?: AbortSignal): Promise<CubeResult> {
   const res = await fetch(`${BASE_URL}/generate`, {
     method: 'POST',

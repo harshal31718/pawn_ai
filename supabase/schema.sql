@@ -100,3 +100,51 @@ as $$
     and mc.fts_doc @@ plainto_tsquery('english', query_text)
   limit match_count;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Phase W — Warm/persistent Kaggle image sessions + durable job tracking
+-- ---------------------------------------------------------------------------
+-- A warm Kaggle kernel is unreachable through Kaggle's batch API once running,
+-- so PAWN and the kernel rendezvous here: PAWN writes rows with the service key
+-- (bypasses RLS), the kernel reads/writes with the public anon key.
+--
+-- W.0 (this step) proves the loop with a CPU echo kernel. RLS is intentionally
+-- left DISABLED on these two tables for the single-user trial — the anon key has
+-- full access (the documented W.0 fallback). W.1 adds the scoped per-session JWT
+-- + RLS policies so a kernel can only touch rows of its own session_id; the
+-- service key is NEVER injected into the notebook.
+
+create table if not exists image_sessions (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       text not null,
+  model         text not null,                       -- 'sdxl' | 'flux'
+  session_token text not null,                       -- random secret the kernel presents
+  status        text not null default 'starting',    -- starting | ready | stopping | ended | error
+  expires_at    timestamptz not null,                -- the timer; kernel exits past this
+  max_images    int,                                 -- optional cap (null = time-only)
+  images_done   int not null default 0,
+  heartbeat_at  timestamptz,                         -- kernel updates each loop → liveness
+  error         text,
+  created_at    timestamptz not null default now()
+);
+
+create table if not exists image_jobs (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     text not null,                         -- direct ownership (cold jobs have no session)
+  session_id  uuid references image_sessions(id) on delete cascade,  -- NULL = cold one-shot job
+  model       text not null,                         -- 'sdxl' | 'flux'
+  prompt      text not null,
+  status      text not null default 'queued',        -- queued | running | done | error
+  image_b64   text,
+  mime        text default 'image/png',
+  via         text,
+  error       text,
+  created_at  timestamptz not null default now(),
+  started_at  timestamptz,
+  done_at     timestamptz
+);
+
+create index if not exists image_jobs_user_idx
+  on image_jobs (user_id, created_at desc);
+create index if not exists image_jobs_session_status_idx
+  on image_jobs (session_id, status);

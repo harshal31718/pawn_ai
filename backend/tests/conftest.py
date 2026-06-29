@@ -13,6 +13,7 @@ os.environ.setdefault("JWT_SECRET", "0" * 64)
 os.environ.setdefault("ENCRYPTION_SECRET", "0" * 64)
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
+os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 
 
 TEST_USER_ID = "test-user-id"

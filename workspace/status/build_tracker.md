@@ -13,10 +13,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase MU — Multi-User / Auth / BYOK / Drive
-**Active step:** Manual setup (Supabase + Google OAuth) → then verify → merge dev → main
-**Last completed:** BK-3 — Frontend settings panel (all MU code steps done)
-**Branch:** dev
+**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch)
+**Active step:** W.1 — warm session backend + FLUX persistent notebook + unified job tracking
+**Last completed:** W.0 (imageLab) — persistent Kaggle loop proof (CPU echo) + Supabase rendezvous; 117 backend tests green
+**Branch:** imageLab (merges → dev)
+**Plan:** `workspace/plan/plan_v5_warm_session.md`
+
+> Phase MU (below) is code-complete on dev/main and live-verified (OAuth + Drive + BYOK).
+> imageLab Milestones A.0/A.1 are tracked in `workspace/plan/plan_v4_kaggle_image.md`.
 
 ---
 
@@ -255,6 +259,45 @@ Completed by user on 2026-06-27. Google OAuth2 → JWT → app login verified wo
 - [ ] Second Google account → empty chat list (isolation).
 
 ### Next: commit setup fixes + merge dev → main
+
+---
+
+## Phase W — Warm Sessions + Job Tracking (imageLab)
+*Plan reference: `workspace/plan/plan_v5_warm_session.md`*
+*Branch: imageLab (merges → dev)*
+
+Goal: keep one Kaggle container **warm** so repeat images are fast (user-set timer + image cap), and
+make every generation a **durable, server-tracked job** (fixes the double-submit / lost-result bug)
+surfaced in a **Generations monitor panel**. Architecture: **Supabase job-queue rendezvous** — a
+persistent kernel loads the model once, then loops polling Supabase for prompts and writes images
+back. Image Lab only (chat composer deferred to Milestone B). Targets the top deferred item
+(FLUX ~820 s/image).
+
+- [x] **W.0 — Prove the persistent loop (CPU, no model)** ⚠️ first / load-bearing ✓
+  `image_sessions` + `image_jobs` schema; `kaggle_templates/session_poc/` CPU echo notebook;
+  `core/image_session.py` (`start_session`/`get_session_status`/`stop_session`/`submit_session_job`/`get_job`)
+  pushing via the non-blocking `kaggle.deploy_kernel`; session routes (`/generate/session/*`,
+  `/generate/job/{id}`); new `supabase_anon_key` secret (public — service key never injected);
+  minimal `SessionPocPanel` Lab control. 117 backend tests green (24 new); `npm run build` clean.
+  code-reviewer + security-auditor PASS (0 critical). RLS/scoped-JWT deferred to W.1 (documented).
+  **Live verify pending user setup:** run new schema in Supabase + add `secrets/supabase_anon_key`,
+  then Lab → Start session → submit echo job → CPU kernel echoes it back, heartbeats, exits on Stop.
+
+- [ ] **W.1 — Warm session backend + FLUX persistent notebook + unified job tracking**
+  `image_flux_session/notebook.ipynb` (load once → serve loop); full session manager; **cold
+  one-shot path retrofitted to a durable background job** (`POST /generate` → `{job_id}`,
+  fire-and-forget worker, per-`(user,model)` de-dup); `GET /generate/job/{id}` + `/generate/jobs`;
+  `supabase_jwt_secret` (scoped per-session JWT — service key never injected);
+  `tests/test_image_session.py` + `tests/test_image_jobs.py`.
+  Demo: cold Generate → refresh → job re-attaches in the panel and the result persists (bug fixed);
+  warm FLUX session → first image ~10 min, later images in **seconds**. `pytest` green.
+
+- [ ] **W.2 — Image Lab UI (session controls + Generations monitor panel)**
+  Job-driven `ImageGenerator` (submit → poll job id); new `components/GenerationsPanel.tsx` (all jobs
+  across models, status chips + thumbnails + view/download); session bar (duration/cap picker, live
+  countdown, Extend, Stop, "session ended" CTA); **server-derived button state** (disabled while a
+  model has an active job → no duplicate submit, survives refresh); `client.ts` job/session helpers.
+  Demo: full warm-session flow + monitor panel live; `npm run build` clean.
 
 ---
 

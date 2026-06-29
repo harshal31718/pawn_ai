@@ -20,6 +20,9 @@ OPENROUTER_API_KEY  = read_secret("openrouter_api_key")
 # Supabase (application database)
 SUPABASE_URL         = read_secret("supabase_url")
 SUPABASE_SERVICE_KEY = read_secret("supabase_service_key")
+# Public anon key — injected into the warm Kaggle kernel (Phase W) so it can reach
+# Supabase. PUBLIC by design; the master service_key is NEVER injected.
+SUPABASE_ANON_KEY    = read_secret("supabase_anon_key")
 
 # Encryption key for BYOK keys and Drive tokens (AES-256-GCM, 32-byte hex)
 ENCRYPTION_SECRET = read_secret("encryption_secret")

@@ -7,6 +7,7 @@ import {
   runKaggleImage,
   type ImageResult,
 } from '../api/client'
+import SessionPocPanel from './SessionPocPanel'
 
 interface Props {
   onClose: () => void
@@ -167,6 +168,9 @@ export default function ImageLabPage({ onClose }: Props) {
                   model={activeModel}
                   isConnected={isConnected}
                 />
+                {isConnected && (
+                  <SessionPocPanel key={`session-${activeModel.id}`} model={activeModel.id} />
+                )}
               </div>
             </>
           )}

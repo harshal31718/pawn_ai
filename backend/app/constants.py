@@ -33,3 +33,15 @@ KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS = 300
 # Per-user kernel slug suffixes (full slug is "<username>/<suffix>").
 KAGGLE_CUBE_SLUG = "pawn-cube-poc"
 
+# --- Warm/persistent Kaggle image sessions (Plan v5 / Phase W) ---------------
+# W.0 CPU echo notebook that proves the persistent loop + Supabase rendezvous.
+KAGGLE_SESSION_POC_TEMPLATE = KAGGLE_TEMPLATES_DIR / "session_poc" / "notebook.ipynb"
+# Single slug for the W.0 POC kernel (full slug "<username>/<suffix>").
+KAGGLE_SESSION_SLUG = "pawn-session-poc"
+# How often the persistent kernel polls Supabase for work / writes a heartbeat.
+KAGGLE_SESSION_POLL_INTERVAL_SECONDS = 3
+# A 'ready' session whose heartbeat is older than this is considered dead.
+IMAGE_SESSION_HEARTBEAT_STALE_SECONDS = 30
+# Hard backstop on a session's duration (Kaggle's max batch run-time guardrail).
+IMAGE_SESSION_MAX_DURATION_MINUTES = 120
+

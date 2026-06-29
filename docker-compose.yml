@@ -12,6 +12,7 @@ services:
       - openrouter_api_key
       - supabase_url
       - supabase_service_key
+      - supabase_anon_key
       - encryption_secret
       - google_client_id
       - google_client_secret
@@ -61,6 +62,8 @@ secrets:
     file: ./secrets/supabase_url
   supabase_service_key:
     file: ./secrets/supabase_service_key
+  supabase_anon_key:
+    file: ./secrets/supabase_anon_key
   encryption_secret:
     file: ./secrets/encryption_secret
   google_client_id:

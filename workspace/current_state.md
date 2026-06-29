@@ -1,8 +1,13 @@
 # PAWN — Current State
 
 Last updated: 2026-06-29
-Active step: Milestone A.1 (imageLab) — multi-model switch + FLUX.1-schnell working end-to-end ✓ (live-verified). Next: FLUX generation perf (~820s/image is too slow).
-Phase: imageLab branch — experimental Kaggle-backed image generation (Milestone A.1 live). Phase MU code complete on dev/main.
+Active step: Phase W / W.1 (imageLab) — warm session backend + FLUX persistent notebook + unified job tracking. W.0 (CPU echo loop proof) done. Plan: `workspace/plan/plan_v5_warm_session.md`.
+Phase: imageLab branch — Phase W (warm/persistent Kaggle sessions + durable job tracking). Targets the top deferred item: FLUX ~820s/image. Milestone A.1 (multi-model SDXL/FLUX) is live; Phase MU code complete on dev/main.
+
+> **Phase W goal:** keep one Kaggle container warm so repeat images are fast (user-set timer + image
+> cap), via a Supabase job-queue rendezvous; and make every generation a durable, server-tracked job
+> shown in a Generations monitor panel — which also fixes the reported double-submit / lost-result
+> bug (refresh/tab-switch loses the in-flight result and re-enables the button). Image Lab only.
 
 ---
 
@@ -71,7 +76,16 @@ Phase: imageLab branch — experimental Kaggle-backed image generation (Mileston
   4. **Persisted deploy state + per-model UI isolation** — deploy state survives refresh (localStorage); connector/generator keyed per model id so a running FLUX no longer disables SDXL's Generate button.
 - **Known perf issue (deferred, next focus):** ~820s/image — every push spins a fresh Kaggle container, so `pip install` + 34 GB dataset mount + 12B model load run on **every** generate (4-step inference itself is fast). Optimization not yet chosen (warm/persistent kernel, pre-baked deps, weight caching, kept-alive session).
 
-Test/build status: 94 backend tests passing (Milestone A.1 added FLUX dispatch, non-blocking deploy, and slug↔title invariant tests); frontend `npm run build` passes clean. **Manual browser verification of the optimistic + draft flow under slow Drive still pending.**
+### imageLab — Phase W / W.0: persistent Kaggle loop proof (CPU echo) + Supabase rendezvous (2026-06-29)
+
+- **Proves the load-bearing warm-session assumption** with no GPU/model: a batch-pushed Kaggle kernel runs a long-lived internet loop and rendezvous with PAWN through Supabase. `supabase/schema.sql` gains `image_sessions` + `image_jobs`; `kaggle_templates/session_poc/notebook.ipynb` is a CPU echo kernel (PATCH `ready` → loop: heartbeat, echo any pending job's prompt into `image_b64`, honor stop/timer/cap, exit).
+- `core/image_session.py`: `start_session` (evict prior live → insert row → inject **public anon key** + url payload → non-blocking `kaggle.deploy_kernel`, CPU/internet/no-dataset; fails early 412 if Supabase unconfigured), `get_session_status` (alive = status + fresh heartbeat + before expiry), `stop_session` (cooperative), `submit_session_job` (alive-guarded queued row), `get_job`. Blocking calls off-loaded via `run_in_threadpool`.
+- Routes (`routes/generate.py`): `POST /generate/session/start|job|stop`, `GET /generate/session/status`, `GET /generate/job/{id}` (session start reuses the per-`(user,model)` lock).
+- New `supabase_anon_key` secret (PUBLIC) via `config.read_secret` + docker-compose `secrets:` + committed `.example`; **the Supabase service key is never injected into the notebook** (verified by test). Constants: poll 3s / heartbeat-stale 30s / max-duration 120 min.
+- Frontend: `client.ts` session/job helpers (typed `SessionStatus`/`JobResult`); minimal `components/SessionPocPanel.tsx` (duration/cap picker, live countdown, submit echo job + poll, Stop) under the active model in `ImageLabPage`.
+- **Security/review:** security-auditor + code-reviewer PASS (0 critical). **Deferred to W.1 (documented):** RLS policies + scoped per-session JWT (RLS off for the single-user trial → anon key has full table access; `session_token` is inert until then).
+
+Test/build status: **117 backend tests passing** (24 new in `test_image_session.py`); frontend `npm run build` passes clean. **W.0 live end-to-end pending user setup** (run new schema in Supabase + add `secrets/supabase_anon_key`). Manual browser verification of the optimistic + draft flow under slow Drive still pending.
 
 ---
 
@@ -98,6 +112,7 @@ Test/build status: 94 backend tests passing (Milestone A.1 added FLUX dispatch, 
 - [x] End-to-end verified live — OAuth login + Drive-backed conversations + BYOK LLM reply (2026-06-27)
 - [x] Kaggle SDXL image generation (imageLab, Milestone A.0) — T4 GPU, deploy auto-queue; verified live (2026-06-28)
 - [x] Kaggle FLUX.1-schnell image generation (imageLab, Milestone A.1) — 2× T4 bf16 shard, model-switch UI; verified live ~820s/image (2026-06-29). Perf optimization deferred.
+- [x] Warm-session loop proof (imageLab, Phase W / W.0) — CPU echo kernel + Supabase rendezvous; backend + UI code-complete, 117 tests green (2026-06-29). Live end-to-end pending user Supabase schema + anon key.
 
 ---
 
