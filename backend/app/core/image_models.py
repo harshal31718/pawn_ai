@@ -18,8 +18,6 @@ from typing import Optional
 
 from app.constants import (
     KAGGLE_RUN_TIMEOUT_SECONDS,
-    KAGGLE_SESSION_POC_TEMPLATE,
-    KAGGLE_SESSION_SLUG,
     KAGGLE_TEMPLATES_DIR,
 )
 from app.exceptions import UnknownModelError
@@ -53,11 +51,11 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         dataset="steubk/stable-diffusion-xl-base-1-0",
         accelerator="NvidiaTeslaT4",
         run_timeout=600,
-        # SDXL's "warm session" is the cheap CPU echo POC — useful for exercising
-        # the loop/monitor without burning GPU. A real SDXL serve-loop is a follow-up.
-        session_template=KAGGLE_SESSION_POC_TEMPLATE,
-        session_slug=KAGGLE_SESSION_SLUG,
-        session_gpu=False,
+        # Warm session: load SDXL once (~1–2 min on a single T4), then serve images
+        # in seconds from the Supabase work-loop.
+        session_template=KAGGLE_TEMPLATES_DIR / "image_sdxl_session" / "notebook.ipynb",
+        session_slug="pawn-sdxl-session",
+        session_gpu=True,
     ),
     "flux": ImageModel(
         id="flux",

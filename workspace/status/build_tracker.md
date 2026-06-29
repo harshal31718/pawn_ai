@@ -13,9 +13,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch) — **CODE COMPLETE (W.0/W.1/W.2)**
-**Active step:** Live-verify W.1/W.2 end-to-end, then merge imageLab → dev. Before multi-user: scoped per-session JWT (deferred).
-**Last completed:** W.2 (imageLab) — Image Lab UI: job-driven generator + server-derived button state, GenerationsPanel monitor, session bar (countdown/Extend/Stop); `npm run build` clean, 132 backend tests green
+**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch) — **CODE COMPLETE (W.0–W.3)**
+**Active step:** Live-verify warm SDXL + FLUX sessions, then merge imageLab → dev. Before multi-user: scoped per-session JWT (deferred).
+**Last completed:** W.3 (imageLab) — real SDXL warm serve-loop (warm sessions generate images, not echo); 134 backend tests green
 **Branch:** imageLab (merges → dev)
 **Plan:** `workspace/plan/plan_v5_warm_session.md`
 
@@ -314,6 +314,15 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
   GenerationsPanel lazy-image fan-out capped at 30 (fine for trial).
   **Live verify pending:** full warm-FLUX flow + monitor panel; refresh mid-generate → job
   re-attaches in the panel + button stays disabled (the double-submit bug, visibly fixed).
+
+- [x] **W.3 — Real SDXL warm serve-loop (image generation, not echo)** ✓
+  *Plan: `workspace/plan/plan_v6_sdxl_warm_session.md`.* Added `kaggle_templates/image_sdxl_session/notebook.ipynb`
+  (mirrors the FLUX serve-loop; loads SDXL once via `AutoPipelineForText2Image` → serve loop → PNG,
+  `via kaggle:sdxl-session`). SDXL registry entry repointed to it (GPU + dataset, slug `pawn-sdxl-session`);
+  dropped the unused CPU-POC imports. SDXL session test asserts the GPU push; added a session-slug↔title
+  invariant test. No frontend change (already MIME-aware). 134 backend tests green; anon-key-only
+  injection still verified for sdxl. **Live verify pending:** SDXL → Start warm session → `Warm` in
+  ~1–2 min → Generate returns an image in seconds.
 
 ---
 

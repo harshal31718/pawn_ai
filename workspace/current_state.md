@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-29
-Active step: Phase W CODE COMPLETE (W.0/W.1/W.2) — live-verify W.1/W.2 end-to-end, then merge imageLab → dev. Scoped per-session JWT deferred (mandatory before multi-user). Plan: `workspace/plan/plan_v5_warm_session.md`.
+Active step: Phase W CODE COMPLETE (W.0–W.3) — live-verify warm SDXL + FLUX sessions, then merge imageLab → dev. Scoped per-session JWT deferred (mandatory before multi-user). Plans: `workspace/plan/plan_v5_warm_session.md`, `plan_v6_sdxl_warm_session.md`.
 Phase: imageLab branch — Phase W (warm/persistent Kaggle sessions + durable job tracking). Targets the top deferred item: FLUX ~820s/image. Milestone A.1 (multi-model SDXL/FLUX) is live; Phase MU code complete on dev/main.
 
 > **Phase W goal:** keep one Kaggle container warm so repeat images are fast (user-set timer + image
@@ -130,6 +130,7 @@ Test/build status: **132 backend tests passing**; frontend `npm run build` passe
 - [x] Warm-session loop proof (imageLab, Phase W / W.0) — CPU echo kernel + Supabase rendezvous; **LIVE-VERIFIED 2026-06-29** (kernel reached Warm, live countdown + heartbeat, 2 echo jobs round-tripped). The persistent-loop assumption is proven. Note: new sb_publishable_* keys enforce RLS → permissive anon policy added on the two tables.
 - [x] Warm FLUX serve-loop + durable job layer (imageLab, Phase W / W.1) — non-blocking job-tracked generate (de-dup, GC-safe worker), `extend_session`, `GET /generate/jobs`, FLUX persistent notebook; 132 tests green (2026-06-29). Live warm-FLUX run pending. Scoped per-session JWT deferred (mandatory before multi-user).
 - [x] Image Lab UI (imageLab, Phase W / W.2) — job-driven generator with server-derived button state (no duplicate submit, survives refresh), `GenerationsPanel` monitor (thumbnails/lightbox/download), `SessionBar` (countdown/Extend/Stop); `npm run build` clean (2026-06-29). Live end-to-end verification pending.
+- [x] Real SDXL warm serve-loop (imageLab, Phase W / W.3) — SDXL warm sessions now generate images (load once via `AutoPipelineForText2Image` → serve loop → PNG, `via kaggle:sdxl-session`) instead of echo text; registry repointed to `image_sdxl_session` notebook (GPU, slug `pawn-sdxl-session`); 134 tests green (2026-06-29). Both SDXL + FLUX warm sessions are real now. Live verify pending.
 
 ---
 

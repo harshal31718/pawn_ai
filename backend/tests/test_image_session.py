@@ -94,7 +94,11 @@ def client():
 # --- Session manager ---------------------------------------------------------
 
 
-def test_start_session_inserts_row_and_pushes_cpu_notebook():
+def test_start_session_sdxl_uses_gpu_serve_loop():
+    """SDXL warm sessions push the real GPU serve-loop (load once → generate images),
+    not the old CPU echo POC."""
+    from app.core.image_models import IMAGE_MODELS
+
     db = _FakeDB()
     captured = {}
 
@@ -110,13 +114,14 @@ def test_start_session_inserts_row_and_pushes_cpu_notebook():
          patch("app.core.image_session.kaggle.deploy_kernel", side_effect=fake_deploy):
         out = image_session.start_session("user-1", "sdxl", 60, None)
 
+    sdxl = IMAGE_MODELS["sdxl"]
     assert out["session_id"] == "image_sessions-id-1"
     assert out["status"] == "starting"
-    # Pushed as a CPU kernel (no GPU/dataset) for the echo POC.
-    assert captured["enable_gpu"] is False
+    assert captured["enable_gpu"] is True
     assert captured["enable_internet"] is True
-    assert captured["dataset_sources"] == []
-    assert captured["kernel_name"] == "pawn-session-poc"
+    assert captured["dataset_sources"] == [sdxl.dataset]
+    assert captured["accelerator"] == sdxl.accelerator
+    assert captured["kernel_name"] == sdxl.session_slug == "pawn-sdxl-session"
 
 
 def test_start_session_injects_anon_key_never_service_key():
@@ -176,6 +181,19 @@ def test_start_session_flux_uses_gpu_and_dataset():
     assert captured["enable_gpu"] is True
     assert captured["dataset_sources"] == [flux.dataset]
     assert captured["accelerator"] == flux.accelerator
+
+
+def test_session_slug_titles_round_trip():
+    """Kaggle derives a notebook slug from its title; every model's session_slug
+    must slugify back to itself or the session push 409s (same invariant as the
+    cold slugs in test_generate.py)."""
+    from app.core.image_models import IMAGE_MODELS
+
+    for spec in IMAGE_MODELS.values():
+        if not spec.session_slug:
+            continue
+        title = image_session._session_title(spec.session_slug)
+        assert title.lower().replace(" ", "-") == spec.session_slug, spec.id
 
 
 def test_extend_session_bumps_expiry_capped():

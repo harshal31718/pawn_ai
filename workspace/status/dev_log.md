@@ -426,3 +426,15 @@ This becomes your interview script and project history.
 **Fix** (`core/image_session.py` `reap_stale_jobs`): now also (a) reaps cold jobs stuck in *any* active status (queued or running) past the wall-clock (a queued cold job whose in-process worker died on a backend restart), and (b) reaps queued/running **session** jobs whose session is no longer alive (ended/stopped/expired/stale heartbeat) → marked `error` "session ended before this job ran". Since `list_jobs` calls reap every poll, the panel + button self-heal within ~3s. The pre-existing stuck job was auto-cleared on redeploy.
 **Tests:** 133 backend passing (added `test_reap_stale_jobs_reaps_jobs_of_dead_sessions`; renamed the cold reap test).
 **Commit:** (this commit)
+
+### 2026-06-29 — W.3: real SDXL warm serve-loop (warm sessions generate images, not echo) [imageLab]
+
+**Why:** A warm session on the SDXL tab returned `ECHO: <prompt>` text — SDXL's session was wired to the W.0 CPU-echo POC (placeholder; "real SDXL serve-loop is a follow-up"). Only FLUX had a real warm serve-loop. User wants warm image generation for SDXL too (load once → generate many).
+**Built:**
+- `kaggle_templates/image_sdxl_session/notebook.ipynb` (new): mirrors the FLUX serve-loop structure (cell-0 payload + Supabase REST helpers; cell-1 install; cell-2 load SDXL ONCE via `AutoPipelineForText2Image.from_pretrained(..., torch_dtype=float16, use_safetensors=True, local_files_only=True).to("cuda")` → PATCH `ready`/`error`; cell-3 serve loop with SDXL inference 4 steps / guidance 0 / 512×768 → PATCH job done + PNG, `via kaggle:sdxl-session`).
+- `core/image_models.py`: SDXL entry repointed — `session_template=image_sdxl_session`, `session_slug="pawn-sdxl-session"`, `session_gpu=True` (start_session then mounts the SDXL dataset + T4). Dropped the now-unused `KAGGLE_SESSION_POC_TEMPLATE`/`KAGGLE_SESSION_SLUG` imports (constants + session_poc notebook remain as the W.0 artifact, unreferenced).
+- No frontend change — `ImageGenerator`/`GenerationsPanel` already render PNG vs text by MIME.
+**Decision:** kept the cold path's 4 steps / guidance 0 / 512×768 for consistency (SDXL quality tuning is a separate pre-existing deferred item). The CPU echo POC stays in the repo (W.0 artifact) but is no longer user-facing — both SDXL + FLUX warm sessions are real now. SDXL loads in ~1–2 min (single T4, ~7GB fp16) vs FLUX ~10 min.
+**Tests:** 134 backend passing — rewrote `test_start_session_inserts_row_and_pushes_cpu_notebook` → `test_start_session_sdxl_uses_gpu_serve_loop` (asserts GPU + dataset + `pawn-sdxl-session`); added `test_session_slug_titles_round_trip` (Kaggle title↔slug invariant for session slugs). The anon-key-only security test (runs on sdxl) still passes → no service key in the SDXL session push.
+**Live verify pending:** SDXL → Connect → Warm session → Start → `Warm` in ~1–2 min → Generate returns an image in seconds (`via kaggle:sdxl-session`); thumbnails in Generations.
+**Commit:** (this commit)
