@@ -1,6 +1,6 @@
 # Plan 1 — Image Generation Parameter Controls
 
-**Branch:** `imageLab` → merges into `dev`
+**Branch:** `imageLab`
 **Scope:** Expose generation parameters in the UI with opt-in checkboxes. Unchecked = model default. Checked = user value is sent.
 **Effort:** Medium. UI is the bulk; backend is a thin pass-through; notebooks need 1-cell update each.
 

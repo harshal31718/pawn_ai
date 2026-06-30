@@ -25,6 +25,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from pydantic import BaseModel
+
 from app import config
 from app.constants import (
     COLD_JOB_MAX_WALLCLOCK_SECONDS,
@@ -36,6 +38,15 @@ from app.core import generate, kaggle, key_store
 from app.core.image_models import DEFAULT_IMAGE_MODEL, get_image_model
 from app.db.supabase_client import get_db
 from app.exceptions import NotConfiguredError
+
+class ImageJobParams(BaseModel):
+    width: int | None = None
+    height: int | None = None
+    num_inference_steps: int | None = None
+    guidance_scale: float | None = None
+    negative_prompt: str | None = None
+    style_preset: str | None = None
+
 
 # Job statuses still owned by a (live) worker -- used for de-dup + liveness.
 _ACTIVE_JOB_STATUSES = ("queued", "running")
@@ -261,7 +272,12 @@ def _session_row(db, user_id: str, session_id: str) -> Optional[dict]:
     return _first(res)
 
 
-def submit_session_job(user_id: str, session_id: str, prompt: str) -> str:
+def submit_session_job(
+    user_id: str,
+    session_id: str,
+    prompt: str,
+    params: Optional[ImageJobParams] = None,
+) -> str:
     """Insert a queued job for a live (or warming-up) session.
 
     Jobs submitted during installing/loading_model queue in Supabase and are
@@ -283,6 +299,7 @@ def submit_session_job(user_id: str, session_id: str, prompt: str) -> str:
                 "model": sess["model"],
                 "prompt": prompt,
                 "status": "queued",
+                "params": params.model_dump(exclude_none=True) if params else {},
             }
         )
         .execute()
@@ -347,7 +364,12 @@ def _active_cold_job(db, user_id: str, model: str) -> Optional[dict]:
     return _first(res)
 
 
-def create_cold_job(user_id: str, model: str, prompt: str) -> tuple[str, bool]:
+def create_cold_job(
+    user_id: str,
+    model: str,
+    prompt: str,
+    params: Optional[ImageJobParams] = None,
+) -> tuple[str, bool]:
     """Create (or de-dup to) a queued cold job. Returns (job_id, created).
 
     Raises RuntimeError if a warm session is currently alive for this model.
@@ -372,6 +394,7 @@ def create_cold_job(user_id: str, model: str, prompt: str) -> tuple[str, bool]:
                 "model": model,
                 "prompt": prompt,
                 "status": "queued",
+                "params": params.model_dump(exclude_none=True) if params else {},
             }
         )
         .execute()

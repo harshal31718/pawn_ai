@@ -11,6 +11,7 @@ import {
   IMAGE_JOB_POLL_INTERVAL_MS,
   type JobResult,
   type SessionStatus,
+  type ImageParams,
 } from '../api/client'
 import SessionBar from './SessionBar'
 import GenerationsPanel from './GenerationsPanel'
@@ -82,6 +83,202 @@ const MODELS: ModelDef[] = [
     defaultPrompt: 'a cinematic shot of a highly detailed futuristic city',
   },
 ]
+
+// --- Advanced params panel ---------------------------------------------------
+
+const RATIO_TO_SIZE: Record<string, { width: number; height: number }> = {
+  '1:1':  { width: 512,  height: 512  },
+  '16:9': { width: 1024, height: 576  },
+  '9:16': { width: 576,  height: 1024 },
+  '4:3':  { width: 768,  height: 576  },
+}
+
+const STYLE_PRESET_KEYS: Record<string, string> = {
+  Photorealistic: 'photorealistic',
+  Cinematic: 'cinematic',
+  Anime: 'anime',
+  'Oil Painting': 'oil_painting',
+  Sketch: 'sketch',
+}
+
+interface ParamState<T> {
+  enabled: boolean
+  value: T
+}
+
+interface AdvancedState {
+  aspectRatio:    ParamState<string>
+  steps:          ParamState<number>
+  guidanceScale:  ParamState<number>
+  negativePrompt: ParamState<string>
+  stylePreset:    ParamState<string>
+}
+
+const INITIAL_ADVANCED: AdvancedState = {
+  aspectRatio:    { enabled: false, value: '1:1' },
+  steps:          { enabled: false, value: 20 },
+  guidanceScale:  { enabled: false, value: 7.5 },
+  negativePrompt: { enabled: false, value: '' },
+  stylePreset:    { enabled: false, value: '' },
+}
+
+function deriveParams(s: AdvancedState): ImageParams {
+  const p: ImageParams = {}
+  if (s.aspectRatio.enabled && RATIO_TO_SIZE[s.aspectRatio.value]) {
+    const sz = RATIO_TO_SIZE[s.aspectRatio.value]
+    p.width = sz.width
+    p.height = sz.height
+  }
+  if (s.steps.enabled) p.num_inference_steps = s.steps.value
+  if (s.guidanceScale.enabled) p.guidance_scale = s.guidanceScale.value
+  if (s.negativePrompt.enabled && s.negativePrompt.value.trim())
+    p.negative_prompt = s.negativePrompt.value.trim()
+  if (s.stylePreset.enabled && s.stylePreset.value)
+    p.style_preset = STYLE_PRESET_KEYS[s.stylePreset.value] ?? ''
+  return p
+}
+
+const CTL = 'w-full px-2 py-1 rounded-lg text-xs bg-theme-bg border border-theme-border/60 text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border'
+
+function AdvancedParams({
+  modelId,
+  onChange,
+}: {
+  modelId: string
+  onChange: (p: ImageParams) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [s, setS] = useState<AdvancedState>(INITIAL_ADVANCED)
+  const isFlux = modelId === 'flux'
+
+  function update<K extends keyof AdvancedState>(key: K, patch: Partial<AdvancedState[K]>) {
+    const next = { ...s, [key]: { ...s[key], ...patch } } as AdvancedState
+    setS(next)
+    onChange(deriveParams(next))
+  }
+
+  const rowCls = (enabled: boolean) =>
+    `pl-5 space-y-1 transition-opacity ${enabled ? '' : 'opacity-40 pointer-events-none'}`
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 text-[11px] text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}`}>
+          <path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z" />
+        </svg>
+        Advanced
+      </button>
+
+      {open && (
+        <div className="space-y-3 p-3 rounded-xl bg-theme-bg border border-theme-border/40">
+
+          {/* Aspect Ratio */}
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={s.aspectRatio.enabled}
+                onChange={(e) => update('aspectRatio', { enabled: e.target.checked })}
+                className="w-3.5 h-3.5 rounded accent-theme-brand" />
+              <span className="text-xs font-medium text-theme-text">Aspect Ratio</span>
+            </label>
+            <div className={rowCls(s.aspectRatio.enabled)}>
+              <select value={s.aspectRatio.value}
+                onChange={(e) => update('aspectRatio', { value: e.target.value })}
+                className={CTL}>
+                {Object.entries(RATIO_TO_SIZE).map(([r, sz]) => (
+                  <option key={r} value={r}>{r} — {sz.width}×{sz.height}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Inference Steps */}
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={s.steps.enabled}
+                onChange={(e) => update('steps', { enabled: e.target.checked })}
+                className="w-3.5 h-3.5 rounded accent-theme-brand" />
+              <span className="text-xs font-medium text-theme-text">Inference Steps</span>
+            </label>
+            <div className={rowCls(s.steps.enabled)}>
+              <div className="flex items-center gap-2">
+                <input type="range" min={4} max={50} value={s.steps.value}
+                  onChange={(e) => update('steps', { value: Number(e.target.value) })}
+                  className="flex-1 accent-theme-brand" />
+                <span className="text-xs w-6 text-right tabular-nums text-theme-text-muted">{s.steps.value}</span>
+              </div>
+              <div className="text-[10px] text-theme-text-muted">4 – 50</div>
+            </div>
+          </div>
+
+          {/* Guidance Scale */}
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={s.guidanceScale.enabled}
+                onChange={(e) => update('guidanceScale', { enabled: e.target.checked })}
+                className="w-3.5 h-3.5 rounded accent-theme-brand" />
+              <span className="text-xs font-medium text-theme-text">Guidance Scale</span>
+            </label>
+            <div className={rowCls(s.guidanceScale.enabled)}>
+              <div className="flex items-center gap-2">
+                <input type="range" min={1} max={20} step={0.5} value={s.guidanceScale.value}
+                  onChange={(e) => update('guidanceScale', { value: Number(e.target.value) })}
+                  className="flex-1 accent-theme-brand" />
+                <span className="text-xs w-8 text-right tabular-nums text-theme-text-muted">{s.guidanceScale.value}</span>
+              </div>
+              {isFlux
+                ? <div className="text-[10px] text-amber-600 dark:text-amber-400">FLUX is guidance-free — this value is ignored</div>
+                : <div className="text-[10px] text-theme-text-muted">1.0 – 20.0</div>}
+            </div>
+          </div>
+
+          {/* Negative Prompt */}
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={s.negativePrompt.enabled}
+                onChange={(e) => update('negativePrompt', { enabled: e.target.checked })}
+                className="w-3.5 h-3.5 rounded accent-theme-brand" />
+              <span className="text-xs font-medium text-theme-text">Negative Prompt</span>
+            </label>
+            <div className={rowCls(s.negativePrompt.enabled)}>
+              <input type="text" value={s.negativePrompt.value}
+                onChange={(e) => update('negativePrompt', { value: e.target.value })}
+                placeholder="avoid: blurry, cartoon, text…"
+                className={CTL} />
+            </div>
+          </div>
+
+          {/* Style Preset */}
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={s.stylePreset.enabled}
+                onChange={(e) => update('stylePreset', { enabled: e.target.checked })}
+                className="w-3.5 h-3.5 rounded accent-theme-brand" />
+              <span className="text-xs font-medium text-theme-text">Style Preset</span>
+            </label>
+            <div className={rowCls(s.stylePreset.enabled)}>
+              <select value={s.stylePreset.value}
+                onChange={(e) => update('stylePreset', { value: e.target.value })}
+                className={CTL}>
+                <option value="">None</option>
+                {Object.keys(STYLE_PRESET_KEYS).map((k) => (
+                  <option key={k} value={k}>{k}</option>
+                ))}
+              </select>
+              <div className="text-[10px] text-theme-text-muted mt-0.5">Appended to prompt on the backend</div>
+            </div>
+          </div>
+
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Page -------------------------------------------------------------------
 
 export default function ImageLabPage({ onClose }: Props) {
   useEffect(() => {
@@ -438,6 +635,7 @@ function ImageGenerator({
   onSubmitted: () => void
 }) {
   const [prompt, setPrompt] = useState('')
+  const [advParams, setAdvParams] = useState<ImageParams>({})
   const [session, setSession] = useState<SessionStatus | null>(null)
   // Set of job IDs submitted this session — watched for inline result display.
   // The server-backed GenerationsPanel is the source of truth; this just drives
@@ -450,6 +648,7 @@ function ImageGenerator({
   // Clear local state when model changes (panel stays mounted, model prop changes).
   useEffect(() => {
     setPrompt('')
+    setAdvParams({})
     setLatestResult(null)
     setError(null)
     setWatchIds(new Set())
@@ -526,10 +725,11 @@ function ImageGenerator({
     setError(null)
     setSubmitting(true)
     try {
+      const params = Object.keys(advParams).length > 0 ? advParams : undefined
       const { job_id } =
         hasSession && session?.session_id
-          ? await submitSessionJob(session.session_id, prompt.trim())
-          : await runGenerate(model.id, prompt.trim())
+          ? await submitSessionJob(session.session_id, prompt.trim(), params)
+          : await runGenerate(model.id, prompt.trim(), params)
       setWatchIds((prev) => new Set([...prev, job_id]))
       setPrompt('') // clear immediately so user can type the next prompt
       onSubmitted()
@@ -556,6 +756,7 @@ function ImageGenerator({
           placeholder="Describe the image you want to generate..."
           className="w-full h-20 px-3 py-2 rounded-xl text-sm bg-theme-bg border border-theme-border/60 text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-border disabled:opacity-60 resize-none"
         />
+        <AdvancedParams modelId={model.id} onChange={setAdvParams} />
         <button
           type="button"
           onClick={handleGenerate}

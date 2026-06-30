@@ -13,9 +13,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase W — Warm Sessions + Job Tracking (imageLab branch) — CODE COMPLETE
-**Active step:** None — all W steps done. Next: merge imageLab → dev, then mobile readiness polish or image param controls.
-**Last completed:** W.6 (imageLab) — heartbeat stale threshold raised to 90 s, cold-job blocked while warm session live, GPU limit surfaced as actionable error, warmup-phase queuing (installing/loading_model phases visible in SessionBar), independent per-model panels always mounted.
+**Active phase:** Plan 1 — Image Generation Parameter Controls (imageLab branch)
+**Active step:** All IP steps done. Next: Plan 2 (image refinement / img2img).
+**Last completed:** IP-4 (imageLab) — Advanced params panel (aspect ratio, steps, guidance scale, negative prompt, style preset) with checkbox-per-param; backend params pass-through and JSONB storage; style suffix on backend; SDXL + FLUX warm-session notebooks read params from job row. 136 backend tests green; npm run build clean.
 **Branch:** imageLab (merges → dev)
 **Plan:** `workspace/implemented_phases/phase_5_kaggle_image.md` (complete)
 

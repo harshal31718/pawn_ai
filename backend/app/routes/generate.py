@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core import generate, image_session
 from app.core.image_models import DEFAULT_IMAGE_MODEL
+from app.core.image_session import ImageJobParams
 
 router = APIRouter(prefix="/generate", tags=["generate"])
 
@@ -47,11 +48,21 @@ def _spawn_bg(coro) -> None:
     task.add_done_callback(_bg_tasks.discard)
 
 
+STYLE_SUFFIXES: dict[str, str] = {
+    "photorealistic": ", RAW photo, 8K, ultra detailed, photorealistic, DSLR",
+    "cinematic": ", cinematic shot, anamorphic lens, dramatic lighting, film grain",
+    "anime": ", anime style, studio ghibli, detailed illustration, vibrant colors",
+    "oil_painting": ", oil painting, impressionist, thick brushstrokes, canvas texture",
+    "sketch": ", pencil sketch, charcoal drawing, black and white, cross-hatching",
+}
+
+
 class GenerateRequest(BaseModel):
     modality: str = "image"
     input: int | None = None
     prompt: str | None = None
     model: str = DEFAULT_IMAGE_MODEL
+    params: ImageJobParams = ImageJobParams()
 
 
 class ConnectRequest(BaseModel):
@@ -67,6 +78,7 @@ class SessionStartRequest(BaseModel):
 class SessionJobRequest(BaseModel):
     session_id: str
     prompt: str
+    params: ImageJobParams = ImageJobParams()
 
 
 class SessionStopRequest(BaseModel):
@@ -106,6 +118,9 @@ async def generate_artifact(req: GenerateRequest, request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Field 'prompt' is required for the image modality.",
             )
+        prompt = req.prompt.strip()
+        if req.params.style_preset:
+            prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
         # Non-blocking: create a durable job row (de-duped per user+model) and run
         # the slow Kaggle round-trip as a fire-and-forget background task, returning
         # the job id immediately. Unknown model → UnknownModelError (400) here.
@@ -113,7 +128,7 @@ async def generate_artifact(req: GenerateRequest, request: Request):
         # model (cold job would waste a GPU slot alongside the running warm kernel).
         try:
             job_id, created = await run_in_threadpool(
-                image_session.create_cold_job, user_id, req.model, req.prompt.strip()
+                image_session.create_cold_job, user_id, req.model, prompt, req.params
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -175,8 +190,11 @@ async def session_job(req: SessionJobRequest, request: Request):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Field 'prompt' is required.",
         )
+    prompt = req.prompt.strip()
+    if req.params.style_preset:
+        prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
     job_id = await run_in_threadpool(
-        image_session.submit_session_job, user_id, req.session_id, req.prompt.strip()
+        image_session.submit_session_job, user_id, req.session_id, prompt, req.params
     )
     return {"job_id": job_id, "status": "queued"}
 

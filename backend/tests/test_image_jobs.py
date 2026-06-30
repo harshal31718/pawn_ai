@@ -219,7 +219,8 @@ def test_route_generate_image_is_non_blocking(client):
         resp = client.post("/generate", json={"modality": "image", "prompt": "a city"})
     assert resp.status_code == 200
     assert resp.json() == {"job_id": "j9", "status": "queued"}
-    mk.assert_called_once_with("test-user-id", "sdxl", "a city")
+    args = mk.call_args.args
+    assert args[:3] == ("test-user-id", "sdxl", "a city")
 
 
 def test_route_generate_image_dedup_skips_worker(client):

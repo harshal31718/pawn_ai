@@ -36,8 +36,10 @@ def test_generate_image_returns_job_id(client):
         resp = client.post("/generate", json={"modality": "image", "prompt": "a futuristic city"})
     assert resp.status_code == 200
     assert resp.json() == {"job_id": "job-1", "status": "queued"}
-    # Model defaults to sdxl when omitted.
-    mk.assert_called_once_with("test-user-id", "sdxl", "a futuristic city")
+    # Model defaults to sdxl when omitted; empty params object forwarded.
+    args = mk.call_args.args
+    assert args[:3] == ("test-user-id", "sdxl", "a futuristic city")
+    assert args[3].model_dump(exclude_none=True) == {}
 
 
 def test_generate_image_passes_model_through(client):
@@ -49,7 +51,8 @@ def test_generate_image_passes_model_through(client):
         )
     assert resp.status_code == 200
     assert resp.json()["job_id"] == "job-2"
-    mk.assert_called_once_with("test-user-id", "flux", "a city")
+    args = mk.call_args.args
+    assert args[:3] == ("test-user-id", "flux", "a city")
 
 
 def test_generate_unknown_model_400(client):
@@ -327,3 +330,36 @@ def test_deploy_kernel_treats_409_as_already_deployed():
         )
     assert fake.post_calls == 1  # single attempt
     assert fake.get_calls == 0  # never waited on the busy slug
+
+
+def test_generate_image_stores_params(client):
+    """Non-default params are forwarded to create_cold_job."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-3", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        resp = client.post(
+            "/generate",
+            json={
+                "modality": "image",
+                "prompt": "a city",
+                "params": {"num_inference_steps": 10, "guidance_scale": 5.0},
+            },
+        )
+    assert resp.status_code == 200
+    params_arg = mk.call_args.args[3]
+    assert params_arg.num_inference_steps == 10
+    assert params_arg.guidance_scale == 5.0
+
+
+def test_generate_image_style_suffix_applied(client):
+    """Style preset suffix is appended to the prompt before the job is created."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-4", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a city", "params": {"style_preset": "cinematic"}},
+        )
+    stored_prompt = mk.call_args.args[2]
+    assert stored_prompt.startswith("a city")
+    assert "cinematic shot" in stored_prompt

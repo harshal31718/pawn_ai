@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-06-30
-Active step: Phase W fully complete (W.0–W.6). Next: merge imageLab → dev, then mobile readiness polish (plan_4_mobileReadiness.md) or image param controls (ideas.md). Phase 3 (WebCrypto client-side encryption) remains deferred.
+Active step: Plan 1 (image params) complete. Next: Plan 2 (image refinement / img2img).
 Phase: imageLab branch — Phase W done. Plan archived at `workspace/implemented_phases/phase_5_kaggle_image.md`.
 
 > **Phase W goal:** keep one Kaggle container warm so repeat images are fast (user-set timer + image
@@ -132,6 +132,7 @@ Test/build status: **132 backend tests passing**; frontend `npm run build` passe
 - [x] Image Lab UI (imageLab, Phase W / W.2) — job-driven generator with server-derived button state (no duplicate submit, survives refresh), `GenerationsPanel` monitor (thumbnails/lightbox/download), `SessionBar` (countdown/Extend/Stop); `npm run build` clean (2026-06-29). Live end-to-end verification pending.
 - [x] Real SDXL warm serve-loop (imageLab, Phase W / W.3) (load once via `AutoPipelineForText2Image` → serve loop → PNG, `via kaggle:sdxl-session`) instead of echo text; registry repointed to `image_sdxl_session` notebook (GPU, slug `pawn-sdxl-session`); 134 tests green (2026-06-29). Both SDXL + FLUX warm sessions are real now.
 - [x] Session startup observability + liveness fixes + per-model panels (imageLab, Phase W / W.4–W.6) — Notebooks patch `installing`→`loading_model`→`ready` at phase boundaries; `_LIVE_STATUSES` extended; `SessionBar` shows phase-specific messages. Heartbeat stale threshold raised 30→90 s (fixes false "Session ended" during FLUX inference). `create_cold_job` blocks if a warm session is live (prevents GPU slot waste). Kaggle GPU limit surfaced as actionable message. Tab switcher replaced with always-mounted stacked `ModelPanel` components — each panel owns its own jobs poll, `SessionBar`, `ImageGenerator`, and `GenerationsPanel` (fixes session state loss on tab switch). Commit: 5728b9e.
+- [x] Image generation parameter controls (imageLab, Plan 1 / IP-1–IP-4) — `image_jobs.params JSONB` column (migration: `supabase/add_image_jobs_params.sql`); `ImageJobParams` Pydantic model; `create_cold_job` + `submit_session_job` store params; style suffix applied on backend before storing; SDXL + FLUX warm-session notebooks read `params` from job row (steps/guidance/size/negative_prompt); `AdvancedParams` component in `ImageLabPage` (collapsible, checkbox-per-param: aspect ratio, inference steps, guidance scale, negative prompt, style preset); FLUX guidance-free note in UI; `runGenerate`/`submitSessionJob` in `client.ts` accept optional `params`. 136 backend tests green; npm run build clean.
 
 ---
 

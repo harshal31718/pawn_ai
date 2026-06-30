@@ -1,6 +1,6 @@
 # Plan 4 — Image Refinement (img2img + Iterative Improvement)
 
-**Branch:** `imageLab` → merges into `dev`
+**Branch:** `imageLab`
 **Prerequisite:** Plan 1 (image params) — adds the `params` column and pass-through that this plan extends.
 **Scope:** Two entry points for img2img: (1) upload a source image alongside the prompt; (2) click Refine on a completed generation to iterate on it. Both flow through the same backend and notebook path.
 

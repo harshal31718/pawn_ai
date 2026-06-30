@@ -88,6 +88,15 @@ export interface ImageResult {
   via?: string
 }
 
+export interface ImageParams {
+  width?: number
+  height?: number
+  num_inference_steps?: number
+  guidance_scale?: number
+  negative_prompt?: string
+  style_preset?: string
+}
+
 export async function connectKaggle(model = 'sdxl'): Promise<void> {
   const res = await fetch(`${BASE_URL}/generate/connect`, {
     method: 'POST',
@@ -119,8 +128,14 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export async function runGenerate(
   model: string,
   prompt: string,
+  params?: ImageParams,
 ): Promise<{ job_id: string; status: string }> {
-  return postJson('/generate', { modality: 'image', prompt, model })
+  return postJson('/generate', {
+    modality: 'image',
+    prompt,
+    model,
+    ...(params && Object.keys(params).length > 0 ? { params } : {}),
+  })
 }
 
 /** Cold Generate: submit a job, then poll it to completion. Preserves the Lab's
@@ -207,8 +222,13 @@ export async function getSessionStatus(model: string): Promise<SessionStatus> {
 export async function submitSessionJob(
   sessionId: string,
   prompt: string,
+  params?: ImageParams,
 ): Promise<{ job_id: string; status: string }> {
-  return postJson('/generate/session/job', { session_id: sessionId, prompt })
+  return postJson('/generate/session/job', {
+    session_id: sessionId,
+    prompt,
+    ...(params && Object.keys(params).length > 0 ? { params } : {}),
+  })
 }
 
 export async function stopSession(sessionId: string): Promise<void> {

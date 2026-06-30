@@ -435,7 +435,8 @@ def test_route_session_job(client):
         )
     assert resp.status_code == 200
     assert resp.json() == {"job_id": "j1", "status": "queued"}
-    m.assert_called_once_with("test-user-id", "s1", "a cat")
+    args = m.call_args.args
+    assert args[:3] == ("test-user-id", "s1", "a cat")
 
 
 def test_route_session_job_requires_prompt(client):
