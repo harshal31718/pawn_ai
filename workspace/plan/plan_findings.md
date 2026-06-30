@@ -9,3 +9,5 @@
 2. we can also use kaggle notebook to use kaggle given models via apis, 
     --- either by hosting and running model on kaggle
     --- or by api, but using notebook as intermediate
+
+3. the model selection button is removed from search bar tab

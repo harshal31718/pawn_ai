@@ -1,5 +1,5 @@
 // Fallback to localhost for local dev without a .env file
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+export const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 function getToken(): string | null {
   return localStorage.getItem('pawn-token')
@@ -281,24 +281,8 @@ export async function runKaggleCube(input: number, signal?: AbortSignal): Promis
     signal,
   })
 
-  if (res.status === 401) {
-    localStorage.removeItem('pawn-token')
-    localStorage.removeItem('pawn-user')
-    window.location.reload()
-    throw new Error('Session expired')
-  }
-
-  if (!res.ok) {
-    let detail = `Request failed: ${res.status}`
-    try {
-      const body = await res.json()
-      if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
-    } catch {
-      /* non-JSON error body — keep the status message */
-    }
-    throw new Error(detail)
-  }
-
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
 }
 
@@ -347,16 +331,10 @@ export async function streamChat(
     return
   }
 
-  if (res.status === 401) {
-    // Token expired or missing — trigger re-login
-    localStorage.removeItem('pawn-token')
-    localStorage.removeItem('pawn-user')
-    window.location.reload()
-    return
-  }
+  if (handle401(res)) return
 
   if (!res.ok) {
-    onError(`Request failed: ${res.status}`)
+    onError(await errorDetail(res))
     return
   }
 
@@ -473,7 +451,8 @@ export interface ConversationDetail {
 
 export async function fetchConversations(): Promise<ConversationMeta[]> {
   const res = await fetch(`${BASE_URL}/conversations`, { headers: authHeaders() })
-  if (!res.ok) throw new Error('Failed to fetch conversations')
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
 }
 
@@ -487,13 +466,15 @@ export async function createConversation(title?: string, modelId?: string, id?: 
       ...(modelId ? { model_id: modelId } : {}),
     }),
   })
-  if (!res.ok) throw new Error('Failed to create conversation')
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
 }
 
 export async function fetchConversation(convId: string): Promise<ConversationDetail> {
   const res = await fetch(`${BASE_URL}/conversations/${convId}`, { headers: authHeaders() })
-  if (!res.ok) throw new Error(`Failed to fetch conversation: ${convId}`)
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
 }
 
@@ -502,9 +483,10 @@ export async function deleteConversation(convId: string): Promise<void> {
     method: 'DELETE',
     headers: authHeaders(),
   })
+  if (handle401(res)) throw new Error('Session expired')
   // DELETE is idempotent: a 404 means it's already gone — treat as success.
   if (res.status === 404) return
-  if (!res.ok) throw new Error(`Failed to delete conversation: ${convId}`)
+  if (!res.ok) throw new Error(await errorDetail(res))
 }
 
 export async function updateConversationTitle(convId: string, title: string): Promise<ConversationMeta> {
@@ -513,7 +495,8 @@ export async function updateConversationTitle(convId: string, title: string): Pr
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ title }),
   })
-  if (!res.ok) throw new Error(`Failed to update conversation title: ${convId}`)
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
 }
 
@@ -529,14 +512,16 @@ export interface RegistryModel {
 
 export async function fetchRegistryModels(): Promise<RegistryModel[]> {
   const res = await fetch(`${BASE_URL}/registry/models`, { headers: authHeaders() })
-  if (!res.ok) throw new Error('Failed to fetch registry models')
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
 }
 
 // BYOK key management
 export async function getKeys(): Promise<string[]> {
   const res = await fetch(`${BASE_URL}/keys`, { headers: authHeaders() })
-  if (!res.ok) throw new Error('Failed to fetch keys')
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
   const data = await res.json()
   return data.providers ?? []
 }
@@ -547,7 +532,8 @@ export async function setKey(provider: string, apiKey: string): Promise<void> {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ api_key: apiKey }),
   })
-  if (!res.ok) throw new Error(`Failed to set key for ${provider}`)
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
 }
 
 export async function deleteKey(provider: string): Promise<void> {
@@ -555,5 +541,6 @@ export async function deleteKey(provider: string): Promise<void> {
     method: 'DELETE',
     headers: authHeaders(),
   })
-  if (!res.ok) throw new Error(`Failed to delete key for ${provider}`)
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
 }

@@ -11,7 +11,6 @@ export default function SettingsPage() {
   const {
     theme,
     setTheme,
-    isDark,
     displayName,
     handleSaveDisplayName,
     availableModels,
@@ -31,7 +30,6 @@ export default function SettingsPage() {
       onClose={() => navigate('/chat')}
       theme={theme}
       onChangeTheme={setTheme}
-      isDark={isDark}
       displayName={displayName}
       onSaveDisplayName={handleSaveDisplayName}
       models={availableModels}

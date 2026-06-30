@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getJob, type JobResult } from '../api/client'
-
-export type RefineHandler = (job: JobResult, imageB64: string) => void
+import { STYLE_PRESET_LABEL_MAP, type RefineHandler } from '../types'
 
 /**
  * The Generations monitor (Phase W.2) — a collapsible panel listing every job
@@ -34,20 +33,12 @@ function downloadName(dataUrl: string, id = 'image'): string {
   return `pawn-${id}.${m ? m[1] : 'png'}`
 }
 
-// Inverse of ImageLabPage's STYLE_PRESET_KEYS map: value → display label.
-const STYLE_PRESET_LABELS: Record<string, string> = {
-  photorealistic: 'Photorealistic',
-  cinematic: 'Cinematic',
-  anime: 'Anime',
-  oil_painting: 'Oil Painting',
-  sketch: 'Sketch',
-}
-
 const CHIP: Record<string, string> = {
-  queued: 'bg-theme-bg text-theme-text-muted border-theme-border/60',
-  running: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30',
-  done: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
+  queued: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30',
+  running: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
+  done: 'bg-emerald-600 dark:bg-emerald-500 text-white dark:text-zinc-950 border-transparent shadow-sm',
   error: 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30',
+  unknown: 'bg-theme-border/30 text-theme-text-muted border-theme-border/40',
 }
 
 function JobRow({
@@ -56,7 +47,7 @@ function JobRow({
   onRefine,
 }: {
   job: JobResult
-  onView: (src: string, alt: string) => void
+  onView: (src: string, alt: string, jobId: string) => void
   onRefine?: RefineHandler
 }) {
   const [src, setSrc] = useState<string | null>(null)
@@ -109,7 +100,7 @@ function JobRow({
   }
 
   const presetKey = typeof job.params?.style_preset === 'string' ? job.params.style_preset : null
-  const stylePreset = presetKey ? (STYLE_PRESET_LABELS[presetKey] ?? presetKey) : null
+  const stylePreset = presetKey ? (STYLE_PRESET_LABEL_MAP[presetKey] ?? presetKey) : null
 
   const running = job.status === 'running'
 
@@ -127,15 +118,22 @@ function JobRow({
   return (
     <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-theme-border/50 bg-theme-surface">
       {/* Thumbnail / placeholder */}
-      <div className="w-10 h-10 shrink-0 rounded-md overflow-hidden bg-theme-bg border border-theme-border/50 flex items-center justify-center">
-        {src ? (
+      {src ? (
+        <button
+          type="button"
+          onClick={() => onView(src, job.prompt ?? 'generation', job.job_id)}
+          className="w-10 h-10 shrink-0 rounded-md overflow-hidden bg-theme-bg border border-theme-border/50 flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity focus:outline-none focus:ring-1 focus:ring-theme-brand"
+          title="View full image"
+        >
           <img src={src} alt={job.prompt ?? ''} className="w-full h-full object-cover" />
-        ) : (
+        </button>
+      ) : (
+        <div className="w-10 h-10 shrink-0 rounded-md overflow-hidden bg-theme-bg border border-theme-border/50 flex items-center justify-center">
           <span className="text-[9px] text-theme-text-muted">
             {job.status === 'done' && !isImage(job) ? 'txt' : '—'}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Content column */}
       <div className="min-w-0 flex-1">
@@ -191,10 +189,10 @@ function JobRow({
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
             <span
               className={`inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full border shrink-0 ${
-                CHIP[job.status] ?? CHIP.queued
+                CHIP[job.status] ?? CHIP.unknown
               }`}
             >
-              {running && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />}
+              {running && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
               {job.status}
             </span>
             <span className="text-[9px] text-theme-text-muted shrink-0">{relTime(job.created_at)}</span>
@@ -210,16 +208,9 @@ function JobRow({
         </div>
       </div>
 
-      {/* View / Download / Refine stacked vertically at far right */}
+      {/* Download / Refine stacked vertically at far right */}
       {src && (
         <div className="flex flex-col items-stretch gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => onView(src, job.prompt ?? 'generation')}
-            className="px-2 py-1 rounded-md text-[10px] font-semibold text-theme-text border border-theme-border/60 hover:bg-theme-surface-hover cursor-pointer text-center"
-          >
-            View
-          </button>
           <a
             href={src}
             download={downloadName(src, job.job_id)}
@@ -230,10 +221,7 @@ function JobRow({
           {onRefine && (
             <button
               type="button"
-              onClick={() => {
-                const b64 = src.replace(/^data:[^;]+;base64,/, '')
-                onRefine(job, b64)
-              }}
+              onClick={() => onRefine(job, src)}
               className="px-2 py-1 rounded-md text-[10px] font-semibold text-theme-brand border border-theme-brand/30 hover:bg-theme-brand/10 cursor-pointer text-center"
             >
               Refine
@@ -252,68 +240,54 @@ export default function GenerationsPanel({
   jobs: JobResult[]
   onRefine?: RefineHandler
 }) {
-  const [open, setOpen] = useState(true)
-  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string; jobId: string } | null>(null)
+
+  useEffect(() => {
+    if (!lightbox) return
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setLightbox(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightbox])
 
   const runningCount = jobs.filter((j) => j.status === 'running').length
   const queuedCount = jobs.filter((j) => j.status === 'queued').length
 
   return (
-    <div className="rounded-xl border border-theme-border/60 bg-theme-surface">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-4 py-2.5 cursor-pointer"
-      >
+    <div className="h-full flex flex-col rounded-xl border border-theme-border/60 bg-theme-surface overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border/40 bg-theme-surface-hover/30 shrink-0">
         <span className="text-xs font-semibold text-theme-text">
           Generations
           <span className="ml-1.5 text-[10px] font-normal text-theme-text-muted">
             {jobs.length}
             {runningCount > 0 && (
-              <span className="text-amber-500 dark:text-amber-400"> · {runningCount} running</span>
+              <span className="text-emerald-500 dark:text-emerald-400"> · {runningCount} running</span>
             )}
-            {queuedCount > 0 && <> · {queuedCount} queued</>}
+            {queuedCount > 0 && (
+              <span className="text-amber-500 dark:text-amber-400"> · {queuedCount} queued</span>
+            )}
           </span>
         </span>
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={2}
-          stroke="currentColor"
-          className={`w-3.5 h-3.5 text-theme-text-muted transition-transform ${open ? 'rotate-180' : ''}`}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-        </svg>
-      </button>
+      </div>
 
-      {open && (
-        <div className="px-3 pb-3 space-y-1.5 max-h-[340px] overflow-y-auto">
-          {jobs.length === 0 ? (
-            <div className="text-[11px] text-theme-text-muted px-1 py-2">
-              No generations yet. Generate an image — it'll appear here and persist across refreshes.
-            </div>
-          ) : (
-            jobs.map((j) => (
-              <JobRow key={j.job_id} job={j} onView={(src, alt) => setLightbox({ src, alt })} onRefine={onRefine} />
-            ))
-          )}
-        </div>
-      )}
+      <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+        {jobs.map((j) => (
+          <JobRow key={j.job_id} job={j} onView={(src, alt, jobId) => setLightbox({ src, alt, jobId })} onRefine={onRefine} />
+        ))}
+      </div>
 
       {lightbox && (
         <div
           className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
           onClick={() => setLightbox(null)}
         >
-          <div className="max-w-2xl w-full space-y-3" onClick={(e) => e.stopPropagation()}>
-            <img src={lightbox.src} alt={lightbox.alt} className="w-full h-auto rounded-xl shadow-2xl" />
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-white/80 truncate">{lightbox.alt}</span>
-              <div className="flex items-center gap-2">
+          <div className="flex flex-col max-w-[90vw] max-h-[90vh] space-y-3" onClick={(e) => e.stopPropagation()}>
+            <img src={lightbox.src} alt={lightbox.alt} className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl mx-auto" />
+            <div className="flex items-center justify-between shrink-0">
+              <span className="text-xs text-white/80 truncate mr-4">{lightbox.alt}</span>
+              <div className="flex items-center gap-2 shrink-0">
                 <a
                   href={lightbox.src}
-                  download={downloadName(lightbox.src)}
+                  download={downloadName(lightbox.src, lightbox.jobId)}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/15 text-white hover:bg-white/25 cursor-pointer"
                 >
                   Download

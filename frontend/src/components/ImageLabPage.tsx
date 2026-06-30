@@ -1,66 +1,19 @@
-import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  getKaggleConfig,
-  setKaggleConfig,
-  deleteKaggleConfig,
   connectKaggle,
-  runGenerate,
-  submitSessionJob,
-  getJob,
   listJobs,
   IMAGE_JOB_POLL_INTERVAL_MS,
   type JobResult,
   type SessionStatus,
-  type ImageParams,
 } from '../api/client'
-import SessionBar from './SessionBar'
-import GenerationsPanel, { type RefineHandler } from './GenerationsPanel'
+import GenerationsPanel from './GenerationsPanel'
+import KaggleCredentials from './KaggleCredentials'
+import ImageGenerator, { type ModelDef, WARMUP_STATUSES } from './ImageGenerator'
+import { loadDeployed, saveDeployed } from '../store/deployedStore'
+import type { RefineHandler } from '../types'
 
 interface Props {
   onClose: () => void
-}
-
-/**
- * A generative model exposed in the lab. Each one gets a tab in the
- * horizontal model bar and renders its own deploy + generate panel.
- * Add new models here to surface them as additional tabs.
- */
-interface ModelDef {
-  id: string
-  /** Short label shown in the model tab bar. */
-  title: string
-  /** Heading shown above the generator panel. */
-  heading: string
-  /** Copy explaining what the deploy step pushes to Kaggle. */
-  deployDescription: string
-  /** Notebook slug pushed to Kaggle, surfaced in the GPU warning. */
-  notebookSlug: string
-  defaultPrompt: string
-}
-
-/**
- * Deploy is a one-time step per model (the notebook lives in the user's Kaggle
- * account afterwards), so we persist which models have been deployed and restore
- * it on load — otherwise Generate would be re-locked on every refresh until the
- * user pointlessly re-clicked Connect.
- */
-const DEPLOYED_KEY = 'pawn-kaggle-deployed'
-
-function loadDeployed(): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(DEPLOYED_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    return {}
-  }
-}
-
-function saveDeployed(map: Record<string, boolean>) {
-  try {
-    localStorage.setItem(DEPLOYED_KEY, JSON.stringify(map))
-  } catch {
-    /* ignore quota / disabled storage */
-  }
 }
 
 const MODELS: ModelDef[] = [
@@ -84,241 +37,6 @@ const MODELS: ModelDef[] = [
   },
 ]
 
-// --- Advanced params panel ---------------------------------------------------
-
-const RATIO_TO_SIZE: Record<string, { width: number; height: number }> = {
-  '1:1':  { width: 512,  height: 512  },
-  '16:9': { width: 1024, height: 576  },
-  '9:16': { width: 576,  height: 1024 },
-  '4:3':  { width: 768,  height: 576  },
-}
-
-const STYLE_PRESET_KEYS: Record<string, string> = {
-  Photorealistic: 'photorealistic',
-  Cinematic: 'cinematic',
-  Anime: 'anime',
-  'Oil Painting': 'oil_painting',
-  Sketch: 'sketch',
-}
-
-interface ParamState<T> {
-  enabled: boolean
-  value: T
-}
-
-interface AdvancedState {
-  aspectRatio:    ParamState<string>
-  steps:          ParamState<number>
-  guidanceScale:  ParamState<number>
-  negativePrompt: ParamState<string>
-  stylePreset:    ParamState<string>
-  strength:       ParamState<number>
-}
-
-const INITIAL_ADVANCED: AdvancedState = {
-  aspectRatio:    { enabled: false, value: '1:1' },
-  steps:          { enabled: false, value: 20 },
-  guidanceScale:  { enabled: false, value: 7.5 },
-  negativePrompt: { enabled: false, value: '' },
-  stylePreset:    { enabled: false, value: '' },
-  strength:       { enabled: false, value: 0.6 },
-}
-
-function deriveParams(s: AdvancedState): ImageParams {
-  const p: ImageParams = {}
-  if (s.aspectRatio.enabled && RATIO_TO_SIZE[s.aspectRatio.value]) {
-    const sz = RATIO_TO_SIZE[s.aspectRatio.value]
-    p.width = sz.width
-    p.height = sz.height
-  }
-  if (s.steps.enabled) p.num_inference_steps = s.steps.value
-  if (s.guidanceScale.enabled) p.guidance_scale = s.guidanceScale.value
-  if (s.negativePrompt.enabled && s.negativePrompt.value.trim())
-    p.negative_prompt = s.negativePrompt.value.trim()
-  if (s.stylePreset.enabled && s.stylePreset.value)
-    p.style_preset = STYLE_PRESET_KEYS[s.stylePreset.value] ?? ''
-  if (s.strength.enabled) p.strength = s.strength.value
-  return p
-}
-
-const CTL = 'w-full px-2 py-1 rounded-lg text-xs bg-theme-bg border border-theme-border/60 text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border'
-
-function AdvancedParams({
-  modelId,
-  onChange,
-  showStrength,
-  onStrengthEnabledChange,
-}: {
-  modelId: string
-  onChange: (p: ImageParams) => void
-  showStrength?: boolean
-  onStrengthEnabledChange?: (enabled: boolean) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [s, setS] = useState<AdvancedState>(INITIAL_ADVANCED)
-  const isFlux = modelId === 'flux'
-
-  function update<K extends keyof AdvancedState>(key: K, patch: Partial<AdvancedState[K]>) {
-    const next = { ...s, [key]: { ...s[key], ...patch } } as AdvancedState
-    setS(next)
-    onChange(deriveParams(next))
-    if (key === 'strength' && 'enabled' in patch && onStrengthEnabledChange) {
-      onStrengthEnabledChange(!!(patch as Partial<ParamState<number>>).enabled)
-    }
-  }
-
-  // Auto-enable strength when showStrength becomes true (initImage attached).
-  useEffect(() => {
-    if (showStrength && !s.strength.enabled) {
-      update('strength', { enabled: true })
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showStrength])
-
-  const rowCls = (enabled: boolean) =>
-    `pl-5 space-y-1 transition-opacity ${enabled ? '' : 'opacity-40 pointer-events-none'}`
-
-  return (
-    <div className="space-y-2">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 text-[11px] text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className={`w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}`}>
-          <path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z" />
-        </svg>
-        Advanced
-      </button>
-
-      {open && (
-        <div className="space-y-3 p-3 rounded-xl bg-theme-bg border border-theme-border/40">
-
-          {/* Aspect Ratio */}
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={s.aspectRatio.enabled}
-                onChange={(e) => update('aspectRatio', { enabled: e.target.checked })}
-                className="w-3.5 h-3.5 rounded accent-theme-brand" />
-              <span className="text-xs font-medium text-theme-text">Aspect Ratio</span>
-            </label>
-            <div className={rowCls(s.aspectRatio.enabled)}>
-              <select value={s.aspectRatio.value}
-                onChange={(e) => update('aspectRatio', { value: e.target.value })}
-                className={CTL}>
-                {Object.entries(RATIO_TO_SIZE).map(([r, sz]) => (
-                  <option key={r} value={r}>{r} — {sz.width}×{sz.height}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Inference Steps */}
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={s.steps.enabled}
-                onChange={(e) => update('steps', { enabled: e.target.checked })}
-                className="w-3.5 h-3.5 rounded accent-theme-brand" />
-              <span className="text-xs font-medium text-theme-text">Inference Steps</span>
-            </label>
-            <div className={rowCls(s.steps.enabled)}>
-              <div className="flex items-center gap-2">
-                <input type="range" min={4} max={50} value={s.steps.value}
-                  onChange={(e) => update('steps', { value: Number(e.target.value) })}
-                  className="flex-1 accent-theme-brand" />
-                <span className="text-xs w-6 text-right tabular-nums text-theme-text-muted">{s.steps.value}</span>
-              </div>
-              <div className="text-[10px] text-theme-text-muted">4 – 50</div>
-            </div>
-          </div>
-
-          {/* Guidance Scale */}
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={s.guidanceScale.enabled}
-                onChange={(e) => update('guidanceScale', { enabled: e.target.checked })}
-                className="w-3.5 h-3.5 rounded accent-theme-brand" />
-              <span className="text-xs font-medium text-theme-text">Guidance Scale</span>
-            </label>
-            <div className={rowCls(s.guidanceScale.enabled)}>
-              <div className="flex items-center gap-2">
-                <input type="range" min={1} max={20} step={0.5} value={s.guidanceScale.value}
-                  onChange={(e) => update('guidanceScale', { value: Number(e.target.value) })}
-                  className="flex-1 accent-theme-brand" />
-                <span className="text-xs w-8 text-right tabular-nums text-theme-text-muted">{s.guidanceScale.value}</span>
-              </div>
-              {isFlux
-                ? <div className="text-[10px] text-amber-600 dark:text-amber-400">FLUX is guidance-free — this value is ignored</div>
-                : <div className="text-[10px] text-theme-text-muted">1.0 – 20.0</div>}
-            </div>
-          </div>
-
-          {/* Negative Prompt */}
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={s.negativePrompt.enabled}
-                onChange={(e) => update('negativePrompt', { enabled: e.target.checked })}
-                className="w-3.5 h-3.5 rounded accent-theme-brand" />
-              <span className="text-xs font-medium text-theme-text">Negative Prompt</span>
-            </label>
-            <div className={rowCls(s.negativePrompt.enabled)}>
-              <input type="text" value={s.negativePrompt.value}
-                onChange={(e) => update('negativePrompt', { value: e.target.value })}
-                placeholder="avoid: blurry, cartoon, text…"
-                className={CTL} />
-            </div>
-          </div>
-
-          {/* Style Preset */}
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={s.stylePreset.enabled}
-                onChange={(e) => update('stylePreset', { enabled: e.target.checked })}
-                className="w-3.5 h-3.5 rounded accent-theme-brand" />
-              <span className="text-xs font-medium text-theme-text">Style Preset</span>
-            </label>
-            <div className={rowCls(s.stylePreset.enabled)}>
-              <select value={s.stylePreset.value}
-                onChange={(e) => update('stylePreset', { value: e.target.value })}
-                className={CTL}>
-                <option value="">None</option>
-                {Object.keys(STYLE_PRESET_KEYS).map((k) => (
-                  <option key={k} value={k}>{k}</option>
-                ))}
-              </select>
-              <div className="text-[10px] text-theme-text-muted mt-0.5">Appended to prompt on the backend</div>
-            </div>
-          </div>
-
-          {/* Strength — only shown when an init image is attached */}
-          {showStrength && (
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={s.strength.enabled}
-                  onChange={(e) => update('strength', { enabled: e.target.checked })}
-                  className="w-3.5 h-3.5 rounded accent-theme-brand" />
-                <span className="text-xs font-medium text-theme-text">Strength</span>
-              </label>
-              <div className={rowCls(s.strength.enabled)}>
-                <div className="flex items-center gap-2">
-                  <input type="range" min={0.1} max={1.0} step={0.05} value={s.strength.value}
-                    onChange={(e) => update('strength', { value: Number(e.target.value) })}
-                    className="flex-1 accent-theme-brand" />
-                  <span className="text-xs w-8 text-right tabular-nums text-theme-text-muted">{s.strength.value.toFixed(2)}</span>
-                </div>
-                <div className="text-[10px] text-theme-text-muted">0.1 – 1.0 · lower = stay closer to source image</div>
-              </div>
-            </div>
-          )}
-
-        </div>
-      )}
-    </div>
-  )
-}
-
-// --- Page -------------------------------------------------------------------
-
 export default function ImageLabPage({ onClose }: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -331,8 +49,11 @@ export default function ImageLabPage({ onClose }: Props) {
   const [hasCreds, setHasCreds] = useState(false)
   const [activeModelId, setActiveModelId] = useState(MODELS[0].id)
   const [connected, setConnected] = useState<Record<string, boolean>>(loadDeployed)
+  const [deployingModelId, setDeployingModelId] = useState<string | null>(null)
+  const [deployError, setDeployError] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<Record<string, SessionStatus | null>>({})
+  const [sessionBusy, setSessionBusy] = useState<Record<string, 'start' | 'stop' | 'extend' | null>>({})
 
-  // Shared jobs list across all models for the unified Generations history.
   const [allJobs, setAllJobs] = useState<JobResult[]>([])
   const refreshAllJobs = useCallback(async () => {
     try {
@@ -355,15 +76,35 @@ export default function ImageLabPage({ onClose }: Props) {
     })
   }
 
+  async function handleRedeployAll() {
+    setDeployingModelId('all')
+    setDeployError(null)
+    try {
+      await Promise.all(MODELS.map((m) => connectKaggle(m.id)))
+      MODELS.forEach((m) => markConnected(m.id, true))
+    } catch (err) {
+      setDeployError(err instanceof Error ? err.message : 'Redeploy all failed')
+    } finally {
+      setDeployingModelId(null)
+    }
+  }
+
+  const generatorRef = useRef<{ triggerRefine: RefineHandler } | null>(null)
+  const handleRefine: RefineHandler = useCallback((job, imageSrc) => {
+    generatorRef.current?.triggerRefine(job, imageSrc)
+  }, [])
+
+  const activeModelJobs = allJobs.filter((j) => j.model === activeModelId)
+
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-theme-bg">
+    <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-theme-bg pt-16">
       {/* Floating Top Header */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center justify-between w-full">
-        <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto">
+        <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
           <button
             type="button"
             onClick={onClose}
-            className="px-0.5 py-0 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
+            className="px-0.5 py-0 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center cursor-pointer"
             title="Back to chat"
           >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
@@ -374,602 +115,131 @@ export default function ImageLabPage({ onClose }: Props) {
         </div>
       </header>
 
-      {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto pt-20 px-6 pb-10">
-        <div className="max-w-md mx-auto space-y-5 py-4">
+      {/* Row 1: Model tabs + Kaggle credentials */}
+      <div className="px-4 pb-2.5 border-b border-theme-border/40 flex items-center justify-between">
+        {/* Model selection tabs */}
+        <div className="py-1 px-2 rounded-xl border border-theme-border/60 bg-theme-surface flex items-center gap-3 shadow-sm">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-theme-text select-none">Model</h2>
+          <div className="flex items-center gap-1">
+            {MODELS.map((m) => {
+              const active = m.id === activeModelId
+              const sStatus = sessions[m.id]?.status || 'none'
+              const sBusy = sessionBusy[m.id]
+              const isStopping = sStatus === 'stopping' || sBusy === 'stop'
+              const isRunning = sStatus === 'ready' && !isStopping
+              const isWarming = WARMUP_STATUSES.has(sStatus) && !isStopping
+              const isCurrentlyDeploying = deployingModelId === m.id || deployingModelId === 'all'
 
-          {/* 1. Kaggle credentials bar */}
-          <KaggleCredentials onChange={setHasCreds} />
+              const colorCls = active
+                ? isRunning
+                  ? 'bg-emerald-600 dark:bg-emerald-500 text-white dark:text-zinc-950 border-transparent shadow-sm'
+                  : isWarming
+                    ? 'bg-amber-500 dark:bg-amber-400 text-zinc-950 dark:text-zinc-950 border-transparent shadow-sm'
+                    : isStopping
+                      ? 'bg-red-600 dark:bg-red-500 text-white dark:text-zinc-950 border-transparent shadow-sm'
+                      : 'bg-white dark:bg-zinc-100 text-zinc-950 dark:text-zinc-950 border-transparent shadow-sm'
+                : isRunning
+                  ? 'bg-emerald-500/5 border-emerald-500/15 text-emerald-600/70 dark:text-emerald-400/70 hover:bg-emerald-500/10 hover:text-emerald-600 dark:hover:text-emerald-400'
+                  : isWarming
+                    ? 'bg-amber-500/5 border-amber-500/15 text-amber-600/70 dark:text-amber-400/70 hover:bg-amber-500/10 hover:text-amber-600 dark:hover:text-amber-400'
+                    : isStopping
+                      ? 'bg-red-500/5 border-red-500/15 text-red-600/70 dark:text-red-400/70 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400'
+                      : 'bg-white/5 border-zinc-200/10 dark:border-zinc-800/10 text-theme-text-muted hover:bg-white/10 hover:text-theme-text'
 
-          {hasCreds && (
-            <>
-              {/* 2. Model switch tabs */}
-              <div className="flex items-center gap-1.5">
-                {MODELS.map((m) => {
-                  const active = m.id === activeModelId
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => setActiveModelId(m.id)}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer border ${
-                        active
-                          ? 'bg-theme-brand text-theme-brand-text border-transparent shadow-sm'
-                          : 'bg-theme-surface text-theme-text-muted border-theme-border/60 hover:text-theme-text hover:bg-theme-surface-hover'
-                      }`}
-                    >
-                      {m.title}
-                      {connected[m.id] && (
-                        <span className={`ml-1.5 inline-block w-1.5 h-1.5 rounded-full align-middle ${active ? 'bg-theme-brand-text/80' : 'bg-emerald-500'}`} />
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-
-              {/* Model panels — ALL rendered but only active one is visible.
-                  Hidden panels stay mounted so SessionBar countdown + poll timers
-                  survive tab switches without resetting. */}
-              {MODELS.map((m) => (
-                <div key={m.id} style={{ display: m.id === activeModelId ? undefined : 'none' }}>
-                  <ModelPanel
-                    model={m}
-                    isConnected={!!connected[m.id]}
-                    onConnected={() => markConnected(m.id, true)}
-                    jobs={allJobs.filter((j) => j.model === m.id)}
-                    onSubmitted={refreshAllJobs}
-                  />
+              return (
+                <div
+                  key={m.id}
+                  onClick={() => { if (!isCurrentlyDeploying) setActiveModelId(m.id) }}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold border flex items-center gap-2 cursor-pointer transition-all ${colorCls}`}
+                >
+                  {isCurrentlyDeploying ? (
+                    <div className="flex items-center gap-1.5 select-none">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping shrink-0" />
+                      <span className="animate-pulse">Deploying…</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 select-none">
+                      <span>{m.title}</span>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${active
+                        ? 'bg-current'
+                        : isRunning
+                          ? 'bg-emerald-500 animate-pulse'
+                          : isWarming
+                            ? 'bg-amber-500 animate-pulse'
+                            : isStopping
+                              ? 'bg-red-500 animate-pulse'
+                              : 'bg-zinc-400 dark:bg-zinc-500'}`} />
+                      <span className="text-[10px] font-medium opacity-90">
+                        {isRunning ? 'Running' : isWarming ? 'Warming' : isStopping ? 'Stopping' : 'Idle'}
+                      </span>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ModelPanel({
-  model,
-  isConnected,
-  onConnected,
-  jobs,
-  onSubmitted,
-}: {
-  model: ModelDef
-  isConnected: boolean
-  onConnected: () => void
-  jobs: JobResult[]
-  onSubmitted: () => void
-}) {
-  const generatorRef = useRef<{ triggerRefine: RefineHandler } | null>(null)
-
-  const handleRefine: RefineHandler = useCallback((job, imageB64) => {
-    generatorRef.current?.triggerRefine(job, imageB64)
-  }, [])
-
-  return (
-    <div className="space-y-4">
-      <KaggleConnector model={model} isConnected={isConnected} onConnected={onConnected} />
-      <ImageGenerator
-        ref={generatorRef}
-        model={model}
-        isConnected={isConnected}
-        jobs={jobs}
-        onSubmitted={onSubmitted}
-      />
-      <GenerationsPanel jobs={jobs} onRefine={handleRefine} />
-    </div>
-  )
-}
-
-
-/** Kaggle credentials setup — compact, collapses to a single row once saved. */
-function KaggleCredentials({ onChange }: { onChange: (hasCreds: boolean) => void }) {
-  const [username, setUsername] = useState('')
-  const [apiToken, setApiToken] = useState('')
-  const [hasCreds, setHasCreds] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let active = true
-    getKaggleConfig()
-      .then((s) => {
-        if (active) {
-          setHasCreds(s.has_creds)
-          onChange(s.has_creds)
-        }
-      })
-      .catch(() => {})
-    return () => { active = false }
-  }, [onChange])
-
-  async function handleSave() {
-    if (!username.trim() || !apiToken.trim()) {
-      setError('Enter both your Kaggle username and API token.')
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      await setKaggleConfig({ username: username.trim(), api_token: apiToken.trim() })
-      setHasCreds(true)
-      onChange(true)
-      setApiToken('')
-      setEditing(false)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleRemove() {
-    setBusy(true)
-    setError(null)
-    try {
-      await deleteKaggleConfig()
-      saveDeployed({})  // creds gone → prior deploys no longer apply
-      setHasCreds(false)
-      onChange(false)
-      setUsername('')
-      setApiToken('')
-      setEditing(false)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Remove failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // Collapsed: credentials saved and not being edited.
-  if (hasCreds && !editing) {
-    return (
-      <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-theme-border/60 bg-theme-surface">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 shrink-0">
-            Saved
-          </span>
-          <span className="text-xs font-medium text-theme-text truncate">Kaggle Credentials</span>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => { setEditing(true); setError(null) }}
-            disabled={busy}
-            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-theme-text border border-theme-border/60 hover:bg-theme-surface-hover disabled:opacity-60 cursor-pointer"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={handleRemove}
-            disabled={busy}
-            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-theme-text border border-theme-border/60 hover:bg-theme-surface-hover disabled:opacity-60 cursor-pointer"
-          >
-            {busy ? '...' : 'Remove'}
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Expanded: entering or editing credentials.
-  return (
-    <div className="p-3 rounded-xl border border-theme-border/60 bg-theme-surface space-y-2.5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs font-semibold text-theme-text">Kaggle Credentials</h2>
-        {hasCreds && (
-          <button
-            type="button"
-            onClick={() => { setEditing(false); setError(null) }}
-            className="text-[11px] font-semibold text-theme-text-muted hover:text-theme-text cursor-pointer"
-          >
-            Cancel
-          </button>
-        )}
-      </div>
-
-      <div className="space-y-2">
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          disabled={busy}
-          placeholder="Kaggle username"
-          className="w-full px-3 py-2 rounded-xl text-sm bg-theme-bg border border-theme-border/60 text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-border disabled:opacity-60"
-        />
-        <input
-          type="password"
-          value={apiToken}
-          onChange={(e) => setApiToken(e.target.value)}
-          disabled={busy}
-          placeholder={hasCreds ? 'API token (saved — enter to replace)' : 'API token'}
-          className="w-full px-3 py-2 rounded-xl text-sm bg-theme-bg border border-theme-border/60 text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-border disabled:opacity-60"
-        />
-      </div>
-
-      <button
-        type="button"
-        onClick={handleSave}
-        disabled={busy}
-        className="px-4 py-2 rounded-xl text-xs font-semibold bg-theme-brand text-theme-brand-text shadow-sm hover:opacity-90 disabled:opacity-60 cursor-pointer"
-      >
-        {busy ? 'Saving...' : 'Save Credentials'}
-      </button>
-
-      {error && <div className="text-xs text-red-600 dark:text-red-400">{error}</div>}
-    </div>
-  )
-}
-
-/** Deploys the worker instance notebook first-time to user's Kaggle */
-function KaggleConnector({
-  model,
-  isConnected,
-  onConnected,
-}: {
-  model: ModelDef
-  isConnected: boolean
-  onConnected: () => void
-}) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  async function handleConnect() {
-    setBusy(true)
-    setError(null)
-    try {
-      await connectKaggle(model.id)
-      onConnected()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Connection/deploy failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="p-4 rounded-xl border border-theme-border/60 bg-theme-surface space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs font-semibold text-theme-text">Connection & Notebook Deployment</h2>
-        {isConnected && (
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-            Deployed
-          </span>
-        )}
-      </div>
-      <p className="text-xs text-theme-text-muted">{model.deployDescription}</p>
-      {isConnected && (
-        <p className="text-[10px] text-amber-600 dark:text-amber-400 bg-amber-500/10 p-2.5 rounded-xl leading-relaxed">
-          <strong>Important:</strong> If Kaggle runs fail on a P100 GPU (e.g. CUDA kernel mismatch), please open the pushed notebook <strong>{model.notebookSlug}</strong> on kaggle.com and change the Accelerator to <strong>GPU T4</strong> in the Settings panel.
-        </p>
-      )}
-      <button
-        type="button"
-        onClick={handleConnect}
-        disabled={busy}
-        className="px-4 py-2 rounded-xl text-xs font-semibold bg-theme-brand text-theme-brand-text shadow-sm hover:opacity-90 disabled:opacity-60 cursor-pointer"
-      >
-        {busy ? 'Deploying to Kaggle...' : isConnected ? 'Re-deploy Notebook' : 'Connect to Kaggle'}
-      </button>
-      {error && <div className="text-xs text-red-600 dark:text-red-400">{error}</div>}
-    </div>
-  )
-}
-
-interface InitImage {
-  preview: string        // data URL for display
-  b64?: string           // raw base64 for file uploads (no data: prefix)
-  jobId?: string         // job_id for Refine flow (server fetches image, no body bloat)
-  label: string          // filename or "Refining: …"
-  isRefinement: boolean
-}
-
-/**
- * Job-driven generator (Phase W.2 + Plan 2). Submission returns a durable job id;
- * the button's busy state is DERIVED FROM THE SERVER jobs list (disabled while this
- * model has a queued/running job). Supports img2img via file upload or Refine from
- * the Generations panel. Exposed via ref so ModelPanel can forward Refine clicks.
- */
-const ImageGenerator = forwardRef<
-  { triggerRefine: RefineHandler },
-  {
-    model: ModelDef
-    isConnected: boolean
-    jobs: JobResult[]
-    onSubmitted: () => void
-  }
->(function ImageGenerator({ model, isConnected, jobs, onSubmitted }, ref) {
-  const [prompt, setPrompt] = useState('')
-  const [advParams, setAdvParams] = useState<ImageParams>({})
-  const [session, setSession] = useState<SessionStatus | null>(null)
-  const [initImage, setInitImage] = useState<InitImage | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  // Set of job IDs submitted this session — watched for inline result display.
-  // The server-backed GenerationsPanel is the source of truth; this just drives
-  // the inline "last completed" preview above the panel.
-  const [watchIds, setWatchIds] = useState<Set<string>>(new Set())
-  const [submitting, setSubmitting] = useState(false)
-  const [latestResult, setLatestResult] = useState<JobResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useImperativeHandle(ref, () => ({
-    triggerRefine(job: JobResult, imageB64: string) {
-      setInitImage({
-        preview: `data:image/png;base64,${imageB64}`,
-        // Store the job_id so handleGenerate sends init_job_id (tiny) not the full bytes.
-        jobId: job.job_id,
-        label: `Refining: "${(job.prompt ?? '').slice(0, 40)}${(job.prompt ?? '').length > 40 ? '…' : ''}"`,
-        isRefinement: true,
-      })
-      setPrompt('')
-      setError(null)
-    },
-  }))
-
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string
-      // Resize to ≤768px on each axis so the base64 stays small in the request body.
-      const img = new Image()
-      img.onload = () => {
-        const MAX = 768
-        let { width, height } = img
-        if (width > MAX || height > MAX) {
-          const scale = Math.min(MAX / width, MAX / height)
-          width = Math.round(width * scale)
-          height = Math.round(height * scale)
-        }
-        const canvas = document.createElement('canvas')
-        canvas.width = width
-        canvas.height = height
-        canvas.getContext('2d')!.drawImage(img, 0, 0, width, height)
-        const resized = canvas.toDataURL('image/jpeg', 0.85)
-        const b64 = resized.replace(/^data:[^;]+;base64,/, '')
-        setInitImage({ preview: resized, b64, label: file.name, isRefinement: false })
-      }
-      img.src = dataUrl
-    }
-    reader.readAsDataURL(file)
-    // reset so picking same file again still fires onChange
-    e.target.value = ''
-  }
-
-  function clearInitImage() {
-    setInitImage(null)
-    setAdvParams((prev) => {
-      const next = { ...prev }
-      delete next.strength
-      return next
-    })
-  }
-
-  // Clear local state when model changes (panel stays mounted, model prop changes).
-  useEffect(() => {
-    setPrompt('')
-    setAdvParams({})
-    setLatestResult(null)
-    setError(null)
-    setWatchIds(new Set())
-    setInitImage(null)
-  }, [model.id])
-
-  const live = !!session?.alive
-  // A session is "warm-routable" if it exists and has a session_id — even during
-  // warmup phases (installing / loading_model). Jobs queued now will sit in
-  // Supabase and the kernel picks them up the moment it enters its serve loop.
-  const hasSession = !!session?.session_id
-
-  // Poll all submitted job IDs until each resolves; update inline preview with
-  // the most recently completed one. GenerationsPanel handles the full history.
-  useEffect(() => {
-    if (watchIds.size === 0) return
-    let active = true
-    const id = setInterval(async () => {
-      if (!active) return
-      const settled = new Set<string>()
-      await Promise.all(
-        [...watchIds].map(async (jid) => {
-          try {
-            const job = await getJob(jid)
-            if (job.status === 'done') {
-              settled.add(jid)
-              setLatestResult((prev) => (!prev || job.status === 'done') ? job : prev)
-            } else if (job.status === 'error') {
-              // Don't settle immediately if the session is still alive/warming —
-              // the kernel may have been mid-inference when reap ran and will write
-              // 'done' shortly after. Keep polling until the session is confirmed dead.
-              const sessionAlive = !!session && (session.alive || hasSession)
-              if (!sessionAlive) {
-                settled.add(jid)
-                setLatestResult((prev) => prev ?? job)
-              }
-              // If session is still alive, keep polling — kernel may overwrite error→done.
-            }
-          } catch { /* keep polling */ }
-        })
-      )
-      if (settled.size > 0) {
-        setWatchIds((prev) => {
-          const next = new Set(prev)
-          settled.forEach((id) => next.delete(id))
-          return next
-        })
-        onSubmitted()
-      }
-    }, IMAGE_JOB_POLL_INTERVAL_MS)
-    return () => {
-      active = false
-      clearInterval(id)
-    }
-  }, [watchIds, onSubmitted, session, hasSession])
-
-  // Cold path: one Kaggle container per model — block while one is active.
-  // Warm/warmup path: kernel queues jobs; allow unlimited queuing, only block
-  // the button during the actual HTTP submit (prevents true double-clicks).
-  const coldJobActive = !hasSession && jobs.some(
-    (j) => j.status === 'queued' || j.status === 'running',
-  )
-  const busy = coldJobActive || submitting
-
-  // Jobs waiting to be picked up by the warm kernel.
-  const queuedCount = jobs.filter((j) => j.status === 'queued').length
-  const runningCount = jobs.filter((j) => j.status === 'running').length
-
-  async function handleGenerate() {
-    if (!prompt.trim()) {
-      setError('Enter a prompt.')
-      return
-    }
-    if (busy) return
-    setError(null)
-    setSubmitting(true)
-    try {
-      const params = Object.keys(advParams).length > 0 ? advParams : undefined
-      // Refine: send init_job_id (server fetches image bytes — avoids large request body).
-      // File upload: send init_image_b64 (already resized to ≤768px client-side).
-      const initJobId = initImage?.isRefinement ? initImage.jobId : undefined
-      const initB64 = !initJobId ? initImage?.b64 : undefined
-      const { job_id } =
-        hasSession && session?.session_id
-          ? await submitSessionJob(session.session_id, prompt.trim(), params, initB64, initJobId)
-          : await runGenerate(model.id, prompt.trim(), params, initB64, initJobId)
-      setWatchIds((prev) => new Set([...prev, job_id]))
-      setPrompt('') // clear immediately so user can type the next prompt
-      setInitImage(null) // clear init image after submission
-      onSubmitted()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Generation failed')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const resultIsImage = !!latestResult && (latestResult.mime ?? '').startsWith('image/')
-
-  return (
-    <div className="p-4 rounded-xl border border-theme-border/60 bg-theme-surface space-y-3">
-      <h2 className="text-xs font-semibold text-theme-text">{model.heading}</h2>
-
-      {isConnected && <SessionBar model={model.id} onSession={setSession} />}
-
-      <div className="space-y-2">
-        {/* Init image slot — upload or refine chip */}
-        {initImage ? (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-theme-brand/30 bg-theme-brand/5">
-            <img src={initImage.preview} alt="source" className="w-8 h-8 rounded-md object-cover shrink-0 border border-theme-border/60" />
-            <div className="min-w-0 flex-1">
-              <div className="text-[10px] font-semibold text-theme-brand truncate">
-                {initImage.isRefinement ? '↺ ' : '🖼 '}{initImage.label}
-              </div>
-              <div className="text-[9px] text-theme-text-muted">Source image attached</div>
-            </div>
-            <button
-              type="button"
-              onClick={clearInitImage}
-              className="shrink-0 w-5 h-5 flex items-center justify-center text-theme-text-muted hover:text-theme-text cursor-pointer"
-              title="Remove source image"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
-                <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
-              </svg>
-            </button>
+              )
+            })}
           </div>
-        ) : (
-          <>
-            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={!isConnected || busy}
-              className="w-full py-1.5 rounded-xl text-xs text-theme-text-muted border border-dashed border-theme-border/60 hover:border-theme-brand/40 hover:text-theme-text disabled:opacity-40 cursor-pointer transition-colors"
-            >
-              + Add source image (optional img2img)
-            </button>
-          </>
-        )}
+        </div>
 
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          disabled={!isConnected || busy}
-          placeholder={initImage?.isRefinement ? 'Describe what to change…' : 'Describe the image you want to generate...'}
-          className="w-full h-20 px-3 py-2 rounded-xl text-sm bg-theme-bg border border-theme-border/60 text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-border disabled:opacity-60 resize-none"
-        />
-        <AdvancedParams modelId={model.id} onChange={setAdvParams} showStrength={!!initImage} />
-        <button
-          type="button"
-          onClick={handleGenerate}
-          disabled={!isConnected || busy}
-          className="w-full py-2.5 rounded-xl text-xs font-semibold bg-theme-brand text-theme-brand-text shadow-sm hover:opacity-90 disabled:opacity-60 cursor-pointer"
-        >
-          {submitting
-            ? 'Queuing…'
-            : live
-              ? 'Generate (warm · queue)'
-              : coldJobActive
-                ? 'Generating (cold ~14 min)…'
-                : 'Generate once (cold ~14 min)'}
-        </button>
-        {/* Queue status — only shown during warm sessions */}
-        {live && (queuedCount > 0 || runningCount > 0) && (
-          <div className="flex items-center gap-1.5 text-[11px] text-theme-text-muted">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
-            {runningCount > 0 && <span>Generating 1 image…</span>}
-            {queuedCount > 0 && (
-              <span className="text-theme-text-muted/70">
-                {runningCount > 0 ? `· ` : ''}{queuedCount} more queued
-              </span>
+        {/* Kaggle credentials */}
+        <div className="flex justify-end shrink-0">
+          <KaggleCredentials
+            hasCreds={hasCreds}
+            onChange={setHasCreds}
+            onRedeployAll={handleRedeployAll}
+            isRedeploying={deployingModelId === 'all'}
+          />
+        </div>
+      </div>
+
+      {deployError && (
+        <div className="mx-5 mt-2.5 p-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs font-semibold flex items-center justify-between">
+          <span>Deployment failed: {deployError}</span>
+          <button onClick={() => setDeployError(null)} className="text-red-600 dark:text-red-400 hover:text-red-700 font-bold uppercase text-[10px] cursor-pointer">Dismiss</button>
+        </div>
+      )}
+
+      {/* Row 2: Two-column layout */}
+      <div className="flex-1 flex overflow-hidden">
+
+        {/* LEFT COLUMN: generator controls */}
+        <div className="w-[480px] min-w-[420px] shrink-0 border-r border-theme-border/40 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden px-3.5 pt-0 pb-0">
+            {hasCreds && (
+              <>
+                {/* All models stay mounted — only visibility changes via display:none */}
+                {MODELS.map((m) => (
+                  <div
+                    key={`gen-${m.id}`}
+                    style={{ display: m.id === activeModelId ? 'flex' : 'none' }}
+                    className="flex-col flex-1 h-full overflow-hidden"
+                  >
+                    <ImageGenerator
+                      ref={m.id === activeModelId ? generatorRef : undefined}
+                      model={m}
+                      isConnected={!!connected[m.id]}
+                      jobs={allJobs.filter((j) => j.model === m.id)}
+                      onSubmitted={refreshAllJobs}
+                      session={sessions[m.id] ?? null}
+                      setSession={(s) => setSessions((prev) => ({ ...prev, [m.id]: s }))}
+                      busyAction={sessionBusy[m.id] ?? null}
+                      setBusyAction={(action) => setSessionBusy((prev) => ({ ...prev, [m.id]: action }))}
+                    />
+                  </div>
+                ))}
+              </>
             )}
           </div>
-        )}
+        </div>
+
+        {/* RIGHT COLUMN: generations history */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden pr-4 pb-0">
+          <GenerationsPanel
+            jobs={activeModelJobs}
+            onRefine={handleRefine}
+          />
+        </div>
+
       </div>
-
-      {!isConnected && (
-        <div className="text-[10px] text-amber-600 dark:text-amber-400">
-          Please connect to Kaggle and deploy the worker notebook above first.
-        </div>
-      )}
-
-      {/* Inline preview of the most recently completed image */}
-      {latestResult && latestResult.status === 'done' && resultIsImage && latestResult.image_b64 && (
-        <div className="space-y-1.5">
-          <div className="text-[10px] font-medium text-theme-text-muted truncate">
-            Latest: {latestResult.prompt}
-          </div>
-          <div className="rounded-xl overflow-hidden border border-theme-border/60 bg-theme-bg flex justify-center">
-            <img
-              src={`data:${latestResult.mime};base64,${latestResult.image_b64}`}
-              alt={latestResult.prompt ?? ''}
-              className="max-w-full h-auto object-contain max-h-[300px]"
-            />
-          </div>
-          <div className="text-[10px] text-theme-text-muted">
-            {latestResult.via ? `via ${latestResult.via}` : 'returned from Kaggle'}
-          </div>
-        </div>
-      )}
-
-      {latestResult && latestResult.status === 'done' && !resultIsImage && (
-        <div className="p-2 rounded-lg bg-theme-bg border border-theme-border/60 text-theme-text text-xs break-words">
-          {(() => {
-            try { return latestResult.image_b64 ? atob(latestResult.image_b64) : '' }
-            catch { return latestResult.image_b64 ?? '' }
-          })()}
-        </div>
-      )}
-
-      {((latestResult && latestResult.status === 'error') || error) && (
-        <div className="p-3 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 text-xs text-red-800 dark:text-red-300 font-medium break-words">
-          {error ?? latestResult?.error ?? 'Generation failed'}
-        </div>
-      )}
     </div>
   )
-})
+}

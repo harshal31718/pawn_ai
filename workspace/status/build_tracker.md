@@ -14,8 +14,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phase:** Plan 2 — Image Refinement / img2img (imageLab branch)
-**Active step:** All IR steps done. Plan 2 complete.
-**Last completed:** IR-1/IR-2/IR-3 (imageLab) — init image routing on backend (`init_image_b64`/`init_job_id` on both request models; `_resolve_init_image` helper; strength defaults to 0.6); SDXL + FLUX notebooks updated with img2img branch; frontend: upload slot, Refine button in GenerationsPanel, Strength slider in AdvancedParams, `ImageGenerator` converted to forwardRef. 140 backend tests green; npm run build clean.
+**Active step:** Settings Page UI Polish & API Keys Row Alignment completed.
+**Last completed:** Settings page layout polish & API keys row alignment — Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
 **Branch:** imageLab (merges → dev)
 **Plan:** `workspace/plan/plan_2_image_refinement.md`
 
@@ -348,6 +348,11 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
   `SettingsPageWrapper` / `ImageLabPageWrapper` thin pages replace direct component rendering.
   `App.tsx` down to 44 lines. `Sidebar.tsx` uses `useNavigate`/`useLocation` internally.
   tsc zero errors; `npm run build` clean.
+
+- [x] **Settings page layout redesign**
+  Restructured settings page to 3 responsive vertical columns for desktop viewports. Refined responsiveness of BYOK API key inputs and vertical Kaggle input fields; grouped bubble color presets into horizontally scrollable carousels with aligned horizontal start offsets and chevron scroll buttons.
+- [x] **Settings page layout polish & API keys row alignment**
+  Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
 
 ---
 

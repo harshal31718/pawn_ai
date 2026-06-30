@@ -241,6 +241,27 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
     s = _latest_session(db, user_id, model)
     if s is None:
         return {"status": "none", "alive": False}
+
+    # Auto-cleanup dead/stuck sessions
+    status = s.get("status")
+    if status in ("starting", "installing", "loading_model", "stopping"):
+        is_dead = False
+        created = _parse_ts(s.get("created_at") or s.get("heartbeat_at"))
+        if created is not None:
+            age_seconds = (_now() - created).total_seconds()
+            if status == "stopping":
+                if age_seconds > 30:
+                    is_dead = True
+            else:
+                if age_seconds > 300:
+                    is_dead = True
+        if is_dead:
+            try:
+                db.table("image_sessions").update({"status": "ended"}).eq("id", s["id"]).execute()
+            except Exception:
+                pass
+            s["status"] = "ended"
+
     return {
         "session_id": s["id"],
         "status": s["status"],

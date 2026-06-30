@@ -319,3 +319,154 @@ const navigate = useNavigate()
 - SPA 404 handling in production Nginx: document in `workspace/decisions/` when deploying.
 - URL-synced model picker (`?model=…` query param): future enhancement.
 - `selectedProvider` per-conversation URL persistence: deferred (currently stored in the conv meta via the store).
+
+---
+
+# Plan 2 UI — ImageLab Page UI Refinement
+
+## Objective
+
+Redesign and refine the `/imagelab` page UI to deliver a polished, premium experience.
+The current page is functional (model panels, session bar, image generator, generations
+monitor) but visually rough — this plan focuses purely on UI/UX improvements.
+
+---
+
+## Current State
+
+### What exists on `/imagelab`
+
+| Component | File | Role |
+|-----------|------|------|
+| `ImageLabPage` | `frontend/src/components/ImageLabPage.tsx` | Top-level page: model selector tabs, per-model panels |
+| `ModelPanel` | (inline in ImageLabPage) | Stacked panels per model — owns SessionBar, ImageGenerator, GenerationsPanel |
+| `SessionBar` | `frontend/src/components/SessionBar.tsx` | Warm-session lifecycle: Start/Stop/Extend, countdown, phase messages |
+| `ImageGenerator` | (inline in ImageLabPage) | Prompt input + Generate/Refine + source image upload + AdvancedParams |
+| `GenerationsPanel` | `frontend/src/components/GenerationsPanel.tsx` | Job history list: thumbnails, status chips, View/Download, copy prompt |
+| `AdvancedParams` | (inline in ImageLabPage) | Collapsible param controls: aspect ratio, steps, guidance, negative prompt, style |
+
+### Known UI issues (pre-plan)
+
+- Layout is dense and utilitarian — no visual hierarchy or spacing rhythm
+- No consistent design language between ImageLab and the Chat page
+- Session bar and generation controls feel disconnected
+- Generations panel thumbnail grid lacks polish
+- Mobile responsiveness not addressed
+- Dark mode styling may not match the rest of the app
+- No loading/empty state illustrations
+- Transitions and micro-animations are absent
+
+---
+
+## Scope
+
+This plan covers **frontend-only** changes — no backend modifications, no new API
+endpoints, no schema changes.
+
+### In scope
+
+- Visual redesign of all ImageLab components
+- Layout restructuring and spacing
+- Dark mode consistency
+- Micro-animations and transitions
+- Responsive design adjustments
+- Empty/loading state polish
+
+### Out of scope
+
+- New features or backend changes
+- Additional model support
+- Session/job API changes
+- Chat page modifications
+
+---
+
+## Layout — Two-Section Vertical Split
+
+The page is divided into **two vertical sections** (side-by-side columns).
+
+```
+┌─────────────────────────────────┬──────────────────────────────┐
+│         SECTION 1 (Left)        │      SECTION 2 (Right)       │
+│                                 │                              │
+│  Row 1: Model Selection         │                              │
+│  ┌─────────┬─────────┐         │   Generations Tab             │
+│  │  SDXL   │  FLUX   │         │   (full generation history)   │
+│  └─────────┴─────────┘         │                              │
+│                                 │   - Thumbnails               │
+│  Row 2: Session / Deploy Bar    │   - Status chips             │
+│  ┌─────────────────────────┐   │   - View / Download           │
+│  │ Deploy/Redeploy │ Status│   │   - Copy prompt               │
+│  └─────────────────────────┘   │   - Refine action             │
+│                                 │                              │
+│  Row 3: Image Generator +       │                              │
+│         Model Parameters        │                              │
+│  ┌─────────────────────────┐   │                              │
+│  │ Prompt input             │   │                              │
+│  │ Generate / Refine btn    │   │                              │
+│  │ Source image upload      │   │                              │
+│  │ AdvancedParams (expand)  │   │                              │
+│  └─────────────────────────┘   │                              │
+└─────────────────────────────────┴──────────────────────────────┘
+```
+
+### Section 1 — Controls (Left Column)
+
+| Row | Content | Source |
+|-----|---------|--------|
+| **Row 1** | Model selection buttons (SDXL / FLUX toggle) | Existing model selector — keep as-is |
+| **Row 2** | Session deploy bar: Deploy / Redeploy button + deployed status indicator, countdown, Extend, Stop | Existing `SessionBar` — copy the same functionality |
+| **Row 3** | Image generator: prompt input, Generate/Refine button, source image upload, collapsible AdvancedParams (aspect ratio, steps, guidance, negative prompt, style) | Existing `ImageGenerator` + `AdvancedParams` |
+
+### Section 2 — Generations (Right Column)
+
+| Content | Source |
+|---------|--------|
+| Full generation history for the selected model | Existing `GenerationsPanel` |
+| Job rows: thumbnail, prompt, status chip, gen time, View lightbox, Download, Copy, Refine | All existing functionality preserved |
+
+---
+
+## Implementation Steps
+
+### Step 1 — Restructured `ImageLabPage.tsx` Layout
+- Removed the monolithic wrapper grid and refactored the layout structure.
+- Created a split-column container:
+  - Left column: `w-[420px] min-w-[360px] shrink-0 border-r border-theme-border/40 flex flex-col overflow-y-auto` holding page title, credentials bar, model tab selection, model deploy panel, and generator panel.
+  - Right column: `flex-1 flex flex-col min-w-0 overflow-hidden` holding `GenerationsPanel` filling the remainder of the viewport.
+- Inline `ModelPanel` helper was simplified/removed, and `ImageGenerator` / `KaggleConnector` controls are now rendered directly inside the left column, keying them to the active model.
+- Refined the Refine handler connection directly at page scope, forwarding from GenerationsPanel on the right to the active ImageGenerator on the left.
+- Removed the floating back button header since Layout already provides global sidebar navigation.
+
+### Step 2 — Removed Unused Imports & Cleaned up Build
+- Fixed TS6133 by removing the unused `activeModel` variable in `ImageLabPage.tsx` and the unused `useLocation` import / `location` variable in `Sidebar.tsx`.
+- Updated `ImageLabPageWrapper.tsx` to stop passing the obsolete `onClose` callback prop.
+
+### Step 3 — Added Kaggle Credentials to Settings
+- Modified [ApiKeysSection.tsx](file:///c:/Users/harsh/Desktop/PAWN/frontend/src/components/ApiKeysSection.tsx) to render a Kaggle credentials block below the other provider key inputs.
+- Implemented dual-field config options for Kaggle (`username` and `api_token`).
+- Connected the inputs to `getKaggleConfig`, `setKaggleConfig`, and `deleteKaggleConfig` from the api client.
+
+---
+
+## Files Changed
+
+| Action | File | Description |
+|--------|------|-------------|
+| MODIFY | [ImageLabPage.tsx](file:///c:/Users/harsh/Desktop/PAWN/frontend/src/components/ImageLabPage.tsx) | Restructured layout to 2-column split, simplified model mounting |
+| MODIFY | [ImageLabPageWrapper.tsx](file:///c:/Users/harsh/Desktop/PAWN/frontend/src/pages/ImageLabPageWrapper.tsx) | Removed onClose prop requirement |
+| MODIFY | [Sidebar.tsx](file:///c:/Users/harsh/Desktop/PAWN/frontend/src/components/Sidebar.tsx) | Removed unused router location hook declaration |
+| MODIFY | [ApiKeysSection.tsx](file:///c:/Users/harsh/Desktop/PAWN/frontend/src/components/ApiKeysSection.tsx) | Added Kaggle config setting section below provider API key list |
+
+---
+
+## Verification
+
+- [x] Compilation passes with zero TypeScript errors
+- [x] `/imagelab` renders correctly in both light and dark mode
+- [x] All existing functionality preserved (generate, session, refine, view, download)
+- [x] 2-column layout renders correctly on desktop viewports
+- [x] Model switching updates both sections (controls + generations) for the selected model
+- [x] Micro-animations are smooth and non-janky
+- [x] Kaggle credentials can be saved, updated, and removed from the Settings page API key list
+

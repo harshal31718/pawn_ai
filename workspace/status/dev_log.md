@@ -18,6 +18,53 @@ This becomes your interview script and project history.
 
 ---
 
+### 2026-06-30 — Phase 6 UI: Settings Page UI Polish & API Keys Row Alignment
+
+**Built:** Polished Settings Page layouts and the dark mode toggle:
+1. Reverted global theme toggle to a single button with hover rotation/tilt and click scale animations.
+2. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow.
+3. Corrected detailed ThemeToggle background alignment math to account for gaps.
+4. Made detailed ThemeToggle responsive (hiding labels and adjusting padding on medium columns/viewports).
+5. Refactored Profile card rows (Display Name, Email, Actions) to stack vertically, preventing layout boundaries overflow.
+6. Restructured credentials cards in ApiKeysSection.tsx into separate rows for Title, Description, Status (Configured status and Remove button placed on opposite corners), and Inputs.
+7. Converted credentials setup descriptions into interactive help guide toggles.
+8. Reduced page/card paddings and column spacing (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across Settings.
+**Decisions:** Shifted to a vertical stacked pattern on tight screen columns for all dropdowns, text inputs, status badges, and action buttons to ensure 100% boundary safety.
+**Issues:** None.
+**Tests:** Frontend build compiles cleanly with zero errors; all 139 backend pytest tests passed successfully.
+**Commit:** feat: settings page ui polish and api keys row alignment
+
+---
+
+### 2026-06-30 — Phase 6 UI: Model Sessions UI Polish, Lifecycle Alignment, and Generations Panel Refresh
+
+**Built:** Polished and streamlined the Model Session UI and generations history styling:
+1. Removed session limit by max images count logic and associated input buttons.
+2. Removed session tab from the bottom panel completely, merging all status monitoring natively into the title bar controls.
+3. Redesigned model selection tabs row to show model title alongside status indicators (Idle/Warming/Running/Stopping) in a single row with curated color grading: Idle (white), Warming (yellow), Running (green), and Stopping (red).
+4. Redesigned Start/Stop session buttons to have identical solid dimensions and styles.
+5. Moved the notebook redeploy reload icon to the Kaggle Connection button (placed before the edit icon).
+6. Removed redundant queued count and in-progress text from below the Generate button.
+7. Fixed the "stuck in stopping" state by implementing a backend self-healing routine that auto-ends sessions that are stopping for > 30s or warming for > 5m.
+8. Refined title bar session state checks to align precisely with model selection tab status indicators (ready status vs warmup phases).
+9. Updated Generations panel item chip styles: queued (amber glass), running (green glass with green pulsing dot), and done (solid complete green). Removed the empty state message.
+**Decisions:** Shared the session action transition status (`sessionBusy` / `busyAction`) at the parent `ImageLabPage` component level to prevent sync lag between model selector tabs and card titles.
+**Issues:** Cleaned up duplicate return statements in JSX rendering.
+**Tests:** Frontend build compiles clean; all 28 python backend lifecycle unit tests passed successfully.
+**Commit:** feat: model sessions ui polish & generations colors alignment
+
+---
+
+### 2026-06-30 — Phase 6 UI: ImageLab Layout Restructure + Kaggle Settings Integration
+
+**Built:** Refactored `/imagelab` to a 2-column layout (left: model select, session deploy, image generator; right: Generations history panel). Integrated Kaggle credentials setup directly into the Settings page (`ApiKeysSection.tsx`) under the BYOK section, matching the format and layout of the other provider keys.
+**Decisions:** Restructured the layout to place controls on the left and full-height scrollable history on the right to match standard creative tool workspace patterns. Moved Kaggle key credentials to the top of the Settings API keys list.
+**Issues:** JSX parsing issue with `->` character solved by replacing with unicode `&rarr;`. Fixed unused imports/variables compilation warnings.
+**Tests:** Frontend build passes cleanly.
+**Commit:** feat: imagelab layout restructure & settings integration
+
+---
+
 ### 2026-06-30 — Phase 6 UI: URL Routing + Global Dark Mode Toggle
 
 **Built:** Migrated from boolean flag view-switching (700-line AppContent) to `react-router-dom`. `AppContext.tsx` holds cross-route state (theme, models, prefs, bubble colors). `Layout.tsx` owns the sidebar, Outlet, and a globally mounted dark mode toggle (top-right floating pill, visible on every route). `ChatPage.tsx` extracts all chat logic; bidirectional URL ↔ store sync via `useParams`/`useEffect`. `SettingsPageWrapper` and `ImageLabPageWrapper` are thin pages that wire context to the existing components. `Sidebar.tsx` uses `useNavigate`/`useLocation` internally (removed callback props for settings/imagelab). Catch-all `*` route redirects to `/chat`.
