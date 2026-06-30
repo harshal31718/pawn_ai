@@ -18,6 +18,16 @@ This becomes your interview script and project history.
 
 ---
 
+### 2026-06-30 — Phase 6 UI: URL Routing + Global Dark Mode Toggle
+
+**Built:** Migrated from boolean flag view-switching (700-line AppContent) to `react-router-dom`. `AppContext.tsx` holds cross-route state (theme, models, prefs, bubble colors). `Layout.tsx` owns the sidebar, Outlet, and a globally mounted dark mode toggle (top-right floating pill, visible on every route). `ChatPage.tsx` extracts all chat logic; bidirectional URL ↔ store sync via `useParams`/`useEffect`. `SettingsPageWrapper` and `ImageLabPageWrapper` are thin pages that wire context to the existing components. `Sidebar.tsx` uses `useNavigate`/`useLocation` internally (removed callback props for settings/imagelab). Catch-all `*` route redirects to `/chat`.
+**Decisions:** Layout owns the dark mode toggle (not per-page) so it appears on ImageLab and Settings without duplicating the button. `useOutletContext` passes store + sidebar state to child pages to avoid calling `useConversationStore` twice.
+**Issues:** None — tsc zero errors, npm run build clean.
+**Tests:** 140 backend tests unchanged; frontend gate is `npm run build` (passes clean).
+**Commit:** feat: Phase 6 UI — react-router-dom routing + global dark mode toggle
+
+---
+
 ### 2026-06-15 — Step 1: Create the Repo
 
 **Built:** Directory skeleton — `backend/app/` (main.py, config.py, constants.py, routes/, core/), `backend/tests/`, `frontend/src/`. Stub files only; real content in Steps 2.5 and 4.

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import type { ConversationMeta } from '../api/client'
 
 interface Props {
@@ -7,14 +8,12 @@ interface Props {
   pendingIds?: Set<string>
   syncError?: string | null
   onSelect: (id: string) => void
-  onCreate: () => void
+  onCreate: () => string
   onDelete: (id: string) => void
   onRename: (id: string, newTitle: string) => void
   isOpen: boolean
   onClose: () => void
   onOpen: () => void
-  onOpenSettings: () => void
-  onOpenImageLab: () => void
   displayName: string
   email?: string
 }
@@ -31,11 +30,11 @@ export default function Sidebar({
   isOpen,
   onClose,
   onOpen,
-  onOpenSettings,
-  onOpenImageLab,
   displayName,
   email,
 }: Props) {
+  const navigate = useNavigate()
+  const location = useLocation()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
@@ -73,13 +72,23 @@ export default function Sidebar({
   const handleNewChat = () => {
     // Dedupe-to-empty is handled race-free in the store (createConversation),
     // since the optimistic conv is inserted synchronously.
-    onCreate()
+    const newId = onCreate()
+    navigate(`/chat/${newId}`)
     onClose()
   }
 
   const handleImageLab = () => {
-    onOpenImageLab()
+    navigate('/imagelab')
     onClose()
+  }
+
+  const handleSelectConversation = (id: string) => {
+    onSelect(id)
+    navigate(`/chat/${id}`)
+  }
+
+  const handleOpenSettings = () => {
+    navigate('/settings')
   }
 
   return (
@@ -204,7 +213,7 @@ export default function Sidebar({
                       key={conv.id}
                       onClick={() => {
                         if (!isEditing) {
-                          onSelect(conv.id)
+                          handleSelectConversation(conv.id)
                         }
                       }}
                       className={`
@@ -317,7 +326,7 @@ export default function Sidebar({
               </div>
               <button
                 type="button"
-                onClick={onOpenSettings}
+                onClick={handleOpenSettings}
                 className="text-theme-text-muted hover:text-theme-text p-1 rounded-lg hover:bg-theme-bg/50 transition-colors shrink-0 cursor-pointer"
                 title="Settings"
               >
@@ -407,7 +416,7 @@ export default function Sidebar({
               {/* Settings Button */}
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); onOpenSettings() }}
+                onClick={(e) => { e.stopPropagation(); handleOpenSettings() }}
                 className="
                   text-theme-text-muted hover:text-theme-text p-2 rounded-xl hover:bg-theme-bg/50
                   transition-colors cursor-pointer flex items-center justify-center

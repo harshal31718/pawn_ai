@@ -338,6 +338,19 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
 
 ---
 
+## Phase 6 — UI Routing + Global Polish (imageLab branch)
+*Plan reference: `workspace/implemented_phases/phase_6_ui.md`*
+
+- [x] **Phase 6 UI — URL-based routing refactor**
+  `react-router-dom` installed. `AppContext.tsx` lifts cross-route state (theme, models, prefs).
+  `Layout.tsx` owns Sidebar + Outlet + global dark mode toggle (visible on all routes).
+  `ChatPage.tsx` extracts chat logic; URL ↔ store sync via `useParams` + `useEffect`.
+  `SettingsPageWrapper` / `ImageLabPageWrapper` thin pages replace direct component rendering.
+  `App.tsx` down to 44 lines. `Sidebar.tsx` uses `useNavigate`/`useLocation` internally.
+  tsc zero errors; `npm run build` clean.
+
+---
+
 ## Working Agreement
 
 - Auto mode: implement steps sequentially, update tracker after every step.
