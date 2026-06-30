@@ -1,68 +1,131 @@
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
-from typing import Optional
+"""Conversation CRUD routes.
 
-from app.storage import conversations as storage
+Storage priority:
+  1. Google Drive (if user has linked Drive via OAuth)
+  2. Local filesystem (fallback for tests / pre-Drive-link state)
+"""
+
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
+
+from app.core.drive_factory import get_drive_for_user
+from app.storage import conversations as local_storage
+from app.storage import conversations_drive as drive_storage
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
+
 class ConversationCreate(BaseModel):
+    id: str | None = None              # client-owned conversation id (optimistic UI)
     title: str = "New Chat"
     model_id: str = "gemini"
+
 
 class ConversationUpdate(BaseModel):
     title: str
 
+
+# ─── Blocking storage helpers (run via run_in_threadpool so Drive/Supabase I/O
+#     never executes on the event loop) ─────────────────────────────────────────
+
+def _list(drive, user_id):
+    if drive:
+        return drive_storage.list_conversations(drive)
+    return local_storage.list_conversations(user_id=user_id)
+
+
+def _create(drive, user_id, conv_id, title, model_id):
+    # Idempotent: if the client-owned id already exists, return the existing meta
+    # rather than recreating (a retried create op must never wipe meta/messages).
+    if conv_id:
+        existing = (
+            drive_storage.get_conversation_meta(drive, conv_id)
+            if drive
+            else local_storage.get_conversation_meta(conv_id, user_id=user_id)
+        )
+        if existing:
+            return existing
+    if drive:
+        return drive_storage.create_conversation(drive, user_id=user_id, conv_id=conv_id, title=title, model_id=model_id)
+    return local_storage.create_conversation(user_id=user_id, conv_id=conv_id, title=title, model_id=model_id)
+
+
+def _get(drive, user_id, conv_id):
+    if drive:
+        meta = drive_storage.get_conversation_meta(drive, conv_id)
+        if not meta:
+            return None, None
+        return meta, drive_storage.load_messages(drive, conv_id)
+    meta = local_storage.get_conversation_meta(conv_id, user_id=user_id)
+    if not meta:
+        return None, None
+    return meta, local_storage.load_messages(conv_id, user_id=user_id)
+
+
+def _delete(drive, user_id, conv_id):
+    if drive:
+        if not drive_storage.get_conversation_meta(drive, conv_id):
+            return False
+        drive_storage.delete_conversation(drive, conv_id)
+        return True
+    if not local_storage.get_conversation_meta(conv_id, user_id=user_id):
+        return False
+    local_storage.delete_conversation(conv_id, user_id=user_id)
+    return True
+
+
+def _update(drive, user_id, conv_id, title):
+    if drive:
+        if not drive_storage.get_conversation_meta(drive, conv_id):
+            return "missing"
+        return drive_storage.update_conversation_title(drive, conv_id, title)
+    if not local_storage.get_conversation_meta(conv_id, user_id=user_id):
+        return "missing"
+    return local_storage.update_conversation_title(conv_id, title, user_id=user_id)
+
+
 @router.get("")
-async def list_conversations():
-    """Lists all saved conversations."""
-    return storage.list_conversations()
+async def list_conversations(request: Request):
+    user_id = request.state.user_id
+    drive = await run_in_threadpool(get_drive_for_user, user_id)
+    return await run_in_threadpool(_list, drive, user_id)
+
 
 @router.post("")
-async def create_conversation(req: ConversationCreate):
-    """Creates a new conversation."""
-    return storage.create_conversation(title=req.title, model_id=req.model_id)
+async def create_conversation(req: ConversationCreate, request: Request):
+    user_id = request.state.user_id
+    drive = await run_in_threadpool(get_drive_for_user, user_id)
+    return await run_in_threadpool(_create, drive, user_id, req.id, req.title, req.model_id)
+
 
 @router.get("/{conv_id}")
-async def get_conversation(conv_id: str):
-    """Retrieves conversation metadata and load all messages."""
-    meta = storage.get_conversation_meta(conv_id)
+async def get_conversation(conv_id: str, request: Request):
+    user_id = request.state.user_id
+    drive = await run_in_threadpool(get_drive_for_user, user_id)
+    meta, messages = await run_in_threadpool(_get, drive, user_id, conv_id)
     if not meta:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conversation {conv_id} not found."
-        )
-    messages = storage.load_messages(conv_id)
-    return {
-        "meta": meta,
-        "messages": messages
-    }
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Conversation {conv_id} not found.")
+    return {"meta": meta, "messages": messages}
+
 
 @router.delete("/{conv_id}")
-async def delete_conversation(conv_id: str):
-    """Deletes a conversation by ID."""
-    meta = storage.get_conversation_meta(conv_id)
-    if not meta:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conversation {conv_id} not found."
-        )
-    storage.delete_conversation(conv_id)
+async def delete_conversation(conv_id: str, request: Request):
+    user_id = request.state.user_id
+    drive = await run_in_threadpool(get_drive_for_user, user_id)
+    ok = await run_in_threadpool(_delete, drive, user_id, conv_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Conversation {conv_id} not found.")
     return {"status": "ok"}
 
+
 @router.patch("/{conv_id}")
-async def update_conversation(conv_id: str, req: ConversationUpdate):
-    """Updates a conversation's title."""
-    meta = storage.get_conversation_meta(conv_id)
-    if not meta:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conversation {conv_id} not found."
-        )
-    updated = storage.update_conversation_title(conv_id, req.title)
+async def update_conversation(conv_id: str, req: ConversationUpdate, request: Request):
+    user_id = request.state.user_id
+    drive = await run_in_threadpool(get_drive_for_user, user_id)
+    updated = await run_in_threadpool(_update, drive, user_id, conv_id, req.title)
+    if updated == "missing":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Conversation {conv_id} not found.")
     if not updated:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update conversation title."
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update title.")
     return updated

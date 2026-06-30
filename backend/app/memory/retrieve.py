@@ -1,106 +1,104 @@
-import json
-from typing import List, Dict, Any, Optional
+"""Per-user hybrid memory retrieval backed by Supabase (pgvector + Postgres FTS).
+
+Combines vector similarity search (pgvector `<=>`) and full-text search
+(`tsvector @@ plainto_tsquery`) via two Supabase RPC functions, then fuses the
+two ranked lists with Reciprocal Rank Fusion (RRF) in Python.
+
+RPC functions (defined in Supabase, see supabase_schema.sql):
+  - match_memory_chunks(query_embedding, match_user_id, exclude_conv_id, match_count)
+  - search_memory_chunks(query_text, match_user_id, exclude_conv_id, match_count)
+
+Graceful degradation: if embedding fails, falls back to FTS only. If Supabase is
+unreachable, returns []. Memory is always scoped by user_id.
+"""
+
+import asyncio
+from typing import Any, Dict, List, Optional
+
+from app.db.supabase_client import get_db
 from app.memory.embed import embed
-from app.memory.index import get_db_connection
+
 
 async def retrieve(
     query: str,
+    user_id: str,
     active_conv_id: Optional[str] = None,
-    top_k: int = 3
+    top_k: int = 3,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieves the top_k most relevant past memory chunks using hybrid search (vector + FTS5)
-    and combines them using Reciprocal Rank Fusion (RRF).
+    Retrieve the top_k most relevant past memory chunks for a user using hybrid
+    search (pgvector + Postgres FTS) fused with Reciprocal Rank Fusion (RRF).
+    The active conversation is excluded to avoid surfacing the current context.
     """
-    # 1. Generate query embedding
+    # 1. Generate query embedding (graceful fallback to FTS-only on failure)
     try:
-        query_vector = await embed(query)
-    except Exception as e:
-        # If embedding fails (e.g. API down and no Ollama), fallback gracefully to keyword search only
+        query_vector = await embed(query, user_id=user_id)
+    except Exception:
         query_vector = None
-        
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    vec_results = []
-    fts_results = []
-    
+
+    try:
+        db = get_db()
+    except Exception:
+        return []
+
+    vec_results: List[Dict[str, Any]] = []
+    fts_results: List[Dict[str, Any]] = []
     candidate_k = max(20, top_k * 4)
-    
-    # 2. Vector Search Candidates
+
+    # 2. Vector search candidates (pgvector cosine via RPC)
     if query_vector:
         try:
-            # Query nearest candidates from vec0 table
-            cursor.execute(
-                """
-                SELECT c.rowid, c.conv_id, c.text
-                FROM vec_chunks v
-                JOIN chunks c ON v.rowid = c.rowid
-                WHERE v.embedding MATCH ? AND v.k = ?
-                """,
-                (json.dumps(query_vector), candidate_k)
+            res = await asyncio.to_thread(
+                lambda: db.rpc(
+                    "match_memory_chunks",
+                    {
+                        "query_embedding": query_vector,
+                        "match_user_id": user_id,
+                        "exclude_conv_id": active_conv_id,
+                        "match_count": candidate_k,
+                    },
+                ).execute()
             )
-            rows = cursor.fetchall()
-            for r in rows:
-                if active_conv_id and r["conv_id"] == active_conv_id:
-                    continue
-                vec_results.append({
-                    "rowid": r["rowid"],
-                    "conv_id": r["conv_id"],
-                    "text": r["text"]
-                })
+            for r in res.data or []:
+                vec_results.append(
+                    {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}
+                )
         except Exception:
-            # Handle potential db or vec extension issues gracefully
             pass
-            
-    # 3. FTS5 Keyword Search Candidates
+
+    # 3. Full-text search candidates (Postgres FTS via RPC)
     try:
-        # Split search terms for standard query, fallback to exact query
-        search_terms = " OR ".join([f'"{term}"' for term in query.split() if term])
-        if not search_terms:
-            search_terms = query
-            
-        cursor.execute(
-            """
-            SELECT c.rowid, c.conv_id, c.text
-            FROM chunks_fts f
-            JOIN chunks c ON f.rowid = c.rowid
-            WHERE chunks_fts MATCH ?
-            LIMIT ?
-            """,
-            (search_terms, candidate_k)
+        res = await asyncio.to_thread(
+            lambda: db.rpc(
+                "search_memory_chunks",
+                {
+                    "query_text": query,
+                    "match_user_id": user_id,
+                    "exclude_conv_id": active_conv_id,
+                    "match_count": candidate_k,
+                },
+            ).execute()
         )
-        rows = cursor.fetchall()
-        for r in rows:
-            if active_conv_id and r["conv_id"] == active_conv_id:
-                continue
-            fts_results.append({
-                "rowid": r["rowid"],
-                "conv_id": r["conv_id"],
-                "text": r["text"]
-            })
+        for r in res.data or []:
+            fts_results.append(
+                {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}
+            )
     except Exception:
         pass
-        
-    conn.close()
-    
-    # 4. Reciprocal Rank Fusion (RRF)
-    # score = 1.0 / (60 + rank_vec) + 1.0 / (60 + rank_fts)
+
+    # 4. Reciprocal Rank Fusion: score = sum(1 / (60 + rank)) across both lists
     scores: Dict[int, float] = {}
     docs_map: Dict[int, Dict[str, Any]] = {}
-    
+
     for rank, doc in enumerate(vec_results, start=1):
-        rowid = doc["rowid"]
-        scores[rowid] = scores.get(rowid, 0.0) + (1.0 / (60.0 + rank))
-        docs_map[rowid] = doc
-        
+        rid = doc["id"]
+        scores[rid] = scores.get(rid, 0.0) + (1.0 / (60.0 + rank))
+        docs_map[rid] = doc
+
     for rank, doc in enumerate(fts_results, start=1):
-        rowid = doc["rowid"]
-        scores[rowid] = scores.get(rowid, 0.0) + (1.0 / (60.0 + rank))
-        docs_map[rowid] = doc
-        
-    # Sort docs by final RRF score descending
-    sorted_rowids = sorted(scores.keys(), key=lambda r: scores[r], reverse=True)
-    
-    results = [docs_map[r] for r in sorted_rowids[:top_k]]
-    return results
+        rid = doc["id"]
+        scores[rid] = scores.get(rid, 0.0) + (1.0 / (60.0 + rank))
+        docs_map[rid] = doc
+
+    sorted_ids = sorted(scores.keys(), key=lambda r: scores[r], reverse=True)
+    return [docs_map[r] for r in sorted_ids[:top_k]]

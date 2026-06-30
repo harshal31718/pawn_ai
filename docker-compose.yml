@@ -10,6 +10,13 @@ services:
       - huggingface_api_key
       - github_api_key
       - openrouter_api_key
+      - supabase_url
+      - supabase_service_key
+      - supabase_anon_key
+      - encryption_secret
+      - google_client_id
+      - google_client_secret
+      - jwt_secret
     volumes:
       - ./backend/data:/app/data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -26,7 +33,7 @@ services:
     ports:
       - "5174:5173"
     environment:
-      - VITE_API_URL=http://10.95.144.153:8001
+      - VITE_API_URL=http://localhost:8001
     volumes:
       - /app/node_modules
     command: npm run dev -- --host
@@ -51,3 +58,17 @@ secrets:
     file: ./secrets/github_api_key
   openrouter_api_key:
     file: ./secrets/openrouter_api_key
+  supabase_url:
+    file: ./secrets/supabase_url
+  supabase_service_key:
+    file: ./secrets/supabase_service_key
+  supabase_anon_key:
+    file: ./secrets/supabase_anon_key
+  encryption_secret:
+    file: ./secrets/encryption_secret
+  google_client_id:
+    file: ./secrets/google_client_id
+  google_client_secret:
+    file: ./secrets/google_client_secret
+  jwt_secret:
+    file: ./secrets/jwt_secret

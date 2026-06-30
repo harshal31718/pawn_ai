@@ -1,6 +1,9 @@
 from typing import Optional
+from starlette.concurrency import run_in_threadpool
 from app.core.normalize import chat_stream
-from app.storage import conversations as storage
+from app.core.drive_factory import get_drive_for_user
+from app.storage import conversations as local_storage
+from app.storage import conversations_drive
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 
@@ -12,7 +15,7 @@ class DummyRateLimiter:
     def record_success(self, endpoint_id): pass
 
 class DummyResolver:
-    def pick(self, model_id):
+    def pick(self, model_id, user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
     def pick_by_capability(self, level, visibility="internal"):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
@@ -23,6 +26,7 @@ async def summarize_history(
     messages: list[dict],
     resolver: Optional[Resolver] = None,
     rate_limiter: Optional[EndpointRateLimiter] = None,
+    user_id: Optional[str] = None,
 ) -> str:
     """
     Generates a concise bullet-point summary of the messages list using the fastest available model.
@@ -49,7 +53,7 @@ async def summarize_history(
     try:
         model_id = resolver.pick_model_by_capability("fast")
         summary_text = ""
-        async for token in chat_stream(model_id, msgs, resolver, rate_limiter):
+        async for token in chat_stream(model_id, msgs, resolver, rate_limiter, user_id=user_id):
             summary_text += token
         cleaned = summary_text.strip()
         if cleaned:
@@ -62,25 +66,34 @@ async def summarize_conversation_task(
     conv_id: str,
     resolver: Optional[Resolver] = None,
     rate_limiter: Optional[EndpointRateLimiter] = None,
+    user_id: Optional[str] = None,
 ) -> None:
     """
     Loads all messages for the conversation, generates a summary, and writes it to disk.
     Ingests the summary into the memory vector index (RAG).
     """
-    messages = storage.load_messages(conv_id)
+    drive = await run_in_threadpool(get_drive_for_user, user_id) if user_id else None
+    if drive:
+        messages = await run_in_threadpool(conversations_drive.load_messages, drive, conv_id)
+    else:
+        messages = await run_in_threadpool(local_storage.load_messages, conv_id, user_id=user_id)
     if not messages:
         return
-    
-    summary = await summarize_history(messages, resolver, rate_limiter)
+
+    summary = await summarize_history(messages, resolver, rate_limiter, user_id=user_id)
     if summary:
-        storage.save_summary(conv_id, summary)
-        
-        try:
-            from app.memory.embed import embed
-            from app.memory.index import add_chunk
-            
-            embedding = await embed(summary)
-            add_chunk(conv_id, summary, embedding)
-        except Exception as e:
-            import sys
-            print(f"Failed to index summary for RAG: {e}", file=sys.stderr)
+        if drive:
+            await run_in_threadpool(conversations_drive.save_summary, drive, conv_id, summary)
+        else:
+            await run_in_threadpool(local_storage.save_summary, conv_id, summary, user_id=user_id)
+
+        if user_id:
+            try:
+                from app.memory.embed import embed
+                from app.memory.index import add_chunk
+
+                embedding = await embed(summary, user_id=user_id)
+                await run_in_threadpool(add_chunk, user_id, conv_id, summary, embedding)
+            except Exception as e:
+                import sys
+                print(f"Failed to index summary for RAG: {e}", file=sys.stderr)

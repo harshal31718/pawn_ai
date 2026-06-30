@@ -13,15 +13,19 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase 2 — Google Drive (Not Started)
-**Active step:** P2-1 — Drive API wired; conversation logs read/written to Drive
-**Last completed:** Merge Phase 1.6 -> main
-**Branch:** main
+**Active phase:** Plan 2 — Image Refinement / img2img (imageLab branch)
+**Active step:** Settings Page UI Polish & API Keys Row Alignment completed.
+**Last completed:** Settings page layout polish & API keys row alignment — Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
+**Branch:** imageLab (merges → dev)
+**Plan:** `workspace/plan/plan_2_image_refinement.md`
+
+> Phase MU (below) is code-complete on dev/main and live-verified (OAuth + Drive + BYOK).
+> imageLab Milestones A.0/A.1 are tracked in `workspace/implemented_phases/phase_5_kaggle_image.md`.
 
 ---
 
 ## Phase 1 — Foundation
-*Plan reference: `workspace/implemented_phases/phase_1_foundation.md`*
+*Plan reference: `workspace/implemented_phases/phase_1_0_foundation.md`*
 
 - [x] **Step 1 — Create the repo**
   Folder structure, `.gitignore`, first commit. Demo: `git log` shows one commit.
@@ -128,34 +132,233 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
-## Phase 2 — Google Drive
-*Plan reference: `workspace/plan/phase_2_google_drive.md`*
+## Phase MU — Multi-User / Auth / BYOK / Drive
+*Plan reference: `~/.claude/plans/what-i-want-1-mutable-waffle.md`*
+*Branch: dev*
 
-- [ ] **P2-1** — Drive API wired; conversation logs read/written to Drive.
-- [ ] **P2-2** — User memory file on Drive; auto-injected into context.
-- [ ] **P2-3** — Uploaded docs stored on Drive.
+Architecture:
+- App data (profiles, sessions, BYOK keys, memory embeddings) → Supabase free tier (pgvector)
+- User data (conversations, uploads) → user's own Google Drive
+- Auth: Google OAuth2 (includes drive.file scope)
+- BYOK: keys encrypted AES-256-GCM at rest; backend proxies all LLM calls (no CORS exposure)
+
+- [x] **MA-1** — Supabase client + AES-GCM crypto + new secrets wired ✓
+  `backend/app/db/supabase_client.py`, `backend/app/core/crypto.py`, 6 new secrets,
+  updated `config.py`, `requirements.txt`, `docker-compose.yml`, `secrets/*.example`
+  NOTE: supabase_url / supabase_service_key / google_client_id / google_client_secret
+  contain PLACEHOLDER values — user must fill with real values before MA-2 routes work.
+  encryption_secret and jwt_secret are pre-generated with real random values.
+
+- [x] **MA-2** — Google OAuth2 + auth routes + JWT ✓
+  `backend/app/core/jwt_utils.py`, `backend/app/routes/auth.py` (login/callback/me/logout),
+  registered in main.py. /auth/* routes public (no middleware yet).
+
+- [x] **MA-3** — Auth middleware + route scoping ✓
+  `backend/app/middleware/auth.py` (AuthMiddleware, JWT Bearer, public /health /auth/*),
+  `backend/tests/conftest.py` (bypass_auth fixture for tests),
+  storage/conversations.py and documents.py scoped by user_id,
+  routes/conversations.py, routes/upload.py, routes/chat.py pass user_id through,
+  LangGraph thread_id namespaced as {user_id}:{conv_id}. 47 tests passing.
+  `backend/app/routes/auth.py` (login/callback/me/logout), `backend/app/core/jwt_utils.py`
+
+- [x] **MA-4** — Frontend auth UI + 429 back-off timer ✓
+  `frontend/src/contexts/AuthContext.tsx` (AuthProvider, useAuth, OAuth callback handler),
+  `frontend/src/pages/LoginPage.tsx` (Google sign-in button with inline SVG logo),
+  `frontend/src/api/client.ts` (authHeaders() on all requests, onRateLimit callback, 401 auto-reload),
+  `frontend/src/App.tsx` (AuthProvider wrapper, AuthGate, 429 countdown banner, useAuth for displayName),
+  `backend/app/events.py` (rate_limit_event + code field on error_event).
+  Build passes (tsc + vite). 47 backend tests passing.
+  `AuthContext.tsx`, `LoginPage.tsx`, JWT header injection in `client.ts`, rate-limit countdown UI
+
+- [x] **DD-1** — Drive storage layer ✓
+  `backend/app/storage/drive.py` (DriveStorage: root/folder CRUD, upload/download text,
+  list, delete, find; auto token refresh + Supabase persistence callback),
+  `backend/app/core/drive_factory.py` (get_drive_for_user — exception-safe, returns None
+  when Supabase unavailable / no tokens / decrypt fails → callers fall back to local FS).
+
+- [x] **DD-2** — Conversations → Google Drive ✓
+  `backend/app/storage/conversations_drive.py` (same interface, drive as first param;
+  folder structure PAWN/conversations/{conv_id}/meta.json|messages.jsonl|summary.md).
+  Routes wired: routes/conversations.py + routes/chat.py + memory/summarize.py all try
+  get_drive_for_user(user_id) first, fall back to local filesystem when None.
+
+- [x] **DD-3** — Uploads → Google Drive ✓
+  `backend/app/storage/documents_drive.py` (PAWN/uploads/{doc_id}.txt).
+  Routes wired: routes/upload.py + routes/chat.py use drive when available, else local.
+  47 tests passing (tests hit local fallback since no real Supabase).
+
+- [x] **SM-1** — Memory → Supabase pgvector ✓
+  `memory/index.py` add_chunk(user_id, conv_id, text, embedding) → Supabase insert (exception-safe).
+  `memory/retrieve.py` retrieve(query, user_id, active_conv_id, top_k) → pgvector + FTS via RPC,
+  RRF fusion in Python, graceful degradation (FTS-only if embed fails, [] if Supabase down).
+  AgentState gains user_id; graph.py retrieve calls + chat.py inputs pass it through.
+  summarize.py indexes summaries with user_id. Removed sqlite-vec dep.
+  `supabase/schema.sql` created (tables + match_memory_chunks/search_memory_chunks RPCs).
+  test_rag.py rewritten to mock Supabase. 47 tests passing.
+  NOTE: user must run supabase/schema.sql in their Supabase project before memory works live.
+
+- [x] **BK-1** — BYOK key store + /keys routes ✓
+  `backend/app/core/key_store.py` (set_key/get_key/list_providers/delete_key, AES-GCM,
+  exception-safe reads, VALID_PROVIDERS set). `backend/app/routes/keys.py`
+  (GET /keys → providers only, PUT /keys/{provider}, DELETE /keys/{provider}; key values
+  never returned). Registered in main.py. test_keys.py (7 tests).
+
+- [x] **BK-2** — Resolver + normalize per-user key lookup ✓
+  `resolver.pick(model_id, user_id=None)`: user BYOK key (key_store.get_key) preferred,
+  falls back to shared Docker secret; keyed endpoints first, falls back to all available
+  if none keyed (preserves test/dev path). `normalize.chat_stream(..., user_id=None)`
+  forwards to pick. graph.py AgentState.user_id threaded into agent/ask_model/final nodes
+  + their pick/chat_stream calls. chat.py generate_title + error fallback pass user_id.
+  DummyResolver.pick signatures updated. 54 tests passing.
+
+- [x] **BK-3** — Frontend settings panel ✓
+  `frontend/src/components/ApiKeysSection.tsx` (BYOK: per-provider password input, Save/Remove,
+  "Configured" badge, getKeys/setKey/deleteKey; key values never re-displayed).
+  Integrated into existing `SettingsPage.tsx` (new API Keys section + Profile shows real email
+  + Sign out button; removed now-implemented "Connected Accounts" from Future list).
+  `Sidebar.tsx` profile card shows real email (gear icon already wired pre-MA-4).
+  `App.tsx` passes user.email + logout; client.ts getKeys() unwraps {providers}.
+  Fixed pre-existing unused-var build errors (useCallback, isAuthenticated).
+  Frontend build passes (tsc + vite). 54 backend tests passing.
 
 ---
 
-## Phase 3 — Encryption
-*Plan reference: `workspace/plan/phase_3_encryption.md`*
+## Manual Setup (user action) — DONE: login working end-to-end ✓
 
-- [ ] **P3-1** — WebCrypto AES-256-GCM; all personal Drive files encrypted in browser.
+Completed by user on 2026-06-27. Google OAuth2 → JWT → app login verified working.
+
+1. **Supabase**: created free project; ran `supabase/schema.sql`; filled
+   `secrets/supabase_url` + `secrets/supabase_service_key` (new-style `sb_secret_...` key).
+2. **Google Cloud OAuth2**: created Web client; redirect URI
+   `http://localhost:8001/auth/callback`; Drive API enabled; consent screen in Testing with
+   test user added; filled `secrets/google_client_id` + `secrets/google_client_secret`.
+3. `encryption_secret` + `jwt_secret` were already real (MA-1).
+
+### Setup-time code fixes (must be committed)
+
+- **PKCE disabled** (`autogenerate_code_verifier=False` in `routes/auth.py:_build_flow`): the flow
+  is stateless (separate Flow objects in /login and /callback) so a per-request code_verifier
+  can't survive; google-auth-oauthlib auto-PKCE caused "invalid_grant: Missing code verifier".
+  Safe because this is a confidential client (has client_secret).
+- **`OAUTHLIB_RELAX_TOKEN_SCOPE=1`** set at import in `routes/auth.py`: Google reorders/drops scopes
+  (e.g. drive.file under granular consent), and oauthlib errors on any scope change. Relaxed so
+  exchange completes; missing drive.file → app falls back to local filesystem storage.
+- **Naive-UTC expiry fix** (`storage/drive.py` __init__): Supabase returns `expires_at` as tz-aware
+  `timestamptz`, but google-auth compares expiry against a naive UTC now() → TypeError crashed every
+  chat request. Now converted to naive UTC. This was the "conversations save but no reply" bug.
+
+### Verified live (2026-06-27) ✓
+
+- [x] Google OAuth login → JWT → app.
+- [x] Conversations saving to user's Google Drive (`PAWN/conversations/`).
+- [x] BYOK Google key (Settings → API Keys) → LLM reply streams back ("Hello there friend.").
+
+### Still to verify (optional, before/after merge)
+
+- [ ] Memory: fact from chat A surfaces in chat B (needs Supabase pgvector + embeddings).
+- [ ] Second Google account → empty chat list (isolation).
+
+### Next: commit setup fixes + merge dev → main
 
 ---
 
-## Phase 4 — Multi-User / Auth
-*Plan reference: `workspace/plan/phase_4_multiuser.md`*
+## Phase W — Warm Sessions + Job Tracking (imageLab)
+*Plan reference: `workspace/implemented_phases/phase_5_kaggle_image.md`*
+*Branch: imageLab (merges → dev)*
 
-- [ ] **P4-1** — Google OAuth2; multi-user sessions; per-user Drive isolation.
-- [ ] **P4-2** — Settings panel; custom agent configs; capability + tag routing.
+Goal: keep one Kaggle container **warm** so repeat images are fast (user-set timer + image cap), and
+make every generation a **durable, server-tracked job** (fixes the double-submit / lost-result bug)
+surfaced in a **Generations monitor panel**. Architecture: **Supabase job-queue rendezvous** — a
+persistent kernel loads the model once, then loops polling Supabase for prompts and writes images
+back. Image Lab only (chat composer deferred to Milestone B). Targets the top deferred item
+(FLUX ~820 s/image).
+
+- [x] **W.0 — Prove the persistent loop (CPU, no model)** ⚠️ first / load-bearing ✓
+  `image_sessions` + `image_jobs` schema; `kaggle_templates/session_poc/` CPU echo notebook;
+  `core/image_session.py` (`start_session`/`get_session_status`/`stop_session`/`submit_session_job`/`get_job`)
+  pushing via the non-blocking `kaggle.deploy_kernel`; session routes (`/generate/session/*`,
+  `/generate/job/{id}`); new `supabase_anon_key` secret (public — service key never injected);
+  minimal `SessionPocPanel` Lab control. 117 backend tests green (24 new); `npm run build` clean.
+  code-reviewer + security-auditor PASS (0 critical). RLS/scoped-JWT deferred to W.1 (documented).
+  **LIVE-VERIFIED (2026-06-29):** Lab → Start warm session → kernel reached Warm with a live
+  countdown + fresh heartbeat, 2 echo jobs round-tripped through Supabase (ECHO: "really" rendered).
+  Supabase's new sb_publishable_* key enforces RLS → added a permissive anon policy on the two
+  tables (commit 043a7f3). The persistent-loop assumption is PROVEN.
+
+- [x] **W.1 — Warm session backend + FLUX persistent notebook + unified job tracking** ✓
+  `image_flux_session/notebook.ipynb` (load FLUX once → Supabase serve-loop); session manager made
+  registry-driven (FLUX→GPU serve-loop, SDXL→CPU echo) + `extend_session`; **cold one-shot path
+  retrofitted to a durable background job** (`POST /generate` → `{job_id}`, GC-safe fire-and-forget
+  worker behind the per-`(user,model)` lock, de-dup); `GET /generate/jobs` (+ `/job/{id}` from W.0);
+  constants (job poll, cold-job reap wall-clock); `reap_stale_jobs`. Frontend: `runGenerate`/poll
+  contract, `extendSession`/`listJobs` helpers, `SessionPocPanel` renders PNG (FLUX) or echo (SDXL).
+  132 backend tests (new `test_image_jobs.py`); `npm run build` clean. code-reviewer PASS (CRITICAL
+  create_task-GC fixed) + security-auditor PASS (service key never injected).
+  **Deferred (documented):** `supabase_jwt_secret` + scoped per-session JWT — the new Supabase
+  `sb_publishable_*` platform deprecates legacy HS256-secret minting; permissive-anon RLS policy
+  (W.0) kept for the single-user trial; **scoped JWT is MANDATORY before multi-user**. SDXL real
+  serve-loop is a follow-up.
+  **Live verify pending:** Image Lab → FLUX → Start warm session → first image ~10 min, later in
+  **seconds**; Extend/Stop work; cold Generate still returns an image (now job-polled).
+
+- [x] **W.2 — Image Lab UI (session controls + Generations monitor panel)** ✓
+  Job-driven `ImageGenerator` (submit → poll job id, inline render); **server-derived button state**
+  (parent lifts a shared `listJobs` poll → disabled while a model has a queued/running job → no
+  duplicate submit, survives refresh; + a local submitting guard for the click→response window);
+  new `components/GenerationsPanel.tsx` (all jobs across models/sessions, status chips, lazy
+  thumbnails + View lightbox + Download); new `components/SessionBar.tsx` (duration/cap picker, live
+  countdown, Extend +30, Stop, "session ended" CTA; re-attaches on refresh); `SessionPocPanel`
+  deleted (superseded). `npm run build` clean; 132 backend tests green. code-reviewer PASS (0 critical;
+  WARN fixes applied: double-submit guard, gated countdown ticker, mime-derived download filename).
+  **Deferred (documented):** frontend unit tests (project has none — gate is `npm run build`);
+  GenerationsPanel lazy-image fan-out capped at 30 (fine for trial).
+  **Live verify pending:** full warm-FLUX flow + monitor panel; refresh mid-generate → job
+  re-attaches in the panel + button stays disabled (the double-submit bug, visibly fixed).
+
+- [x] **W.3 — Real SDXL warm serve-loop (image generation, not echo)** ✓
+  *Plan: `workspace/implemented_phases/phase_5_kaggle_image.md`.* Added `kaggle_templates/image_sdxl_session/notebook.ipynb`
+  (mirrors the FLUX serve-loop; loads SDXL once via `AutoPipelineForText2Image` → serve loop → PNG,
+  `via kaggle:sdxl-session`). SDXL registry entry repointed to it (GPU + dataset, slug `pawn-sdxl-session`);
+  dropped the unused CPU-POC imports. SDXL session test asserts the GPU push; added a session-slug↔title
+  invariant test. No frontend change (already MIME-aware). 134 backend tests green; anon-key-only
+  injection still verified for sdxl. **Live verify pending:** SDXL → Start warm session → `Warm` in
+  ~1–2 min → Generate returns an image in seconds.
+
+---
+
+- [x] **W.4 — Session startup observability**
+  Notebooks patch `installing` → `loading_model` → `ready` at phase boundaries.
+  `_LIVE_STATUSES` extended. `SessionBar` shows phase-specific messages ("Waiting for GPU…" / "Installing…" / "Loading model…"). No schema changes.
+
+- [x] **W.5 — Independent per-model panels**
+  Tab switcher removed from `ImageLabPage`. All models rendered simultaneously as stacked `ModelPanel` components — each owns its own jobs poll, `SessionBar`, `ImageGenerator`, and `GenerationsPanel`. No cross-model job mixing.
+
+- [x] **W.6 — Session liveness + cold-vs-warm routing fixes**
+  `IMAGE_SESSION_HEARTBEAT_STALE_SECONDS`: 30 → 90. `create_cold_job` blocks when warm session is live. Kaggle GPU limit error surfaced as actionable message. `SessionBar` confirm dialog before re-Start.
+
+---
+
+## Phase 6 — UI Routing + Global Polish (imageLab branch)
+*Plan reference: `workspace/implemented_phases/phase_6_ui.md`*
+
+- [x] **Phase 6 UI — URL-based routing refactor**
+  `react-router-dom` installed. `AppContext.tsx` lifts cross-route state (theme, models, prefs).
+  `Layout.tsx` owns Sidebar + Outlet + global dark mode toggle (visible on all routes).
+  `ChatPage.tsx` extracts chat logic; URL ↔ store sync via `useParams` + `useEffect`.
+  `SettingsPageWrapper` / `ImageLabPageWrapper` thin pages replace direct component rendering.
+  `App.tsx` down to 44 lines. `Sidebar.tsx` uses `useNavigate`/`useLocation` internally.
+  tsc zero errors; `npm run build` clean.
+
+- [x] **Settings page layout redesign**
+  Restructured settings page to 3 responsive vertical columns for desktop viewports. Refined responsiveness of BYOK API key inputs and vertical Kaggle input fields; grouped bubble color presets into horizontally scrollable carousels with aligned horizontal start offsets and chevron scroll buttons.
+- [x] **Settings page layout polish & API keys row alignment**
+  Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
 
 ---
 
 ## Working Agreement
 
-- One step per session. Pause and review the diff before moving to the next.
-- Read the phase plan file before starting a step.
+- Auto mode: implement steps sequentially, update tracker after every step.
 - Tests must pass before marking `[x]`. No exceptions.
-- Update this file and `workspace/dev-log.md` at the end of every step.
-- The step is done when its demo works, not just when the code compiles.
+- Update this file and `workspace/current_state.md` after every step.
+- If blocked (user action needed), document in plan file and move to next implementable step.

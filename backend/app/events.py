@@ -18,9 +18,17 @@ def done_event(via_provider: str = "", via_endpoint_id: str = "") -> str:
     return f"data: {json.dumps({'type': 'done', 'via_provider': via_provider, 'via_endpoint_id': via_endpoint_id})}\n\n"
 
 
-def error_event(message: str) -> str:
+def error_event(message: str, code: str = "") -> str:
     """A recoverable or terminal error."""
-    return f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
+    payload: dict = {"type": "error", "message": message}
+    if code:
+        payload["code"] = code
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def rate_limit_event(retry_after: int, provider: str = "") -> str:
+    """All endpoints rate-limited — client should show a countdown timer."""
+    return f"data: {json.dumps({'type': 'error', 'code': 'rate_limit', 'message': f'Rate limited by {provider}' if provider else 'Rate limited', 'retry_after': retry_after})}\n\n"
 
 
 def provider_switch_event(from_provider: str, to_provider: str) -> str:

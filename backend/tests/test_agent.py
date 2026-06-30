@@ -60,7 +60,7 @@ async def test_load_context_node(mock_dispatch, mock_retrieve):
     
     res = await load_context_node(state)
     assert res["retrieved_memory"] == ["memory content"]
-    mock_retrieve.assert_called_once_with("user query", active_conv_id="c1", top_k=3)
+    mock_retrieve.assert_called_once_with("user query", user_id=None, active_conv_id="c1", top_k=3)
     mock_dispatch.assert_called_once_with("memory_hit", {"summary": "memory content"})
 
 @pytest.mark.asyncio

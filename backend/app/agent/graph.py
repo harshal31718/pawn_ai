@@ -9,6 +9,7 @@ from app.agent.parser import parse_action
 from app.core import normalize
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
+from app.exceptions import NoEndpointError
 
 class DummyRateLimiter:
     def can_use(self, endpoint) -> bool: return True
@@ -18,15 +19,18 @@ class DummyRateLimiter:
     def record_success(self, endpoint_id): pass
 
 class DummyResolver:
-    def pick(self, model_id):
+    def pick(self, model_id, user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
-    def pick_by_capability(self, level, visibility="internal"):
+    def pick_by_capability(self, level, visibility="internal", user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
-    def pick_model_by_capability(self, level, visibility="internal"):
+    def pick_model_by_capability(self, level, visibility="internal", user_id=None):
         return "gemini-2.5-flash"
+    def fallback_models(self, model_id, user_id=None):
+        return [model_id]
 
 class AgentState(TypedDict):
     conversation_id: str
+    user_id: str
     history: List[Dict[str, Any]]
     retrieved_memory: List[str]
     scratchpad: List[Dict[str, Any]]
@@ -141,11 +145,16 @@ async def load_context_node(state: AgentState) -> dict:
         
     hits = []
     if query:
-        hits = await retrieve(query, active_conv_id=state["conversation_id"], top_k=3)
-        
+        hits = await retrieve(
+            query,
+            user_id=state.get("user_id"),
+            active_conv_id=state["conversation_id"],
+            top_k=3,
+        )
+
     for hit in hits:
         await adispatch_custom_event("memory_hit", {"summary": hit["text"]})
-        
+
     return {
         "retrieved_memory": [h["text"] for h in hits]
     }
@@ -176,22 +185,33 @@ async def agent_node(
     )
     
     await adispatch_custom_event("step", {"label": "Thinking", "detail": f"step {step_count + 1}"})
-    
-    model_id = resolver.pick_model_by_capability("fast")
-    
+
+    user_id = state.get("user_id")
+    # Pick a fast model the user actually has a key for; fall back to their selected
+    # model if no keyed fast model exists.
+    try:
+        model_id = resolver.pick_model_by_capability("fast", user_id=user_id)
+    except NoEndpointError:
+        model_id = state["user_model_id"]
+
     async def on_switch(from_p, to_p):
         await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
-        
+
+    async def on_model_switch(from_m, to_m):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+
     response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
         messages=[{"role": "user", "content": prompt}],
         resolver=resolver,
         rate_limiter=rate_limiter,
-        on_provider_switch=on_switch
+        on_provider_switch=on_switch,
+        user_id=user_id,
+        on_model_switch=on_model_switch,
     ):
         response += token
-        
+
     action = parse_action(response)
     
     if not isinstance(action, dict) or "action" not in action:
@@ -207,11 +227,16 @@ async def search_memory_node(state: AgentState) -> dict:
     await adispatch_custom_event("step", {"label": "Searching memory", "detail": query})
     
     from app.memory.retrieve import retrieve
-    hits = await retrieve(query, active_conv_id=state["conversation_id"], top_k=3)
-    
+    hits = await retrieve(
+        query,
+        user_id=state.get("user_id"),
+        active_conv_id=state["conversation_id"],
+        top_k=3,
+    )
+
     for hit in hits:
         await adispatch_custom_event("memory_hit", {"summary": hit["text"]})
-        
+
     result = "\n".join(h["text"] for h in hits) if hits else "No relevant memory found."
     scratchpad = state["scratchpad"] + [{"action": "search_memory", "query": query, "result": result}]
     
@@ -231,31 +256,41 @@ async def ask_model_node(
 
     purpose = state["next_action"]["purpose"]
     prompt_text = state["next_action"]["prompt"]
-    
+    user_id = state.get("user_id")
+
     from app.agent.routing import PURPOSE_TO_LEVEL
     level = PURPOSE_TO_LEVEL.get(purpose, "balanced")
-    model_id = resolver.pick_model_by_capability(level)
-    
-    candidates = resolver.pick(model_id)
+    # Pick a model at this tier the user has a key for; fall back to their selection.
+    try:
+        model_id = resolver.pick_model_by_capability(level, user_id=user_id)
+    except NoEndpointError:
+        model_id = state["user_model_id"]
+
+    candidates = resolver.pick(model_id, user_id=user_id)
     active_provider = candidates[0][4] if candidates else "unknown"
     active_provider_model = candidates[0][1] if candidates else "unknown"
-    
+
     await adispatch_custom_event("model_call", {"model": f"{active_provider}:{active_provider_model}", "purpose": purpose})
     await adispatch_custom_event("step", {"label": "Drafting" if purpose == "draft" else "Critiquing", "detail": purpose})
-    
+
     async def on_switch(from_p, to_p):
         await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
-        
+
+    async def on_model_switch(from_m, to_m):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+
     response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
         messages=[{"role": "user", "content": prompt_text}],
         resolver=resolver,
         rate_limiter=rate_limiter,
-        on_provider_switch=on_switch
+        on_provider_switch=on_switch,
+        user_id=user_id,
+        on_model_switch=on_model_switch,
     ):
         response += token
-        
+
     scratchpad = state["scratchpad"] + [{"action": "ask_model", "purpose": purpose, "result": response}]
     return {
         "scratchpad": scratchpad,
@@ -279,24 +314,31 @@ async def final_node(
     )
     
     await adispatch_custom_event("step", {"label": "Composing final answer", "detail": ""})
-    
+
+    user_id = state.get("user_id")
     model_id = state["user_model_id"]
-    candidates = resolver.pick(model_id)
+    candidates = resolver.pick(model_id, user_id=user_id)
     initial_provider = candidates[0][4] if candidates else "unknown"
     
     await adispatch_custom_event("final_provider", {"provider": initial_provider})
-    
+
     async def on_switch(from_p, to_p):
         await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
         await adispatch_custom_event("final_provider", {"provider": to_p})
-        
+
+    async def on_model_switch(from_m, to_m):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+        await adispatch_custom_event("final_provider", {"provider": to_m})
+
     full_response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
         messages=state["history"] + [{"role": "user", "content": synthesis_prompt}],
         resolver=resolver,
         rate_limiter=rate_limiter,
-        on_provider_switch=on_switch
+        on_provider_switch=on_switch,
+        user_id=user_id,
+        on_model_switch=on_model_switch,
     ):
         full_response += token
         await adispatch_custom_event("token", {"delta": token})

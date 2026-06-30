@@ -1,23 +1,29 @@
 import { useState, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { ConversationMeta } from '../api/client'
+import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon } from './icons'
 
 interface Props {
   conversations: ConversationMeta[]
   activeId: string | null
+  pendingIds?: Set<string>
+  syncError?: string | null
   onSelect: (id: string) => void
-  onCreate: () => void
+  onCreate: () => string
   onDelete: (id: string) => void
   onRename: (id: string, newTitle: string) => void
   isOpen: boolean
   onClose: () => void
   onOpen: () => void
-  onOpenSettings: () => void
   displayName: string
+  email?: string
 }
 
 export default function Sidebar({
   conversations,
   activeId,
+  pendingIds,
+  syncError,
   onSelect,
   onCreate,
   onDelete,
@@ -25,9 +31,10 @@ export default function Sidebar({
   isOpen,
   onClose,
   onOpen,
-  onOpenSettings,
   displayName,
+  email,
 }: Props) {
+  const navigate = useNavigate()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
@@ -63,12 +70,25 @@ export default function Sidebar({
   }
 
   const handleNewChat = () => {
-    const emptyChat = conversations.find((c) => c.message_count === 0)
-    if (emptyChat) {
-      onSelect(emptyChat.id)
-    } else {
-      onCreate()
-    }
+    // Dedupe-to-empty is handled race-free in the store (createConversation),
+    // since the optimistic conv is inserted synchronously.
+    const newId = onCreate()
+    navigate(`/chat/${newId}`)
+    onClose()
+  }
+
+  const handleImageLab = () => {
+    navigate('/imagelab')
+    onClose()
+  }
+
+  const handleSelectConversation = (id: string) => {
+    onSelect(id)
+    navigate(`/chat/${id}`)
+  }
+
+  const handleOpenSettings = () => {
+    navigate('/settings')
     onClose()
   }
 
@@ -103,9 +123,7 @@ export default function Sidebar({
                 "
                 title="Collapse sidebar"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4.5 h-4.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75h16.5a1.5 1.5 0 011.5 1.5v13.5a1.5 1.5 0 01-1.5 1.5H3.75a1.5 1.5 0 01-1.5-1.5V5.25a1.5 1.5 0 011.5-1.5zM9 3.75v16.5" />
-                </svg>
+                <SidebarLayoutIcon className="w-4.5 h-4.5" />
               </button>
             </div>
 
@@ -120,19 +138,42 @@ export default function Sidebar({
                 "
                 id="new-chat-button"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 shrink-0 text-theme-text-muted">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
-                </svg>
+                <PencilIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
                 <span className="py-1">New chat</span>
               </button>
             </div>
 
+            {/* Action Button: Image Lab (Milestone A.0 — throwaway) */}
+            <div className="px-3 pb-2 shrink-0">
+              <button
+                onClick={handleImageLab}
+                className="
+                  w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold
+                  text-theme-text bg-theme-bg border border-theme-border/50 hover:bg-theme-surface-hover
+                  transition-all active:scale-98 cursor-pointer select-none shadow-sm
+                "
+                id="image-lab-button"
+                title="Image Lab (experimental)"
+              >
+                <BeakerIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
+                <span className="py-1">Image Lab</span>
+              </button>
+            </div>
+
+            {/* Offline / unsynced changes banner */}
+            {syncError && (
+              <div className="px-3 pb-2 shrink-0">
+                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                  <span className="truncate">{syncError}</span>
+                </div>
+              </div>
+            )}
+
             {/* Search Option */}
             <div className="px-3 pb-2 shrink-0">
               <div className="relative flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted absolute left-3 pointer-events-none select-none">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.603 10.603z" />
-                </svg>
+                <MagnifierIcon className="w-3.5 h-3.5 text-theme-text-muted absolute left-3 pointer-events-none select-none" />
                 <input
                   type="text"
                   placeholder="Search chats"
@@ -149,9 +190,7 @@ export default function Sidebar({
             <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
               {conversations.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 opacity-40">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21.75l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v5.018z" />
-                  </svg>
+                  <ChatBubbleIcon className="w-6 h-6 opacity-40" />
                   <span className="text-xs">No conversations yet</span>
                   <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
                 </div>
@@ -165,7 +204,7 @@ export default function Sidebar({
                       key={conv.id}
                       onClick={() => {
                         if (!isEditing) {
-                          onSelect(conv.id)
+                          handleSelectConversation(conv.id)
                         }
                       }}
                       className={`
@@ -177,9 +216,7 @@ export default function Sidebar({
                       `}
                     >
                       {/* Chat Bubble Icon */}
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 shrink-0 text-theme-text-muted opacity-75">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21.75l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v5.018z" />
-                      </svg>
+                      <ChatBubbleIcon className="w-4 h-4 shrink-0 text-theme-text-muted opacity-75" />
 
                       {/* Title */}
                       {isEditing ? (
@@ -199,6 +236,14 @@ export default function Sidebar({
                         <span className="flex-1 truncate pr-8 select-none" onDoubleClick={(e) => handleStartRename(conv, e)}>
                           {conv.title}
                         </span>
+                      )}
+
+                      {/* Pending-sync indicator (op queued, not yet acknowledged) */}
+                      {!isEditing && pendingIds?.has(conv.id) && (
+                        <span
+                          title="Syncing…"
+                          className="shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"
+                        />
                       )}
 
                       {/* Inline Actions (visible on item hover) */}
@@ -266,18 +311,15 @@ export default function Sidebar({
               </div>
               <div className="flex flex-col min-w-0 flex-1">
                 <span className="text-xs font-semibold text-theme-text truncate leading-none mb-1">{displayName}</span>
-                <span className="text-[10px] text-theme-text-muted truncate leading-none">harshal@pawn.ai</span>
+                <span className="text-[10px] text-theme-text-muted truncate leading-none">{email || 'Signed in'}</span>
               </div>
               <button
                 type="button"
-                onClick={onOpenSettings}
+                onClick={handleOpenSettings}
                 className="text-theme-text-muted hover:text-theme-text p-1 rounded-lg hover:bg-theme-bg/50 transition-colors shrink-0 cursor-pointer"
                 title="Settings"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.43l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.645-.869L9.594 3.94z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
+                <SettingsGearIcon className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -301,9 +343,7 @@ export default function Sidebar({
                 "
                 title="Expand sidebar"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75h16.5a1.5 1.5 0 011.5 1.5v13.5a1.5 1.5 0 01-1.5 1.5H3.75a1.5 1.5 0 01-1.5-1.5V5.25a1.5 1.5 0 011.5-1.5zM9 3.75v16.5" />
-                </svg>
+                <SidebarLayoutIcon className="w-5 h-5" />
               </button>
  
               {/* 2. New Chat Button */}
@@ -318,12 +358,25 @@ export default function Sidebar({
                 "
                 title="New chat"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4.5 h-4.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
-                </svg>
+                <PencilIcon className="w-4.5 h-4.5" />
               </button>
- 
-              {/* 3. Search Chat Option */}
+
+              {/* 3. Image Lab Button (Milestone A.0 — throwaway) */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleImageLab()
+                }}
+                className="
+                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
+                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
+                "
+                title="Image Lab (experimental)"
+              >
+                <BeakerIcon className="w-4.5 h-4.5" />
+              </button>
+
+              {/* 4. Search Chat Option */}
               <button
                 disabled
                 onClick={(e) => e.stopPropagation()}
@@ -332,30 +385,25 @@ export default function Sidebar({
                 "
                 title="Search chats"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4.5 h-4.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.603 10.603z" />
-                </svg>
+                <MagnifierIcon className="w-4.5 h-4.5" />
               </button>
             </div>
  
-            {/* 4. Bottom Settings & Profile Avatar */}
+            {/* 5. Bottom Settings & Profile Avatar */}
             <div className="w-full flex flex-col items-center gap-3.5 border-t border-theme-border/40 pt-4 pb-1 px-1 shrink-0">
               {/* Settings Button */}
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); onOpenSettings() }}
+                onClick={(e) => { e.stopPropagation(); handleOpenSettings() }}
                 className="
                   text-theme-text-muted hover:text-theme-text p-2 rounded-xl hover:bg-theme-bg/50
                   transition-colors cursor-pointer flex items-center justify-center
                 "
                 title="Settings"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4.5 h-4.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.43l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.645-.869L9.594 3.94z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
+                <SettingsGearIcon className="w-4.5 h-4.5" />
               </button>
- 
+
               {/* Profile Avatar Circle */}
               <div
                 onClick={(e) => e.stopPropagation()}
