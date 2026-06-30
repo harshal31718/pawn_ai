@@ -181,7 +181,9 @@ export interface JobResult {
   mime?: string | null
   via?: string | null
   error?: string | null
+  params?: Record<string, unknown> | null
   created_at?: string | null
+  started_at?: string | null
   done_at?: string | null
   has_image?: boolean // present in list_jobs summaries (image bytes fetched via getJob)
 }

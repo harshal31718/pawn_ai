@@ -450,3 +450,19 @@ This becomes your interview script and project history.
 **Tests:** 134 backend passing — rewrote `test_start_session_inserts_row_and_pushes_cpu_notebook` → `test_start_session_sdxl_uses_gpu_serve_loop` (asserts GPU + dataset + `pawn-sdxl-session`); added `test_session_slug_titles_round_trip` (Kaggle title↔slug invariant for session slugs). The anon-key-only security test (runs on sdxl) still passes → no service key in the SDXL session push.
 **Live verify pending:** SDXL → Connect → Warm session → Start → `Warm` in ~1–2 min → Generate returns an image in seconds (`via kaggle:sdxl-session`); thumbnails in Generations.
 **Commit:** (this commit)
+
+---
+
+### 2026-06-30 — Plan 1.0: Generations panel UI fixes [imageLab]
+
+**Why:** Five targeted UX gaps in the Generations monitor panel: (1) "6 active" header conflated queued and running; (2) no way to see how long a generation actually took; (3) style preset not visible on job rows; (4) no way to reuse a prompt; (5) killing a Kaggle notebook externally left running jobs stuck forever in "running" state.
+**Built:**
+- **Fix 1 (header):** Split `N active` into `N running · M queued`; running segment uses amber colour, queued uses muted text; either segment hidden if count is 0.
+- **Fix 2 (gen time):** `⏱ Xm Ys` shown at right of each row's second line — live ticking every second for running jobs (1 s `setInterval` in `JobRow`), fixed `started_at→done_at` duration for done/error jobs, hidden for queued or when `started_at` is null. `started_at` added to `_JOB_LIST_COLUMNS` and `list_jobs` dict (was selected but not mapped); `JobResult.started_at` added to `client.ts`.
+- **Fix 3 (style preset tag):** Small pill badge in the top-right of the first line when `job.params?.style_preset` is set; key inverted to human-readable label via `STYLE_PRESET_LABELS` map in `GenerationsPanel`. `params` added to `_JOB_LIST_COLUMNS`, `list_jobs` dict, and `JobResult` type.
+- **Fix 4 (copy button):** Clipboard icon button per row copies the full `job.prompt`; swaps to a green checkmark for 1.5 s then resets. Timer cancelled on unmount.
+- **Fix 5 (session-death failover):** `reap_stale_jobs` now fetches full session rows and uses `_is_alive()` (which includes heartbeat-stale detection) instead of a structural status check. Running session jobs for non-alive sessions are also failed with "Session terminated unexpectedly" (previously only queued jobs were touched). This handles the case of a notebook being manually killed — on the next 3 s panel poll the job flips to error with `done_at` set.
+- **View/Download buttons:** Stacked vertically (column) at far right of each row with image.
+**Decisions:** Reaping running session jobs is now gated by `_is_alive()` (90 s heartbeat-stale threshold), which provides enough buffer for warm-session FLUX inference (typically seconds, not minutes).
+**Tests:** 136 backend passing (updated `test_reap_stale_jobs_reaps_jobs_of_dead_sessions` to assert both the queued and running reap updates); `npm run build` clean.
+**Commit:** (this commit)

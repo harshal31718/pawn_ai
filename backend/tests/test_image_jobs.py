@@ -195,16 +195,17 @@ def test_reap_stale_jobs_marks_stuck_cold_as_error():
 
 
 def test_reap_stale_jobs_reaps_jobs_of_dead_sessions():
-    """A queued/running job whose session has ended is reaped so the panel/button
+    """Queued and running jobs for a dead session are both reaped so the panel/button
     don't hang on a job the kernel will never pick up."""
     db = _FakeDB(rows={"image_sessions": [{"id": "s-dead", "status": "ended"}]})
     with patch("app.core.image_session.get_db", return_value=db):
         image_session.reap_stale_jobs("user-1")
-    # Last update targets the dead session's jobs with the session-ended reason.
-    table, vals = db.updates[-1]
-    assert table == "image_jobs"
-    assert vals["status"] == "error"
-    assert "session ended" in vals["error"]
+    # Two updates: one for queued jobs, one for running jobs.
+    session_updates = [(t, v) for t, v in db.updates if t == "image_jobs" and v.get("status") == "error"]
+    assert len(session_updates) >= 2, "expected separate reap updates for queued and running session jobs"
+    errors = {v["error"] for _, v in session_updates}
+    assert any("session ended" in e for e in errors), "queued-job reap message missing"
+    assert any("terminated" in e.lower() for e in errors), "running-job reap message missing"
 
 
 # --- Route: non-blocking POST /generate + GET /generate/jobs -----------------

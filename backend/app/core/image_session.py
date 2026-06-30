@@ -343,7 +343,7 @@ def get_job(user_id: str, job_id: str) -> Optional[dict]:
 # Columns the monitor panel needs -- deliberately EXCLUDES image_b64 so the
 # list stays light; bytes are fetched lazily via get_job when opened.
 _JOB_LIST_COLUMNS = (
-    "id, session_id, model, prompt, status, mime, via, error, "
+    "id, session_id, model, prompt, status, mime, via, error, params, "
     "created_at, started_at, done_at"
 )
 
@@ -438,11 +438,13 @@ def reap_stale_jobs(user_id: str) -> None:
 
     Rules:
     - Cold jobs stuck past max wall-clock: worker died (backend restart).
-    - Session jobs: only reap 'queued' ones for sessions whose status is NOT
-      in _LIVE_STATUSES. Never touch 'running' jobs -- the kernel owns them
-      and will write 'done' shortly. Never use _is_alive() here -- that would
-      incorrectly reap jobs for sessions with a temporarily stale heartbeat
-      (e.g. during the 30-90s pipe() inference call).
+    - Session jobs (queued): reap for any session where _is_alive() is False,
+      which covers both structurally dead sessions and heartbeat-stale ones
+      (e.g. kernel killed externally while the session status is still 'ready').
+    - Session jobs (running): also reap for non-alive sessions -- once the
+      heartbeat stale threshold (90 s) has elapsed the kernel is truly gone,
+      not merely busy (warm-session inference is fast; the cold-path kernel
+      owns its own row via run_cold_job and has no session_id).
     """
     now = _now()
     cutoff = _iso(now - timedelta(seconds=COLD_JOB_MAX_WALLCLOCK_SECONDS))
@@ -455,18 +457,19 @@ def reap_stale_jobs(user_id: str) -> None:
             "status", list(_ACTIVE_JOB_STATUSES)
         ).lt("created_at", cutoff).execute()
 
-        # Session jobs: only reap queued jobs for structurally dead sessions.
+        # Session jobs: reap queued + running jobs for any non-alive session.
+        # Fetching full rows so _is_alive() can check heartbeat_at + expires_at.
         sessions = (
             db.table("image_sessions")
-            .select("id, status")
+            .select("*")
             .eq("user_id", user_id)
             .execute()
         )
-        dead_ids = [
+        non_alive_ids = [
             s["id"] for s in (sessions.data or [])
-            if s.get("status") not in _LIVE_STATUSES
+            if not _is_alive(s)
         ]
-        if dead_ids:
+        if non_alive_ids:
             db.table("image_jobs").update(
                 {
                     "status": "error",
@@ -474,8 +477,17 @@ def reap_stale_jobs(user_id: str) -> None:
                     "done_at": _iso(now),
                 }
             ).eq("user_id", user_id).in_(
-                "session_id", dead_ids
+                "session_id", non_alive_ids
             ).eq("status", "queued").execute()
+            db.table("image_jobs").update(
+                {
+                    "status": "error",
+                    "error": "Session terminated unexpectedly",
+                    "done_at": _iso(now),
+                }
+            ).eq("user_id", user_id).in_(
+                "session_id", non_alive_ids
+            ).eq("status", "running").execute()
     except Exception as e:
         print(f"reap_stale_jobs failed for {user_id}: {e}", file=sys.stderr)
 
@@ -499,7 +511,9 @@ def list_jobs(user_id: str, model: Optional[str] = None, limit: int = 20) -> lis
             "mime": r.get("mime"),
             "via": r.get("via"),
             "error": r.get("error"),
+            "params": r.get("params"),
             "created_at": r.get("created_at"),
+            "started_at": r.get("started_at"),
             "done_at": r.get("done_at"),
             "has_image": r.get("status") == "done",
         }
