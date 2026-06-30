@@ -1,14 +1,8 @@
 # PAWN — Current State
 
 Last updated: 2026-06-30
-Active step: Settings Page UI Polish & API Keys Row Alignment completed.
-Phase: imageLab branch — Phase 6 UI, ImageLab layout redesign, session polish, and settings page polish done. Settings page redesigned to 3 columns and refined for narrow viewports. Plans archived at `workspace/implemented_phases/phase_6_ui.md`.
-
-
-> **Phase W goal:** keep one Kaggle container warm so repeat images are fast (user-set timer + image
-> cap), via a Supabase job-queue rendezvous; and make every generation a durable, server-tracked job
-> shown in a Generations monitor panel — which also fixes the reported double-submit / lost-result
-> bug (refresh/tab-switch loses the in-flight result and re-enables the button). Image Lab only.
+Active step: Ready to begin Phase 3 — WebCrypto Encryption (P3-1).
+Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30). All Phase W, img2img, and Phase 6 UI work is now on main. imageLab branch deleted. Next: `workspace/plan/plan_encryption.md`.
 
 ---
 

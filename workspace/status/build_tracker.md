@@ -13,13 +13,13 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Plan 2 — Image Refinement / img2img (imageLab branch)
-**Active step:** Settings Page UI Polish & API Keys Row Alignment completed.
-**Last completed:** Settings page layout polish & API keys row alignment — Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
-**Branch:** imageLab (merges → dev)
-**Plan:** `workspace/plan/plan_2_image_refinement.md`
+**Active phase:** Phase 3 — WebCrypto Encryption (not started)
+**Active step:** None — ready to begin P3-1.
+**Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
+**Branch:** dev (merges → main)
+**Plan:** `workspace/plan/plan_encryption.md`
 
-> Phase MU (below) is code-complete on dev/main and live-verified (OAuth + Drive + BYOK).
+> All prior phases (MU, W, imageLab A.0/A.1, Phase 6 UI) are merged and live on main.
 > imageLab Milestones A.0/A.1 are tracked in `workspace/implemented_phases/phase_5_kaggle_image.md`.
 
 ---
