@@ -217,7 +217,6 @@ export default function ImageLabPage({ onClose }: Props) {
                       ref={m.id === activeModelId ? generatorRef : undefined}
                       model={m}
                       isConnected={!!connected[m.id]}
-                      jobs={allJobs.filter((j) => j.model === m.id)}
                       onSubmitted={refreshAllJobs}
                       session={sessions[m.id] ?? null}
                       setSession={(s) => setSessions((prev) => ({ ...prev, [m.id]: s }))}

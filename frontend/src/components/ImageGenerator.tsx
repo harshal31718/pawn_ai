@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle, type ReactNode, type ChangeEvent } from 'react'
 import {
-  runGenerate,
   submitSessionJob,
   getJob,
   getSessionStatus,
@@ -49,14 +48,13 @@ const ImageGenerator = forwardRef<
   {
     model: ModelDef
     isConnected: boolean
-    jobs: JobResult[]
     onSubmitted: () => void
     session: SessionStatus | null
     setSession: (s: SessionStatus | null) => void
     busyAction: 'start' | 'stop' | 'extend' | null
     setBusyAction: (action: 'start' | 'stop' | 'extend' | null) => void
   }
->(function ImageGenerator({ model, isConnected, jobs, onSubmitted, session, setSession, busyAction, setBusyAction }, ref) {
+>(function ImageGenerator({ model, isConnected, onSubmitted, session, setSession, busyAction, setBusyAction }, ref) {
   const [prompt, setPrompt] = useState('')
   const [advParams, setAdvParams] = useState<ImageParams>({})
   const [initImage, setInitImage] = useState<InitImage | null>(null)
@@ -200,7 +198,7 @@ const ImageGenerator = forwardRef<
   const live = !!session?.alive
   // A session is "warm-routable" if it has a session_id — even during warmup.
   // Jobs queued now sit in Supabase and the kernel picks them up on entering serve loop.
-  const hasSession = !!session?.session_id
+  const hasSession = !!session?.alive
 
   // Poll submitted job IDs until each resolves; update inline preview with the latest.
   useEffect(() => {
@@ -242,12 +240,7 @@ const ImageGenerator = forwardRef<
     }
   }, [watchIds, onSubmitted, session, hasSession])
 
-  // Cold path: one Kaggle container per model — block while one is active.
-  // Warm/warmup path: kernel queues jobs; only block during the HTTP submit itself.
-  const coldJobActive = !hasSession && jobs.some(
-    (j) => j.status === 'queued' || j.status === 'running',
-  )
-  const busy = coldJobActive || submitting
+  const busy = submitting
 
   async function handleGenerate() {
     if (!prompt.trim()) { setError('Enter a prompt.'); return }
@@ -256,19 +249,25 @@ const ImageGenerator = forwardRef<
     setSubmitting(true)
     try {
       const params = Object.keys(advParams).length > 0 ? advParams : undefined
-      // Refine: send init_job_id (server fetches image bytes — avoids large request body).
-      // File upload: send init_image_b64 (already resized to ≤768px client-side).
       const initJobId = initImage?.isRefinement ? initImage.jobId : undefined
       const initB64 = !initJobId ? initImage?.b64 : undefined
-      const { job_id } =
-        hasSession && session?.session_id
-          ? await submitSessionJob(session.session_id, prompt.trim(), params, initB64, initJobId)
-          : await runGenerate(model.id, prompt.trim(), params, initB64, initJobId)
+
+      let sid = session?.alive ? session.session_id : undefined
+      if (!sid) {
+        setBusyAction('start')
+        const s = await startSession(model.id, headerDuration, null)
+        sid = s.session_id
+        setSession({ status: s.status, alive: true, session_id: s.session_id, expires_at: s.expires_at })
+        setBusyAction(null)
+      }
+
+      const { job_id } = await submitSessionJob(sid, prompt.trim(), params, initB64, initJobId)
       setWatchIds((prev) => new Set([...prev, job_id]))
       setPrompt('')
       setInitImage(null)
       onSubmitted()
     } catch (err) {
+      setBusyAction(null)
       setError(err instanceof Error ? err.message : 'Generation failed')
     } finally {
       setSubmitting(false)
@@ -422,12 +421,10 @@ const ImageGenerator = forwardRef<
           className="w-full py-2.5 rounded-xl text-xs font-semibold bg-theme-brand text-theme-brand-text shadow-sm hover:opacity-90 disabled:opacity-60 cursor-pointer"
         >
           {submitting
-            ? 'Queuing…'
+            ? (session?.session_id ? 'Queuing…' : 'Starting session…')
             : live
-              ? 'Generate (warm · queue)'
-              : coldJobActive
-                ? 'Generating (cold ~14 min)…'
-                : 'Generate once (cold ~14 min)'}
+              ? 'Generate'
+              : 'Generate'}
         </button>
 
       </div>
