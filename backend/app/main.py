@@ -8,8 +8,12 @@ from app.middleware.timeout import RequestTimeoutMiddleware
 from app.exceptions import (
     ProviderError,
     NoEndpointError,
+    NotConfiguredError,
+    KaggleError,
+    UnknownModelError,
     provider_error_handler,
     no_endpoint_error_handler,
+    generate_error_handler,
 )
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
@@ -17,6 +21,7 @@ from app.routes.upload import router as upload_router
 from app.routes.conversations import router as conversations_router
 from app.routes.registry import router as registry_router
 from app.routes.keys import router as keys_router
+from app.routes.generate import router as generate_router
 from app.app_initializer import initialize_managers
 from app.core.llm_core import close_client
 
@@ -39,10 +44,14 @@ app = FastAPI(title="PAWN", lifespan=lifespan)
 
 app.add_exception_handler(ProviderError, provider_error_handler)
 app.add_exception_handler(NoEndpointError, no_endpoint_error_handler)
+# More specific than ProviderError — registered so subclasses map to 412/502 + code.
+app.add_exception_handler(NotConfiguredError, generate_error_handler)
+app.add_exception_handler(KaggleError, generate_error_handler)
+app.add_exception_handler(UnknownModelError, generate_error_handler)
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(RequestTimeoutMiddleware, timeout=45, sse_paths=["/chat"])
+app.add_middleware(RequestTimeoutMiddleware, timeout=45, sse_paths=["/chat", "/generate"])
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +70,7 @@ app.include_router(upload_router)
 app.include_router(conversations_router)
 app.include_router(registry_router)
 app.include_router(keys_router)
+app.include_router(generate_router)
 
 
 

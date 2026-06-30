@@ -13,7 +13,7 @@ structured information about a specific build step.
 ## What to Do
 
 1. Read `workspace/status/build_tracker.md` to find the current active step.
-2. Read the relevant phase plan file (e.g., `workspace/implemented_phases/phase_1_foundation.md` or `workspace/plan/phase_2_google_drive.md`).
+2. Read the relevant phase plan file (e.g., `workspace/implemented_phases/phase_1_0_foundation.md` or `workspace/plan/plan_3_encryption.md`).
 3. Read `workspace/current_state.md` to understand what already exists.
 
 ## Output Format

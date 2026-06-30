@@ -13,15 +13,19 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase MU — Multi-User / Auth / BYOK / Drive
-**Active step:** Manual setup (Supabase + Google OAuth) → then verify → merge dev → main
-**Last completed:** BK-3 — Frontend settings panel (all MU code steps done)
-**Branch:** dev
+**Active phase:** Plan 2 — Image Refinement / img2img (imageLab branch)
+**Active step:** Settings Page UI Polish & API Keys Row Alignment completed.
+**Last completed:** Settings page layout polish & API keys row alignment — Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
+**Branch:** imageLab (merges → dev)
+**Plan:** `workspace/plan/plan_2_image_refinement.md`
+
+> Phase MU (below) is code-complete on dev/main and live-verified (OAuth + Drive + BYOK).
+> imageLab Milestones A.0/A.1 are tracked in `workspace/implemented_phases/phase_5_kaggle_image.md`.
 
 ---
 
 ## Phase 1 — Foundation
-*Plan reference: `workspace/implemented_phases/phase_1_foundation.md`*
+*Plan reference: `workspace/implemented_phases/phase_1_0_foundation.md`*
 
 - [x] **Step 1 — Create the repo**
   Folder structure, `.gitignore`, first commit. Demo: `git log` shows one commit.
@@ -255,6 +259,100 @@ Completed by user on 2026-06-27. Google OAuth2 → JWT → app login verified wo
 - [ ] Second Google account → empty chat list (isolation).
 
 ### Next: commit setup fixes + merge dev → main
+
+---
+
+## Phase W — Warm Sessions + Job Tracking (imageLab)
+*Plan reference: `workspace/implemented_phases/phase_5_kaggle_image.md`*
+*Branch: imageLab (merges → dev)*
+
+Goal: keep one Kaggle container **warm** so repeat images are fast (user-set timer + image cap), and
+make every generation a **durable, server-tracked job** (fixes the double-submit / lost-result bug)
+surfaced in a **Generations monitor panel**. Architecture: **Supabase job-queue rendezvous** — a
+persistent kernel loads the model once, then loops polling Supabase for prompts and writes images
+back. Image Lab only (chat composer deferred to Milestone B). Targets the top deferred item
+(FLUX ~820 s/image).
+
+- [x] **W.0 — Prove the persistent loop (CPU, no model)** ⚠️ first / load-bearing ✓
+  `image_sessions` + `image_jobs` schema; `kaggle_templates/session_poc/` CPU echo notebook;
+  `core/image_session.py` (`start_session`/`get_session_status`/`stop_session`/`submit_session_job`/`get_job`)
+  pushing via the non-blocking `kaggle.deploy_kernel`; session routes (`/generate/session/*`,
+  `/generate/job/{id}`); new `supabase_anon_key` secret (public — service key never injected);
+  minimal `SessionPocPanel` Lab control. 117 backend tests green (24 new); `npm run build` clean.
+  code-reviewer + security-auditor PASS (0 critical). RLS/scoped-JWT deferred to W.1 (documented).
+  **LIVE-VERIFIED (2026-06-29):** Lab → Start warm session → kernel reached Warm with a live
+  countdown + fresh heartbeat, 2 echo jobs round-tripped through Supabase (ECHO: "really" rendered).
+  Supabase's new sb_publishable_* key enforces RLS → added a permissive anon policy on the two
+  tables (commit 043a7f3). The persistent-loop assumption is PROVEN.
+
+- [x] **W.1 — Warm session backend + FLUX persistent notebook + unified job tracking** ✓
+  `image_flux_session/notebook.ipynb` (load FLUX once → Supabase serve-loop); session manager made
+  registry-driven (FLUX→GPU serve-loop, SDXL→CPU echo) + `extend_session`; **cold one-shot path
+  retrofitted to a durable background job** (`POST /generate` → `{job_id}`, GC-safe fire-and-forget
+  worker behind the per-`(user,model)` lock, de-dup); `GET /generate/jobs` (+ `/job/{id}` from W.0);
+  constants (job poll, cold-job reap wall-clock); `reap_stale_jobs`. Frontend: `runGenerate`/poll
+  contract, `extendSession`/`listJobs` helpers, `SessionPocPanel` renders PNG (FLUX) or echo (SDXL).
+  132 backend tests (new `test_image_jobs.py`); `npm run build` clean. code-reviewer PASS (CRITICAL
+  create_task-GC fixed) + security-auditor PASS (service key never injected).
+  **Deferred (documented):** `supabase_jwt_secret` + scoped per-session JWT — the new Supabase
+  `sb_publishable_*` platform deprecates legacy HS256-secret minting; permissive-anon RLS policy
+  (W.0) kept for the single-user trial; **scoped JWT is MANDATORY before multi-user**. SDXL real
+  serve-loop is a follow-up.
+  **Live verify pending:** Image Lab → FLUX → Start warm session → first image ~10 min, later in
+  **seconds**; Extend/Stop work; cold Generate still returns an image (now job-polled).
+
+- [x] **W.2 — Image Lab UI (session controls + Generations monitor panel)** ✓
+  Job-driven `ImageGenerator` (submit → poll job id, inline render); **server-derived button state**
+  (parent lifts a shared `listJobs` poll → disabled while a model has a queued/running job → no
+  duplicate submit, survives refresh; + a local submitting guard for the click→response window);
+  new `components/GenerationsPanel.tsx` (all jobs across models/sessions, status chips, lazy
+  thumbnails + View lightbox + Download); new `components/SessionBar.tsx` (duration/cap picker, live
+  countdown, Extend +30, Stop, "session ended" CTA; re-attaches on refresh); `SessionPocPanel`
+  deleted (superseded). `npm run build` clean; 132 backend tests green. code-reviewer PASS (0 critical;
+  WARN fixes applied: double-submit guard, gated countdown ticker, mime-derived download filename).
+  **Deferred (documented):** frontend unit tests (project has none — gate is `npm run build`);
+  GenerationsPanel lazy-image fan-out capped at 30 (fine for trial).
+  **Live verify pending:** full warm-FLUX flow + monitor panel; refresh mid-generate → job
+  re-attaches in the panel + button stays disabled (the double-submit bug, visibly fixed).
+
+- [x] **W.3 — Real SDXL warm serve-loop (image generation, not echo)** ✓
+  *Plan: `workspace/implemented_phases/phase_5_kaggle_image.md`.* Added `kaggle_templates/image_sdxl_session/notebook.ipynb`
+  (mirrors the FLUX serve-loop; loads SDXL once via `AutoPipelineForText2Image` → serve loop → PNG,
+  `via kaggle:sdxl-session`). SDXL registry entry repointed to it (GPU + dataset, slug `pawn-sdxl-session`);
+  dropped the unused CPU-POC imports. SDXL session test asserts the GPU push; added a session-slug↔title
+  invariant test. No frontend change (already MIME-aware). 134 backend tests green; anon-key-only
+  injection still verified for sdxl. **Live verify pending:** SDXL → Start warm session → `Warm` in
+  ~1–2 min → Generate returns an image in seconds.
+
+---
+
+- [x] **W.4 — Session startup observability**
+  Notebooks patch `installing` → `loading_model` → `ready` at phase boundaries.
+  `_LIVE_STATUSES` extended. `SessionBar` shows phase-specific messages ("Waiting for GPU…" / "Installing…" / "Loading model…"). No schema changes.
+
+- [x] **W.5 — Independent per-model panels**
+  Tab switcher removed from `ImageLabPage`. All models rendered simultaneously as stacked `ModelPanel` components — each owns its own jobs poll, `SessionBar`, `ImageGenerator`, and `GenerationsPanel`. No cross-model job mixing.
+
+- [x] **W.6 — Session liveness + cold-vs-warm routing fixes**
+  `IMAGE_SESSION_HEARTBEAT_STALE_SECONDS`: 30 → 90. `create_cold_job` blocks when warm session is live. Kaggle GPU limit error surfaced as actionable message. `SessionBar` confirm dialog before re-Start.
+
+---
+
+## Phase 6 — UI Routing + Global Polish (imageLab branch)
+*Plan reference: `workspace/implemented_phases/phase_6_ui.md`*
+
+- [x] **Phase 6 UI — URL-based routing refactor**
+  `react-router-dom` installed. `AppContext.tsx` lifts cross-route state (theme, models, prefs).
+  `Layout.tsx` owns Sidebar + Outlet + global dark mode toggle (visible on all routes).
+  `ChatPage.tsx` extracts chat logic; URL ↔ store sync via `useParams` + `useEffect`.
+  `SettingsPageWrapper` / `ImageLabPageWrapper` thin pages replace direct component rendering.
+  `App.tsx` down to 44 lines. `Sidebar.tsx` uses `useNavigate`/`useLocation` internally.
+  tsc zero errors; `npm run build` clean.
+
+- [x] **Settings page layout redesign**
+  Restructured settings page to 3 responsive vertical columns for desktop viewports. Refined responsiveness of BYOK API key inputs and vertical Kaggle input fields; grouped bubble color presets into horizontally scrollable carousels with aligned horizontal start offsets and chevron scroll buttons.
+- [x] **Settings page layout polish & API keys row alignment**
+  Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
 
 ---
 

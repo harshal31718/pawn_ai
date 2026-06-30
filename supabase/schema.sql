@@ -100,3 +100,69 @@ as $$
     and mc.fts_doc @@ plainto_tsquery('english', query_text)
   limit match_count;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Phase W — Warm/persistent Kaggle image sessions + durable job tracking
+-- ---------------------------------------------------------------------------
+-- A warm Kaggle kernel is unreachable through Kaggle's batch API once running,
+-- so PAWN and the kernel rendezvous here: PAWN writes rows with the service key
+-- (bypasses RLS), the kernel reads/writes with the public anon key.
+--
+-- W.0 (this step) proves the loop with a CPU echo kernel. Supabase's new
+-- publishable (sb_publishable_*) key enforces RLS on the anon role, so the two
+-- tables get RLS enabled + a PERMISSIVE anon policy (the documented "anon-key-
+-- open on the two dedicated tables only" single-user-trial fallback) — without
+-- it the kernel could read but never write back results/heartbeats. W.1 replaces
+-- the permissive policy with a scoped per-session JWT policy so a kernel can only
+-- touch rows of its own session_id. The service key is NEVER injected into the
+-- notebook; the backend's service key bypasses RLS server-side.
+
+create table if not exists image_sessions (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       text not null,
+  model         text not null,                       -- 'sdxl' | 'flux'
+  session_token text not null,                       -- random secret the kernel presents
+  status        text not null default 'starting',    -- starting | ready | stopping | ended | error
+  expires_at    timestamptz not null,                -- the timer; kernel exits past this
+  max_images    int,                                 -- optional cap (null = time-only)
+  images_done   int not null default 0,
+  heartbeat_at  timestamptz,                         -- kernel updates each loop → liveness
+  error         text,
+  created_at    timestamptz not null default now()
+);
+
+create table if not exists image_jobs (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     text not null,                         -- direct ownership (cold jobs have no session)
+  session_id  uuid references image_sessions(id) on delete cascade,  -- NULL = cold one-shot job
+  model       text not null,                         -- 'sdxl' | 'flux'
+  prompt      text not null,
+  status      text not null default 'queued',        -- queued | running | done | error
+  image_b64   text,
+  mime        text default 'image/png',
+  via         text,
+  error       text,
+  created_at  timestamptz not null default now(),
+  started_at  timestamptz,
+  done_at     timestamptz
+);
+
+create index if not exists image_jobs_user_idx
+  on image_jobs (user_id, created_at desc);
+create index if not exists image_jobs_session_status_idx
+  on image_jobs (session_id, status);
+
+-- RLS + permissive anon policy (W.0 single-user-trial fallback; see note above).
+-- The new sb_publishable_* key maps to the anon role and is checked against RLS,
+-- so the kernel needs an explicit policy to insert/update its rows. W.1 narrows
+-- this to a per-session_id (scoped-JWT) policy.
+alter table image_sessions enable row level security;
+alter table image_jobs     enable row level security;
+
+drop policy if exists image_sessions_anon_trial on image_sessions;
+drop policy if exists image_jobs_anon_trial     on image_jobs;
+
+create policy image_sessions_anon_trial on image_sessions
+  for all to anon using (true) with check (true);
+create policy image_jobs_anon_trial on image_jobs
+  for all to anon using (true) with check (true);

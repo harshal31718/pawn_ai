@@ -1,5 +1,12 @@
-import { useEffect, useState } from 'react'
-import { getKeys, setKey as apiSetKey, deleteKey as apiDeleteKey } from '../api/client'
+import { useEffect, useState, type ReactNode } from 'react'
+import {
+  getKeys,
+  setKey as apiSetKey,
+  deleteKey as apiDeleteKey,
+  getKaggleConfig,
+  setKaggleConfig,
+  deleteKaggleConfig,
+} from '../api/client'
 
 // Mirrors backend key_store.VALID_PROVIDERS.
 const PROVIDERS: { id: string; label: string; hint: string }[] = [
@@ -11,34 +18,128 @@ const PROVIDERS: { id: string; label: string; hint: string }[] = [
   { id: 'openrouter',  label: 'OpenRouter',      hint: 'openrouter.ai/keys' },
 ]
 
+function ProviderRow({
+  id,
+  label,
+  hint,
+  isConfigured,
+  isBusy,
+  activeHint,
+  onToggleHint,
+  onRemove,
+  error,
+  children,
+}: {
+  id: string
+  label: string
+  hint: string
+  isConfigured: boolean
+  isBusy: boolean
+  activeHint: string | null
+  onToggleHint: (id: string) => void
+  onRemove: () => void
+  error?: string | null
+  children: ReactNode
+}) {
+  return (
+    <div className="p-3 space-y-2">
+      {/* Row 1: Title & Help Button */}
+      <div className="flex items-center gap-1.5">
+        <p className="text-xs font-medium text-theme-text">{label}</p>
+        <button
+          type="button"
+          onClick={() => onToggleHint(id)}
+          className={`p-0.5 rounded text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50 transition-all focus:outline-none cursor-pointer ${
+            activeHint === id ? 'text-theme-brand bg-theme-bg/60 border border-theme-border/40' : ''
+          }`}
+          title="Show guide"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3.5 h-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Row 2: Hint text (conditional) */}
+      {activeHint === id && (
+        <p className="text-[10px] text-theme-text-muted bg-theme-bg/40 border border-theme-border/30 rounded-lg p-2 animate-in fade-in slide-in-from-top-1 duration-200">
+          {hint}
+        </p>
+      )}
+
+      {/* Row 3: Configured badge & Remove button (conditional) */}
+      {isConfigured && (
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 w-full">
+          <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full shrink-0 select-none">
+            Configured
+          </span>
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={isBusy}
+            className="text-[10px] px-2 py-0.5 bg-theme-bg border border-red-500/40 rounded-md text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+          >
+            Remove
+          </button>
+        </div>
+      )}
+
+      {/* Row 4: Inputs (via children) */}
+      <div className="pt-1">{children}</div>
+
+      {/* Row 5: Per-provider error */}
+      {error && <p className="text-[10px] text-red-500">{error}</p>}
+    </div>
+  )
+}
+
 export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () => void }) {
   const [configured, setConfigured] = useState<string[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+
+  function setError(id: string, msg: string | null) {
+    setErrors((e) => msg ? { ...e, [id]: msg } : Object.fromEntries(Object.entries(e).filter(([k]) => k !== id)))
+  }
+
+  // Kaggle status & input drafts
+  const [kaggleHasCreds, setKaggleHasCreds] = useState(false)
+  const [kaggleUsername, setKaggleUsername] = useState('')
+  const [kaggleApiToken, setKaggleApiToken] = useState('')
+
+  const [activeHint, setActiveHint] = useState<string | null>(null)
+
+  function toggleHint(id: string) {
+    setActiveHint((h) => (h === id ? null : id))
+  }
 
   async function refresh() {
     try {
-      setConfigured(await getKeys())
+      const [keys, kaggle] = await Promise.all([getKeys(), getKaggleConfig()])
+      setConfigured(keys)
+      setKaggleHasCreds(kaggle.has_creds)
     } catch {
-      setError('Could not load saved keys.')
+      setError('__global', 'Could not load saved keys.')
     }
   }
 
-  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    refresh()
+  }, [])
 
   async function handleSave(provider: string) {
     const value = (drafts[provider] || '').trim()
     if (!value) return
     setBusy(provider)
-    setError(null)
+    setError(provider, null)
     try {
       await apiSetKey(provider, value)
       setDrafts((d) => ({ ...d, [provider]: '' }))
       await refresh()
       onKeysChanged?.()
     } catch {
-      setError(`Failed to save ${provider} key.`)
+      setError(provider, `Failed to save ${provider} key.`)
     } finally {
       setBusy(null)
     }
@@ -46,78 +147,150 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
 
   async function handleDelete(provider: string) {
     setBusy(provider)
-    setError(null)
+    setError(provider, null)
     try {
       await apiDeleteKey(provider)
       await refresh()
       onKeysChanged?.()
     } catch {
-      setError(`Failed to delete ${provider} key.`)
+      setError(provider, `Failed to delete ${provider} key.`)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleSaveKaggle() {
+    const username = kaggleUsername.trim()
+    const token = kaggleApiToken.trim()
+    if (!username || (!kaggleHasCreds && !token)) return
+    setBusy('kaggle')
+    setError('kaggle', null)
+    try {
+      await setKaggleConfig({ username, api_token: token })
+      setKaggleUsername('')
+      setKaggleApiToken('')
+      await refresh()
+      onKeysChanged?.()
+    } catch {
+      setError('kaggle', 'Failed to save Kaggle credentials.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleDeleteKaggle() {
+    setBusy('kaggle')
+    setError('kaggle', null)
+    try {
+      await deleteKaggleConfig()
+      setKaggleUsername('')
+      setKaggleApiToken('')
+      await refresh()
+      onKeysChanged?.()
+    } catch {
+      setError('kaggle', 'Failed to delete Kaggle credentials.')
     } finally {
       setBusy(null)
     }
   }
 
   return (
-    <section>
-      <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-3">API Keys (BYOK)</h2>
-      <p className="text-[10px] text-theme-text-muted mb-3 leading-relaxed">
-        Bring your own provider keys. Keys are encrypted at rest and used only by the
-        backend to make requests on your behalf — they are never shown again after saving.
-      </p>
-      {error && (
-        <p className="text-[10px] text-red-500 mb-2">{error}</p>
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-1">API Keys (BYOK)</h2>
+        <p className="text-[10px] text-theme-text-muted leading-relaxed">
+          Bring your own provider keys. Keys are encrypted at rest and used only by the
+          backend to make requests on your behalf — they are never shown again after saving.
+        </p>
+      </div>
+
+      {errors['__global'] && (
+        <p className="text-[10px] text-red-500">{errors['__global']}</p>
       )}
+
       <div className="bg-theme-surface border border-theme-border/50 rounded-xl divide-y divide-theme-border/30">
+
+        {/* Kaggle Credentials */}
+        <ProviderRow
+          id="kaggle"
+          label="Kaggle API Credentials"
+          hint="kaggle.com settings → Account → API Token"
+          isConfigured={kaggleHasCreds}
+          isBusy={busy === 'kaggle'}
+          activeHint={activeHint}
+          onToggleHint={toggleHint}
+          onRemove={handleDeleteKaggle}
+          error={errors['kaggle']}
+        >
+          <div className="flex flex-col gap-2 w-full">
+            <input
+              type="text"
+              value={kaggleUsername}
+              onChange={(e) => setKaggleUsername(e.target.value)}
+              placeholder="Kaggle username"
+              className="w-full bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+            />
+            <div className="flex items-center gap-2 w-full">
+              <input
+                type="password"
+                value={kaggleApiToken}
+                onChange={(e) => setKaggleApiToken(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSaveKaggle()}
+                placeholder={kaggleHasCreds ? 'New token' : 'Kaggle API token'}
+                autoComplete="off"
+                className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+              />
+              <button
+                type="button"
+                onClick={handleSaveKaggle}
+                disabled={!kaggleUsername.trim() || (!kaggleHasCreds && !kaggleApiToken.trim()) || busy === 'kaggle'}
+                className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+              >
+                {busy === 'kaggle' ? '…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </ProviderRow>
+
+        {/* LLM provider keys */}
         {PROVIDERS.map(({ id, label, hint }) => {
           const isSet = configured.includes(id)
           return (
-            <div key={id} className="p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium text-theme-text flex items-center gap-2">
-                    {label}
-                    {isSet && (
-                      <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
-                        Configured
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-[10px] text-theme-text-muted mt-0.5">{hint}</p>
-                </div>
-                {isSet && (
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(id)}
-                    disabled={busy === id}
-                    className="text-[10px] px-2 py-1 bg-theme-bg border border-red-500/40 rounded-md text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
+            <ProviderRow
+              key={id}
+              id={id}
+              label={label}
+              hint={hint}
+              isConfigured={isSet}
+              isBusy={busy === id}
+              activeHint={activeHint}
+              onToggleHint={toggleHint}
+              onRemove={() => handleDelete(id)}
+              error={errors[id]}
+            >
+              <div className="flex items-center gap-2 w-full">
                 <input
                   type="password"
                   value={drafts[id] || ''}
                   onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
                   onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
-                  placeholder={isSet ? 'Enter a new key to replace' : 'Paste your API key'}
+                  placeholder={isSet ? 'New key' : 'Paste key'}
                   autoComplete="off"
-                  className="flex-1 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+                  className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
                 />
                 <button
                   type="button"
                   onClick={() => handleSave(id)}
                   disabled={!(drafts[id] || '').trim() || busy === id}
-                  className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                  className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
                 >
                   {busy === id ? '…' : 'Save'}
                 </button>
               </div>
-            </div>
+            </ProviderRow>
           )
         })}
+
       </div>
     </section>
   )

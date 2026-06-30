@@ -25,9 +25,17 @@ failover, persistent memory. Full project plan in `workspace/plan/` and decision
 ## Before Starting Any Work
 
 1. Read `workspace/status/build_tracker.md` — find the current active step.
-2. Read the relevant phase plan (e.g., `workspace/implemented_phases/phase_1_foundation.md` or `workspace/plan/phase_2_google_drive.md`).
+2. Read the relevant phase plan (e.g., `workspace/implemented_phases/phase_1_0_foundation.md` or `workspace/plan/plan_3_encryption.md`).
 3. Read `workspace/current_state.md` — understand what already exists.
 4. Then implement.
+
+## Stable Commits
+
+`workspace/stable_commits.md` tracks the last known-good commit per branch.
+
+**When to update:** only when the user explicitly says something like "mark this as the last stable", "this is stable", or "update stable commits". Do not update it automatically after every step.
+
+**How to update:** run `git log <branch> -1 --format="%H|%ai|%s"` for the relevant branch, then update the matching row in `workspace/stable_commits.md` with the new commit_id, timestamp, and message.
 
 ## Multi-Agent Workflow
 
