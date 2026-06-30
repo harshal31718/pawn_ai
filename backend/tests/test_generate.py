@@ -363,3 +363,53 @@ def test_generate_image_style_suffix_applied(client):
     stored_prompt = mk.call_args.args[2]
     assert stored_prompt.startswith("a city")
     assert "cinematic shot" in stored_prompt
+
+
+def test_generate_image_init_image_b64_stored(client):
+    """Direct init_image_b64 is merged into params before job creation."""
+    fake_b64 = "aGVsbG8="  # base64("hello")
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-5", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a city", "init_image_b64": fake_b64},
+        )
+    assert resp.status_code == 200
+    params_arg = mk.call_args.args[3]
+    assert params_arg.init_image_b64 == fake_b64
+    assert params_arg.strength == 0.6  # default when init image provided
+
+
+def test_generate_image_init_job_id_resolves(client):
+    """init_job_id resolution: fetches the existing job and copies image_b64."""
+    fake_b64 = "aW1hZ2U="  # base64("image")
+    existing_job = {"job_id": "old-job", "status": "done", "image_b64": fake_b64}
+    with patch(
+        "app.routes.generate.image_session.get_job", return_value=existing_job
+    ), patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-6", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "change the sky", "init_job_id": "old-job"},
+        )
+    assert resp.status_code == 200
+    params_arg = mk.call_args.args[3]
+    assert params_arg.init_image_b64 == fake_b64
+
+
+def test_generate_image_init_job_id_not_found_proceeds(client):
+    """If init_job_id resolves to None (missing job), generation still proceeds without init image."""
+    with patch(
+        "app.routes.generate.image_session.get_job", return_value=None
+    ), patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-7", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a city", "init_job_id": "missing-job"},
+        )
+    assert resp.status_code == 200
+    params_arg = mk.call_args.args[3]
+    assert params_arg.init_image_b64 is None

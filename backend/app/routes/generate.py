@@ -63,6 +63,8 @@ class GenerateRequest(BaseModel):
     prompt: str | None = None
     model: str = DEFAULT_IMAGE_MODEL
     params: ImageJobParams = ImageJobParams()
+    init_image_b64: str | None = None   # direct base64 upload
+    init_job_id: str | None = None      # refine an existing done job
 
 
 class ConnectRequest(BaseModel):
@@ -79,6 +81,8 @@ class SessionJobRequest(BaseModel):
     session_id: str
     prompt: str
     params: ImageJobParams = ImageJobParams()
+    init_image_b64: str | None = None   # direct base64 upload
+    init_job_id: str | None = None      # refine an existing done job
 
 
 class SessionStopRequest(BaseModel):
@@ -88,6 +92,23 @@ class SessionStopRequest(BaseModel):
 class SessionExtendRequest(BaseModel):
     session_id: str
     add_minutes: int = 30
+
+
+async def _resolve_init_image(
+    init_image_b64: str | None,
+    init_job_id: str | None,
+    user_id: str,
+) -> str | None:
+    """Resolve the init image for img2img: direct upload takes priority; otherwise
+    fetch the image_b64 from an existing job (scoped to user_id so users can't
+    refine each other's jobs)."""
+    if init_image_b64:
+        return init_image_b64
+    if init_job_id:
+        job = await run_in_threadpool(image_session.get_job, user_id, init_job_id)
+        if job and job.get("image_b64"):
+            return job["image_b64"]
+    return None
 
 
 @router.post("/connect")
@@ -121,6 +142,14 @@ async def generate_artifact(req: GenerateRequest, request: Request):
         prompt = req.prompt.strip()
         if req.params.style_preset:
             prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
+        init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
+        params = req.params
+        if init_b64:
+            params_dict = params.model_dump()
+            params_dict["init_image_b64"] = init_b64
+            if params_dict.get("strength") is None:
+                params_dict["strength"] = 0.6
+            params = image_session.ImageJobParams(**params_dict)
         # Non-blocking: create a durable job row (de-duped per user+model) and run
         # the slow Kaggle round-trip as a fire-and-forget background task, returning
         # the job id immediately. Unknown model → UnknownModelError (400) here.
@@ -128,7 +157,7 @@ async def generate_artifact(req: GenerateRequest, request: Request):
         # model (cold job would waste a GPU slot alongside the running warm kernel).
         try:
             job_id, created = await run_in_threadpool(
-                image_session.create_cold_job, user_id, req.model, prompt, req.params
+                image_session.create_cold_job, user_id, req.model, prompt, params
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -193,8 +222,15 @@ async def session_job(req: SessionJobRequest, request: Request):
     prompt = req.prompt.strip()
     if req.params.style_preset:
         prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
+    init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
+    params = req.params
+    if init_b64:
+        params_dict = params.model_dump()
+        params_dict["init_image_b64"] = init_b64
+        params_dict.setdefault("strength", 0.6)
+        params = image_session.ImageJobParams(**params_dict)
     job_id = await run_in_threadpool(
-        image_session.submit_session_job, user_id, req.session_id, prompt, req.params
+        image_session.submit_session_job, user_id, req.session_id, prompt, params
     )
     return {"job_id": job_id, "status": "queued"}
 

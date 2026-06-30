@@ -13,11 +13,11 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Plan 1 — Image Generation Parameter Controls (imageLab branch)
-**Active step:** All IP steps done. Next: Plan 2 (image refinement / img2img).
-**Last completed:** IP-4 (imageLab) — Advanced params panel (aspect ratio, steps, guidance scale, negative prompt, style preset) with checkbox-per-param; backend params pass-through and JSONB storage; style suffix on backend; SDXL + FLUX warm-session notebooks read params from job row. 136 backend tests green; npm run build clean.
+**Active phase:** Plan 2 — Image Refinement / img2img (imageLab branch)
+**Active step:** All IR steps done. Plan 2 complete.
+**Last completed:** IR-1/IR-2/IR-3 (imageLab) — init image routing on backend (`init_image_b64`/`init_job_id` on both request models; `_resolve_init_image` helper; strength defaults to 0.6); SDXL + FLUX notebooks updated with img2img branch; frontend: upload slot, Refine button in GenerationsPanel, Strength slider in AdvancedParams, `ImageGenerator` converted to forwardRef. 140 backend tests green; npm run build clean.
 **Branch:** imageLab (merges → dev)
-**Plan:** `workspace/implemented_phases/phase_5_kaggle_image.md` (complete)
+**Plan:** `workspace/plan/plan_2_image_refinement.md`
 
 > Phase MU (below) is code-complete on dev/main and live-verified (OAuth + Drive + BYOK).
 > imageLab Milestones A.0/A.1 are tracked in `workspace/implemented_phases/phase_5_kaggle_image.md`.

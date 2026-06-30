@@ -46,6 +46,8 @@ class ImageJobParams(BaseModel):
     guidance_scale: float | None = None
     negative_prompt: str | None = None
     style_preset: str | None = None
+    strength: float | None = None          # img2img: 0.1–1.0 (lower = closer to source)
+    init_image_b64: str | None = None      # img2img: base64 source image (stored transiently)
 
 
 # Job statuses still owned by a (live) worker -- used for de-dup + liveness.

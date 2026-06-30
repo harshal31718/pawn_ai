@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { getJob, type JobResult } from '../api/client'
 
+export type RefineHandler = (job: JobResult, imageB64: string) => void
+
 /**
  * The Generations monitor (Phase W.2) — a collapsible panel listing every job
  * across models and sessions, newest first. Server-backed, so results survive a
@@ -48,7 +50,15 @@ const CHIP: Record<string, string> = {
   error: 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30',
 }
 
-function JobRow({ job, onView }: { job: JobResult; onView: (src: string, alt: string) => void }) {
+function JobRow({
+  job,
+  onView,
+  onRefine,
+}: {
+  job: JobResult
+  onView: (src: string, alt: string) => void
+  onRefine?: RefineHandler
+}) {
   const [src, setSrc] = useState<string | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [copied, setCopied] = useState(false)
@@ -200,7 +210,7 @@ function JobRow({ job, onView }: { job: JobResult; onView: (src: string, alt: st
         </div>
       </div>
 
-      {/* View + Download stacked vertically at far right */}
+      {/* View / Download / Refine stacked vertically at far right */}
       {src && (
         <div className="flex flex-col items-stretch gap-1 shrink-0">
           <button
@@ -217,13 +227,31 @@ function JobRow({ job, onView }: { job: JobResult; onView: (src: string, alt: st
           >
             Download
           </a>
+          {onRefine && (
+            <button
+              type="button"
+              onClick={() => {
+                const b64 = src.replace(/^data:[^;]+;base64,/, '')
+                onRefine(job, b64)
+              }}
+              className="px-2 py-1 rounded-md text-[10px] font-semibold text-theme-brand border border-theme-brand/30 hover:bg-theme-brand/10 cursor-pointer text-center"
+            >
+              Refine
+            </button>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-export default function GenerationsPanel({ jobs }: { jobs: JobResult[] }) {
+export default function GenerationsPanel({
+  jobs,
+  onRefine,
+}: {
+  jobs: JobResult[]
+  onRefine?: RefineHandler
+}) {
   const [open, setOpen] = useState(true)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
 
@@ -267,7 +295,7 @@ export default function GenerationsPanel({ jobs }: { jobs: JobResult[] }) {
             </div>
           ) : (
             jobs.map((j) => (
-              <JobRow key={j.job_id} job={j} onView={(src, alt) => setLightbox({ src, alt })} />
+              <JobRow key={j.job_id} job={j} onView={(src, alt) => setLightbox({ src, alt })} onRefine={onRefine} />
             ))
           )}
         </div>

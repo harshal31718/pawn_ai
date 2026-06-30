@@ -95,6 +95,7 @@ export interface ImageParams {
   guidance_scale?: number
   negative_prompt?: string
   style_preset?: string
+  strength?: number
 }
 
 export async function connectKaggle(model = 'sdxl'): Promise<void> {
@@ -129,12 +130,15 @@ export async function runGenerate(
   model: string,
   prompt: string,
   params?: ImageParams,
+  initImageB64?: string,
+  initJobId?: string,
 ): Promise<{ job_id: string; status: string }> {
   return postJson('/generate', {
     modality: 'image',
     prompt,
     model,
     ...(params && Object.keys(params).length > 0 ? { params } : {}),
+    ...(initJobId ? { init_job_id: initJobId } : initImageB64 ? { init_image_b64: initImageB64 } : {}),
   })
 }
 
@@ -225,11 +229,14 @@ export async function submitSessionJob(
   sessionId: string,
   prompt: string,
   params?: ImageParams,
+  initImageB64?: string,
+  initJobId?: string,
 ): Promise<{ job_id: string; status: string }> {
   return postJson('/generate/session/job', {
     session_id: sessionId,
     prompt,
     ...(params && Object.keys(params).length > 0 ? { params } : {}),
+    ...(initJobId ? { init_job_id: initJobId } : initImageB64 ? { init_image_b64: initImageB64 } : {}),
   })
 }
 

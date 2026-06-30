@@ -253,6 +253,47 @@ Each `ModelPanel`:
 
 ---
 
+---
+
+## Plan 1.0 — Generations Panel UI Fixes ✅
+
+**Scope:** Five targeted fixes to the Generations panel header and job rows.
+
+- **Fix 1 — Active count label:** Split `N active` into `N running · M queued`; running in amber, queued in muted text; hidden when both zero.
+- **Fix 2 — Generation time:** Live `⏱ Xm Ys` elapsed ticker (1 s tick via `setInterval`) for running jobs; fixed duration for done/error jobs using `started_at→done_at`; hidden if `started_at` is null. `started_at` added to `_JOB_LIST_COLUMNS` + `JobResult`.
+- **Fix 3 — Style preset pill:** `params.style_preset` inverted to human-readable label shown as a pill tag on the first line of each row. `params` added to `_JOB_LIST_COLUMNS`.
+- **Fix 4 — Copy prompt button:** Clipboard icon per row; copies full `job.prompt`; shows checkmark for 1.5 s then resets.
+- **Fix 5 — Session-death failover:** `reap_stale_jobs` extended to fail running/queued session jobs when their session is heartbeat-stale or expired (`_is_alive()` check); sets `status='error'`, `error='Session terminated unexpectedly'`, `done_at=now()`.
+
+**Files changed:** `backend/app/core/image_session.py`, `frontend/src/api/client.ts`, `frontend/src/components/GenerationsPanel.tsx`.
+
+---
+
+## Plan 1 — Image Generation Parameter Controls ✅
+
+**Scope:** Expose generation parameters in the UI with opt-in checkboxes. Unchecked = model default. Checked = user value sent.
+
+- **IP-1 — Schema:** `ALTER TABLE image_jobs ADD COLUMN IF NOT EXISTS params JSONB DEFAULT '{}'` (migration: `supabase/add_image_jobs_params.sql`).
+- **IP-2 — Backend pass-through:** `ImageJobParams` Pydantic model (`width`, `height`, `num_inference_steps`, `guidance_scale`, `negative_prompt`, `style_preset`). `create_cold_job` + `submit_session_job` store `params.model_dump(exclude_none=True)` into the JSONB column. Style suffix applied on backend before storing (`STYLE_SUFFIXES` dict in `routes/generate.py`).
+- **IP-3 — Notebook updates:** SDXL + FLUX warm-session notebooks read `params` from the job row and pass values (`steps`, `guidance`, `width`, `height`, `negative_prompt`) to the pipeline call. FLUX `guidance_scale` hardcoded to `0.0` regardless of user input.
+- **IP-4 — Frontend Advanced params panel:** Collapsible `AdvancedParams` component inside `ImageGenerator` with checkbox-per-param: Aspect Ratio (maps to pixel dimensions), Inference Steps (slider 4–50), Guidance Scale (slider 1–20, FLUX note), Negative Prompt, Style Preset (dropdown). `runGenerate` / `submitSessionJob` in `client.ts` accept optional `params`.
+
+**Files changed:** `backend/app/core/image_session.py`, `backend/app/routes/generate.py`, `frontend/src/api/client.ts`, `frontend/src/components/ImageLabPage.tsx`, both Kaggle session notebooks.
+
+---
+
+## Plan 2 — Image Refinement (img2img) ✅
+
+**Scope:** Two entry points for img2img — upload a source image alongside the prompt, or click Refine on a completed generation to iterate on it.
+
+- **IR-1 — Backend init image routing:** `GenerateRequest` + `SessionJobRequest` gain `init_image_b64: str | None` (direct upload) and `init_job_id: str | None` (refine existing job). `_resolve_init_image` resolves both, with `user_id` guard so users can't refine each other's jobs. Resolved base64 is merged into `params` JSONB alongside `strength` (defaulting to 0.6). Both cold (`create_cold_job`) and warm (`submit_session_job`) paths store it.
+- **IR-2 — Notebook updates:** SDXL serve-loop branches on `params.init_image_b64`: uses `AutoPipelineForImage2Image.from_pipe(pipe)` (no extra model load). FLUX serve-loop branches with `FluxImg2ImgPipeline(**pipe.components)` (shared weights).
+- **IR-3 — Frontend:** `ImageGenerator` gains `initImage` state (`preview`, `b64/jobId`, `label`, `isRefinement`). `+ Add source image` button with hidden file input; client-side resize to ≤768px before base64 encoding. Attachment chip with thumbnail + × dismiss. `AdvancedParams` Strength row auto-appears and auto-enables when `initImage` is set. `GenerationsPanel` Refine button calls `triggerRefine` via `useImperativeHandle` on `ImageGenerator` ref — pre-loads the generation image as the init image and clears the prompt. Refine sends `init_job_id` (not full bytes) to avoid large request body.
+
+**Files changed:** `backend/app/core/image_session.py`, `backend/app/routes/generate.py`, `backend/tests/test_generate.py`, `frontend/src/components/ImageLabPage.tsx`, `frontend/src/components/GenerationsPanel.tsx`, `frontend/src/api/client.ts`, both Kaggle session notebooks.
+
+---
+
 ## Deferred
 
 | Item | Reason deferred |

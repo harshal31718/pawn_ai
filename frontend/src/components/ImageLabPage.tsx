@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import {
   getKaggleConfig,
   setKaggleConfig,
@@ -14,7 +14,7 @@ import {
   type ImageParams,
 } from '../api/client'
 import SessionBar from './SessionBar'
-import GenerationsPanel from './GenerationsPanel'
+import GenerationsPanel, { type RefineHandler } from './GenerationsPanel'
 
 interface Props {
   onClose: () => void
@@ -112,6 +112,7 @@ interface AdvancedState {
   guidanceScale:  ParamState<number>
   negativePrompt: ParamState<string>
   stylePreset:    ParamState<string>
+  strength:       ParamState<number>
 }
 
 const INITIAL_ADVANCED: AdvancedState = {
@@ -120,6 +121,7 @@ const INITIAL_ADVANCED: AdvancedState = {
   guidanceScale:  { enabled: false, value: 7.5 },
   negativePrompt: { enabled: false, value: '' },
   stylePreset:    { enabled: false, value: '' },
+  strength:       { enabled: false, value: 0.6 },
 }
 
 function deriveParams(s: AdvancedState): ImageParams {
@@ -135,6 +137,7 @@ function deriveParams(s: AdvancedState): ImageParams {
     p.negative_prompt = s.negativePrompt.value.trim()
   if (s.stylePreset.enabled && s.stylePreset.value)
     p.style_preset = STYLE_PRESET_KEYS[s.stylePreset.value] ?? ''
+  if (s.strength.enabled) p.strength = s.strength.value
   return p
 }
 
@@ -143,9 +146,13 @@ const CTL = 'w-full px-2 py-1 rounded-lg text-xs bg-theme-bg border border-theme
 function AdvancedParams({
   modelId,
   onChange,
+  showStrength,
+  onStrengthEnabledChange,
 }: {
   modelId: string
   onChange: (p: ImageParams) => void
+  showStrength?: boolean
+  onStrengthEnabledChange?: (enabled: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
   const [s, setS] = useState<AdvancedState>(INITIAL_ADVANCED)
@@ -155,7 +162,18 @@ function AdvancedParams({
     const next = { ...s, [key]: { ...s[key], ...patch } } as AdvancedState
     setS(next)
     onChange(deriveParams(next))
+    if (key === 'strength' && 'enabled' in patch && onStrengthEnabledChange) {
+      onStrengthEnabledChange(!!(patch as Partial<ParamState<number>>).enabled)
+    }
   }
+
+  // Auto-enable strength when showStrength becomes true (initImage attached).
+  useEffect(() => {
+    if (showStrength && !s.strength.enabled) {
+      update('strength', { enabled: true })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showStrength])
 
   const rowCls = (enabled: boolean) =>
     `pl-5 space-y-1 transition-opacity ${enabled ? '' : 'opacity-40 pointer-events-none'}`
@@ -272,6 +290,27 @@ function AdvancedParams({
             </div>
           </div>
 
+          {/* Strength — only shown when an init image is attached */}
+          {showStrength && (
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={s.strength.enabled}
+                  onChange={(e) => update('strength', { enabled: e.target.checked })}
+                  className="w-3.5 h-3.5 rounded accent-theme-brand" />
+                <span className="text-xs font-medium text-theme-text">Strength</span>
+              </label>
+              <div className={rowCls(s.strength.enabled)}>
+                <div className="flex items-center gap-2">
+                  <input type="range" min={0.1} max={1.0} step={0.05} value={s.strength.value}
+                    onChange={(e) => update('strength', { value: Number(e.target.value) })}
+                    className="flex-1 accent-theme-brand" />
+                  <span className="text-xs w-8 text-right tabular-nums text-theme-text-muted">{s.strength.value.toFixed(2)}</span>
+                </div>
+                <div className="text-[10px] text-theme-text-muted">0.1 – 1.0 · lower = stay closer to source image</div>
+              </div>
+            </div>
+          )}
+
         </div>
       )}
     </div>
@@ -382,9 +421,6 @@ export default function ImageLabPage({ onClose }: Props) {
                   />
                 </div>
               ))}
-
-              {/* 3. Unified Generations history — all models */}
-              <GenerationsPanel jobs={allJobs} />
             </>
           )}
         </div>
@@ -406,15 +442,23 @@ function ModelPanel({
   jobs: JobResult[]
   onSubmitted: () => void
 }) {
+  const generatorRef = useRef<{ triggerRefine: RefineHandler } | null>(null)
+
+  const handleRefine: RefineHandler = useCallback((job, imageB64) => {
+    generatorRef.current?.triggerRefine(job, imageB64)
+  }, [])
+
   return (
     <div className="space-y-4">
       <KaggleConnector model={model} isConnected={isConnected} onConnected={onConnected} />
       <ImageGenerator
+        ref={generatorRef}
         model={model}
         isConnected={isConnected}
         jobs={jobs}
         onSubmitted={onSubmitted}
       />
+      <GenerationsPanel jobs={jobs} onRefine={handleRefine} />
     </div>
   )
 }
@@ -616,27 +660,34 @@ function KaggleConnector({
   )
 }
 
+interface InitImage {
+  preview: string        // data URL for display
+  b64?: string           // raw base64 for file uploads (no data: prefix)
+  jobId?: string         // job_id for Refine flow (server fetches image, no body bloat)
+  label: string          // filename or "Refining: …"
+  isRefinement: boolean
+}
+
 /**
- * Job-driven generator (Phase W.2). Submission returns a durable job id; the
- * button's busy state is DERIVED FROM THE SERVER jobs list (disabled while this
- * model has a queued/running job), so a refresh or second tab can't fire a
- * duplicate run. A warm session routes Generate to the live kernel (fast); with
- * no session it runs a single cold image. Results also persist in the panel below.
+ * Job-driven generator (Phase W.2 + Plan 2). Submission returns a durable job id;
+ * the button's busy state is DERIVED FROM THE SERVER jobs list (disabled while this
+ * model has a queued/running job). Supports img2img via file upload or Refine from
+ * the Generations panel. Exposed via ref so ModelPanel can forward Refine clicks.
  */
-function ImageGenerator({
-  model,
-  isConnected,
-  jobs,
-  onSubmitted,
-}: {
-  model: ModelDef
-  isConnected: boolean
-  jobs: JobResult[]
-  onSubmitted: () => void
-}) {
+const ImageGenerator = forwardRef<
+  { triggerRefine: RefineHandler },
+  {
+    model: ModelDef
+    isConnected: boolean
+    jobs: JobResult[]
+    onSubmitted: () => void
+  }
+>(function ImageGenerator({ model, isConnected, jobs, onSubmitted }, ref) {
   const [prompt, setPrompt] = useState('')
   const [advParams, setAdvParams] = useState<ImageParams>({})
   const [session, setSession] = useState<SessionStatus | null>(null)
+  const [initImage, setInitImage] = useState<InitImage | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   // Set of job IDs submitted this session — watched for inline result display.
   // The server-backed GenerationsPanel is the source of truth; this just drives
   // the inline "last completed" preview above the panel.
@@ -645,6 +696,60 @@ function ImageGenerator({
   const [latestResult, setLatestResult] = useState<JobResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  useImperativeHandle(ref, () => ({
+    triggerRefine(job: JobResult, imageB64: string) {
+      setInitImage({
+        preview: `data:image/png;base64,${imageB64}`,
+        // Store the job_id so handleGenerate sends init_job_id (tiny) not the full bytes.
+        jobId: job.job_id,
+        label: `Refining: "${(job.prompt ?? '').slice(0, 40)}${(job.prompt ?? '').length > 40 ? '…' : ''}"`,
+        isRefinement: true,
+      })
+      setPrompt('')
+      setError(null)
+    },
+  }))
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string
+      // Resize to ≤768px on each axis so the base64 stays small in the request body.
+      const img = new Image()
+      img.onload = () => {
+        const MAX = 768
+        let { width, height } = img
+        if (width > MAX || height > MAX) {
+          const scale = Math.min(MAX / width, MAX / height)
+          width = Math.round(width * scale)
+          height = Math.round(height * scale)
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        canvas.getContext('2d')!.drawImage(img, 0, 0, width, height)
+        const resized = canvas.toDataURL('image/jpeg', 0.85)
+        const b64 = resized.replace(/^data:[^;]+;base64,/, '')
+        setInitImage({ preview: resized, b64, label: file.name, isRefinement: false })
+      }
+      img.src = dataUrl
+    }
+    reader.readAsDataURL(file)
+    // reset so picking same file again still fires onChange
+    e.target.value = ''
+  }
+
+  function clearInitImage() {
+    setInitImage(null)
+    setAdvParams((prev) => {
+      const next = { ...prev }
+      delete next.strength
+      return next
+    })
+  }
+
   // Clear local state when model changes (panel stays mounted, model prop changes).
   useEffect(() => {
     setPrompt('')
@@ -652,6 +757,7 @@ function ImageGenerator({
     setLatestResult(null)
     setError(null)
     setWatchIds(new Set())
+    setInitImage(null)
   }, [model.id])
 
   const live = !!session?.alive
@@ -726,12 +832,17 @@ function ImageGenerator({
     setSubmitting(true)
     try {
       const params = Object.keys(advParams).length > 0 ? advParams : undefined
+      // Refine: send init_job_id (server fetches image bytes — avoids large request body).
+      // File upload: send init_image_b64 (already resized to ≤768px client-side).
+      const initJobId = initImage?.isRefinement ? initImage.jobId : undefined
+      const initB64 = !initJobId ? initImage?.b64 : undefined
       const { job_id } =
         hasSession && session?.session_id
-          ? await submitSessionJob(session.session_id, prompt.trim(), params)
-          : await runGenerate(model.id, prompt.trim(), params)
+          ? await submitSessionJob(session.session_id, prompt.trim(), params, initB64, initJobId)
+          : await runGenerate(model.id, prompt.trim(), params, initB64, initJobId)
       setWatchIds((prev) => new Set([...prev, job_id]))
       setPrompt('') // clear immediately so user can type the next prompt
+      setInitImage(null) // clear init image after submission
       onSubmitted()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed')
@@ -749,14 +860,49 @@ function ImageGenerator({
       {isConnected && <SessionBar model={model.id} onSession={setSession} />}
 
       <div className="space-y-2">
+        {/* Init image slot — upload or refine chip */}
+        {initImage ? (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-theme-brand/30 bg-theme-brand/5">
+            <img src={initImage.preview} alt="source" className="w-8 h-8 rounded-md object-cover shrink-0 border border-theme-border/60" />
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-semibold text-theme-brand truncate">
+                {initImage.isRefinement ? '↺ ' : '🖼 '}{initImage.label}
+              </div>
+              <div className="text-[9px] text-theme-text-muted">Source image attached</div>
+            </div>
+            <button
+              type="button"
+              onClick={clearInitImage}
+              className="shrink-0 w-5 h-5 flex items-center justify-center text-theme-text-muted hover:text-theme-text cursor-pointer"
+              title="Remove source image"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+                <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <>
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!isConnected || busy}
+              className="w-full py-1.5 rounded-xl text-xs text-theme-text-muted border border-dashed border-theme-border/60 hover:border-theme-brand/40 hover:text-theme-text disabled:opacity-40 cursor-pointer transition-colors"
+            >
+              + Add source image (optional img2img)
+            </button>
+          </>
+        )}
+
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           disabled={!isConnected || busy}
-          placeholder="Describe the image you want to generate..."
+          placeholder={initImage?.isRefinement ? 'Describe what to change…' : 'Describe the image you want to generate...'}
           className="w-full h-20 px-3 py-2 rounded-xl text-sm bg-theme-bg border border-theme-border/60 text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-border disabled:opacity-60 resize-none"
         />
-        <AdvancedParams modelId={model.id} onChange={setAdvParams} />
+        <AdvancedParams modelId={model.id} onChange={setAdvParams} showStrength={!!initImage} />
         <button
           type="button"
           onClick={handleGenerate}
@@ -826,4 +972,4 @@ function ImageGenerator({
       )}
     </div>
   )
-}
+})

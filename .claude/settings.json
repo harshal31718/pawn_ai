@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; if($p.tool_input.command -match 'secrets/[^.\\n]*[\\r\\n]|\\.env[^.]|git +push +.*--force'){Write-Error 'BLOCKED: touches secrets or force-push'; exit 2} else {exit 0}\""
+            "command": "powershell -NoProfile -Command \"\\$p=\\$input|Out-String|ConvertFrom-Json; if(\\$p.tool_input.command -match 'secrets/[^.\\n]*[\\r\\n]|\\.env[^.]|git +push +.*--force'){Write-Error 'BLOCKED: touches secrets or force-push'; exit 2} else {exit 0}\""
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; $f=$p.tool_input.file_path; if($f -match 'secrets/' -and $f -notmatch '\\.example$' -and $f -notmatch '\\.gitkeep$'){Write-Error 'BLOCKED: writing to secrets/'; exit 2} else {exit 0}\""
+            "command": "powershell -NoProfile -Command \"\\$p=\\$input|Out-String|ConvertFrom-Json; \\$f=\\$p.tool_input.file_path; if(\\$f -match 'secrets/' -and \\$f -notmatch '\\.example$' -and \\$f -notmatch '\\.gitkeep$'){Write-Error 'BLOCKED: writing to secrets/'; exit 2} else {exit 0}\""
           }
         ]
       }
