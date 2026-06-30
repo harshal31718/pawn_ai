@@ -33,3 +33,11 @@ or
 
 Do NOT update BUILD-TRACKER.md yourself. Report the result and let the orchestrating
 agent do that.
+
+## Stable Commits
+
+Do NOT update `workspace/stable_commits.md` automatically. Only update it when the user
+explicitly says this commit is the last stable point (e.g. "mark this as stable", "this is
+the last stable commit"). When asked, run:
+`git log <branch> -1 --format="%H|%ai|%s"`
+and update the matching row in `workspace/stable_commits.md`.

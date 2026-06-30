@@ -1,8 +1,8 @@
 # PAWN — Current State
 
-Last updated: 2026-06-29
-Active step: Phase W CODE COMPLETE (W.0–W.3) — live-verify warm SDXL + FLUX sessions, then merge imageLab → dev. Scoped per-session JWT deferred (mandatory before multi-user). Plans: `workspace/plan/plan_v5_warm_session.md`, `plan_v6_sdxl_warm_session.md`.
-Phase: imageLab branch — Phase W (warm/persistent Kaggle sessions + durable job tracking). Targets the top deferred item: FLUX ~820s/image. Milestone A.1 (multi-model SDXL/FLUX) is live; Phase MU code complete on dev/main.
+Last updated: 2026-06-30
+Active step: Phase W fully complete (W.0–W.6). Next: merge imageLab → dev, then mobile readiness polish (plan_4_mobileReadiness.md) or image param controls (ideas.md). Phase 3 (WebCrypto client-side encryption) remains deferred.
+Phase: imageLab branch — Phase W done. Plan archived at `workspace/implemented_phases/phase_5_kaggle_image.md`.
 
 > **Phase W goal:** keep one Kaggle container warm so repeat images are fast (user-set timer + image
 > cap), via a Supabase job-queue rendezvous; and make every generation a durable, server-tracked job
@@ -130,7 +130,8 @@ Test/build status: **132 backend tests passing**; frontend `npm run build` passe
 - [x] Warm-session loop proof (imageLab, Phase W / W.0) — CPU echo kernel + Supabase rendezvous; **LIVE-VERIFIED 2026-06-29** (kernel reached Warm, live countdown + heartbeat, 2 echo jobs round-tripped). The persistent-loop assumption is proven. Note: new sb_publishable_* keys enforce RLS → permissive anon policy added on the two tables.
 - [x] Warm FLUX serve-loop + durable job layer (imageLab, Phase W / W.1) — non-blocking job-tracked generate (de-dup, GC-safe worker), `extend_session`, `GET /generate/jobs`, FLUX persistent notebook; 132 tests green (2026-06-29). Live warm-FLUX run pending. Scoped per-session JWT deferred (mandatory before multi-user).
 - [x] Image Lab UI (imageLab, Phase W / W.2) — job-driven generator with server-derived button state (no duplicate submit, survives refresh), `GenerationsPanel` monitor (thumbnails/lightbox/download), `SessionBar` (countdown/Extend/Stop); `npm run build` clean (2026-06-29). Live end-to-end verification pending.
-- [x] Real SDXL warm serve-loop (imageLab, Phase W / W.3) — SDXL warm sessions now generate images (load once via `AutoPipelineForText2Image` → serve loop → PNG, `via kaggle:sdxl-session`) instead of echo text; registry repointed to `image_sdxl_session` notebook (GPU, slug `pawn-sdxl-session`); 134 tests green (2026-06-29). Both SDXL + FLUX warm sessions are real now. Live verify pending.
+- [x] Real SDXL warm serve-loop (imageLab, Phase W / W.3) (load once via `AutoPipelineForText2Image` → serve loop → PNG, `via kaggle:sdxl-session`) instead of echo text; registry repointed to `image_sdxl_session` notebook (GPU, slug `pawn-sdxl-session`); 134 tests green (2026-06-29). Both SDXL + FLUX warm sessions are real now.
+- [x] Session startup observability + liveness fixes + per-model panels (imageLab, Phase W / W.4–W.6) — Notebooks patch `installing`→`loading_model`→`ready` at phase boundaries; `_LIVE_STATUSES` extended; `SessionBar` shows phase-specific messages. Heartbeat stale threshold raised 30→90 s (fixes false "Session ended" during FLUX inference). `create_cold_job` blocks if a warm session is live (prevents GPU slot waste). Kaggle GPU limit surfaced as actionable message. Tab switcher replaced with always-mounted stacked `ModelPanel` components — each panel owns its own jobs poll, `SessionBar`, `ImageGenerator`, and `GenerationsPanel` (fixes session state loss on tab switch). Commit: 5728b9e.
 
 ---
 

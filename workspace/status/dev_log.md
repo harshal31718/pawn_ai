@@ -427,6 +427,18 @@ This becomes your interview script and project history.
 **Tests:** 133 backend passing (added `test_reap_stale_jobs_reaps_jobs_of_dead_sessions`; renamed the cold reap test).
 **Commit:** (this commit)
 
+### 2026-06-30 — W.4/W.5/W.6: startup observability + liveness fixes + per-model panels [imageLab]
+
+**Built:**
+- W.4: Notebooks patch `installing` → `loading_model` → `ready` at phase boundaries. `_LIVE_STATUSES` extended to include both new statuses. `SessionBar` shows phase-specific messages ("Waiting for Kaggle GPU…" / "Installing dependencies…" / "Loading model onto GPU…"). Type comment in `client.ts` updated.
+- W.5: Tab switcher (`activeModelId` state + tab bar) removed from `ImageLabPage`. Replaced with always-mounted stacked `ModelPanel` components — each owns its own jobs poll, `SessionBar`, `ImageGenerator`, and `GenerationsPanel`. No cross-model state sharing; switching away no longer resets timers or countdowns.
+- W.6: `IMAGE_SESSION_HEARTBEAT_STALE_SECONDS` raised 30 → 90 s (fixes false "Session ended" during FLUX inference). `create_cold_job` blocks with HTTP 400 when a warm session is already live for that model. Kaggle GPU limit error detected by message text and surfaced as human-readable error. `SessionBar` shows a confirm dialog before re-Start when a session exists.
+**Decisions:** Warmup-phase queuing (W.4) required extending `_LIVE_STATUSES` first so new statuses aren't treated as dead sessions by `_is_alive` and `reap_stale_jobs`.
+**Tests:** (see commit 5728b9e)
+**Commit:** 5728b9e — Stable: fix session reaping, heartbeat gaps, and UI crash in image pipeline; add warmup-phase queuing and multi-prompt queue support
+
+---
+
 ### 2026-06-29 — W.3: real SDXL warm serve-loop (warm sessions generate images, not echo) [imageLab]
 
 **Why:** A warm session on the SDXL tab returned `ECHO: <prompt>` text — SDXL's session was wired to the W.0 CPU-echo POC (placeholder; "real SDXL serve-loop is a follow-up"). Only FLUX had a real warm serve-loop. User wants warm image generation for SDXL too (load once → generate many).
