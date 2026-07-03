@@ -24,7 +24,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
-from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, FRONTEND_URL, OAUTH_REDIRECT_URI
 from app.core.crypto import encrypt
 from app.core.jwt_utils import create_token, decode_token
 from app.db.supabase_client import get_db
@@ -40,9 +40,12 @@ _SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 
-# Frontend URL to redirect to after successful auth
-_FRONTEND_URL = "http://localhost:5174"
-_REDIRECT_URI = "http://localhost:8001/auth/callback"
+# Frontend URL to redirect to after successful auth. _REDIRECT_URI must exactly
+# match the redirect URI registered with the Google OAuth client — mismatches
+# fail the exchange with invalid_grant. Both are env-var driven (see config.py),
+# defaulting to today's local-dev values.
+_FRONTEND_URL = FRONTEND_URL
+_REDIRECT_URI = OAUTH_REDIRECT_URI
 
 
 def _build_flow() -> Flow:

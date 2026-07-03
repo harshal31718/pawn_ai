@@ -1,11 +1,23 @@
-# Plan: Production Deployment (Self-Hosted Postgres Migration + Oracle VPS)
+# Plan: Production Deployment (Self-Hosted Postgres Migration + PAWN as a Second App on the Enma VM)
 
 ## Context
 
-PAWN needs a `deployment.md` runbook to go live on a second Oracle Cloud
-Always-Free ARM VM — a **separate Oracle account** from the existing "Enma"
-project deployment (different card, phone, email), since Oracle's dedup
-detection keys off card+phone and reuse risks both accounts being suspended.
+PAWN needs a `deployment.md` runbook to go live. **Decision reversed from an
+earlier draft of this plan:** we are **not** creating a new Oracle Cloud
+account. PAWN will be deployed as a **second, isolated app on the existing
+Oracle Always-Free VM that already hosts Enma in production** (instance
+`enma-production`, reserved public IP, `VM.Standard.A1.Flex`, ARM64, Ubuntu
+24.04 LTS, 4 OCPU / 24 GB RAM). Reusing the account avoids Oracle's
+dedup-detection risk entirely (no new card/phone/email needed) and the VM has
+ample headroom (~20+ GB RAM, 70%+ CPU free as of 2026-07-03, estimated).
+
+Everything **other than the Oracle account/VM itself** is still new and
+isolated from Enma: new dedicated Gmail, new DuckDNS subdomain, new Google
+Cloud OAuth client, own directory, own Nginx server block, own Docker Compose
+project, own named volumes, own secrets. This mirrors the standard
+"second app on the same box" pattern documented below — the coexistence
+rules in this doc supersede and absorb the standalone `SECOND_APP_ON_SAME_VM.md`
+file (that file has been folded in here and removed).
 
 Scope grew during planning: the user decided to **drop Supabase entirely**
 in favor of a self-hosted Postgres+pgvector database on the same VPS. This is
@@ -30,21 +42,86 @@ record). Key facts verified against the codebase (commit `02f1921` on `dev`):
 - `secrets/` has 13 app-read secrets + one stray unread file
   `secrets/supabase_project_password` (dropped along with Supabase).
 
+## What's already on the VM (do not disturb) — Enma's footprint
+
+This is what's already running in production on the shared VM. PAWN's setup
+must not touch, edit, or collide with any of it.
+
+| Component | Enma's value |
+|---|---|
+| VM | `enma-production`, OCI Always Free, `VM.Standard.A1.Flex`, 4 OCPU / 24 GB RAM, ARM64, Ubuntu 24.04 LTS, reserved public IP (never release it) |
+| Domain | `enmaquant.duckdns.org` — Google OAuth registered against this exact origin; never repoint this DNS record |
+| Repo location | `/opt/enma`, owned by `ubuntu`, `main` branch |
+| Nginx | Single system instance, **owns ports 80/443** exclusively. Config: `/etc/nginx/sites-available/enma` |
+| Compose project | `/opt/enma/docker-compose.prod.yml` — services `redis`, `timescaledb`, `engine`, `server`. `client` is not containerized; Nginx serves a static build from `/opt/enma/client/dist` |
+| Host-bound ports | Only `127.0.0.1:5000` (Node server). `engine`, `redis`, `timescaledb` publish no host ports at all |
+| Named volumes | `enma_redis_data`, `enma_timescale_data`, `enma_engine_strategies` — never `docker compose down -v` this project |
+| External services | MongoDB Atlas (M0, whitelisted to this VM's IP), Google OAuth (Enma's own client), Binance Testnet (outbound only) |
+| `.env` | `/opt/enma/.env`, git-ignored — never read, log, copy, or reuse its values |
+| Firewall (3 layers) | OCI Security List (22 restricted, 80/443 open to `0.0.0.0/0`) → host iptables (only 80/443/22 opened, insertion position can drift after OS upgrades) → Docker's own iptables chain (bypasses host INPUT — why only `127.0.0.1:5000` is published) |
+| Idle-reclamation mitigation | Cron `keep_alive.sh` every 6h to dodge Oracle's Always-Free idle-reclamation check — do not remove |
+
+## Hard rules for PAWN's deploy (never break these)
+
+1. Never bind PAWN's containers to ports 80 or 443. Reach the internet via a
+   **new** Nginx `server_name` block on PAWN's own subdomain — never claim
+   Nginx's ports directly.
+2. Never edit `/etc/nginx/sites-available/enma`. Create a new
+   `/etc/nginx/sites-available/pawn` file instead.
+3. Never put PAWN in `/opt/enma` or add its services to Enma's
+   `docker-compose.prod.yml`. PAWN gets its own directory (`/opt/pawn`) and
+   its own compose file/project.
+4. Never publish a PAWN container port without a `127.0.0.1:` prefix unless
+   deliberately opened at both the OCI Security List and host iptables layers
+   first. Pick a free localhost port distinct from Enma's `5000` — PAWN's
+   backend already targets `8001` (see D.2), so publish
+   `127.0.0.1:8001:8001`.
+5. Never touch `enma_redis_data`, `enma_timescale_data`, or
+   `enma_engine_strategies` volumes, and never run
+   `docker compose down -v` inside `/opt/enma`. PAWN's own volumes
+   (`pawn_postgres_data`, etc.) must be uniquely named and confined to
+   PAWN's compose project.
+6. Never reuse Enma's MongoDB Atlas cluster, `.env` secrets, encryption key,
+   or JWT secret, or its Google OAuth client. PAWN provisions everything
+   fresh: new Gmail, new DuckDNS subdomain, new OAuth client, new
+   `openssl rand`-generated secrets, its own Postgres+pgvector instance.
+7. Never release or modify the VM's reserved public IP, and never repoint
+   `enmaquant.duckdns.org`. PAWN's new DuckDNS subdomain resolves to the
+   *same* IP (one VM, multiple domains, Nginx routes by `server_name`/SNI).
+8. Don't restart/reconfigure the system `nginx` or `docker` services
+   destructively. Always `sudo nginx -t` before every `reload`, and follow
+   every PAWN-side Nginx change with a real HTTP check against
+   `https://enmaquant.duckdns.org/api/v1/health` to confirm Enma is still
+   served.
+9. Because PAWN's workload (Postgres+pgvector, PostgREST, Kaggle image-gen
+   rendezvous) can be resource-heavier than a small server, set Docker
+   resource limits (`mem_limit`/`cpus` or `deploy.resources.limits`) on
+   PAWN's containers so a runaway process can't starve Enma's trading
+   engine — a CPU/OOM-starved Enma mid-session is worse than a slow PAWN.
+
 ## Decisions locked in (do not re-litigate)
 
-1. Single Oracle Always-Free ARM64 VM (`VM.Standard.A1.Flex`), separate
-   account from Enma.
-2. Everything on one VM — Nginx does TLS + static frontend + reverse proxy.
-   No Vercel/split-hosting.
-3. New dedicated Gmail owns DuckDNS domain + Google Cloud OAuth client.
-4. Domain: DuckDNS subdomain, placeholder `<pawn-domain>.duckdns.org`.
-5. Same-origin URL layout — one domain for frontend + API.
-6. Repo is private → VPS needs a read-only SSH deploy key.
+1. **Reuse the existing Oracle Always-Free ARM64 VM (`enma-production`) and
+   the existing Oracle account** — no new Oracle account, no new VM. PAWN is
+   added as a second, fully isolated app per the hard rules above.
+2. Everything PAWN-side on one VM — its own Nginx server block does TLS +
+   static frontend + reverse proxy for PAWN. No Vercel/split-hosting.
+3. New dedicated Gmail (distinct from Enma's) owns PAWN's DuckDNS domain +
+   Google Cloud OAuth client.
+4. Domain: `pawnai.duckdns.org` (new DuckDNS subdomain, distinct from
+   `enmaquant.duckdns.org`), resolving to the same reserved IP.
+5. Same-origin URL layout for PAWN — one domain for its frontend + API.
+6. Repo is private → VM needs a read-only SSH deploy key for PAWN's repo
+   (separate from whatever key, if any, Enma's `/opt/enma` checkout uses).
 7. Branch hygiene: adopt Enma's `dev`/`main` split via `.gitattributes`
    `merge=ours` for `.claude/`, `workspace/`, `CLAUDE.md`.
-8. Database: self-hosted Postgres + pgvector, replacing Supabase. Kaggle
-   kernel reaches it via a self-hosted **PostgREST** container, reverse
-   proxied over HTTPS — mirrors the current Supabase REST/anon-key pattern.
+8. Database: self-hosted Postgres + pgvector, replacing Supabase, running as
+   PAWN's own container(s) — never Enma's `timescaledb`. Kaggle kernel
+   reaches it via a self-hosted **PostgREST** container, reverse proxied
+   over HTTPS on PAWN's subdomain — mirrors the current Supabase
+   REST/anon-key pattern.
+9. PAWN's directory, compose project, volumes, ports, Nginx config, secrets,
+   and OAuth client are all independent of Enma's, per the hard rules above.
 
 ## Steps
 
@@ -59,14 +136,14 @@ record). Key facts verified against the codebase (commit `02f1921` on `dev`):
 - [ ] **D.2 — Fix frontend build-time API URL**
   Fix `frontend/.env.example` port (8000 → 8001, doc-only). Create
   `frontend/.env.production` (committed) with
-  `VITE_API_URL=https://<pawn-domain>.duckdns.org`.
+  `VITE_API_URL=https://pawnai.duckdns.org`.
 
 - [ ] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
-  Add `postgres` (pgvector image, named volume) service to `docker-compose.yml`.
-  Replace `backend/app/db/supabase_client.py` with an asyncpg-based client.
-  Rewrite `.table()/.rpc()` calls in `auth.py`, `key_store.py`,
-  `drive_factory.py`, `memory/index.py`, `memory/retrieve.py` as direct
-  parameterized SQL. Port `supabase/schema.sql` to plain Postgres
+  Add `postgres` (pgvector image, named volume `pawn_postgres_data`) service
+  to `docker-compose.yml`. Replace `backend/app/db/supabase_client.py` with
+  an asyncpg-based client. Rewrite `.table()/.rpc()` calls in `auth.py`,
+  `key_store.py`, `drive_factory.py`, `memory/index.py`, `memory/retrieve.py`
+  as direct parameterized SQL. Port `supabase/schema.sql` to plain Postgres
   (`gen_random_uuid()`/`pgcrypto` check). Drop `supabase` from
   `requirements.txt`, add `asyncpg`. Drop `supabase_url`/`supabase_service_key`/
   `supabase_anon_key` secrets, add `postgres_password`/`postgres_dsn`.
@@ -89,24 +166,43 @@ record). Key facts verified against the codebase (commit `02f1921` on `dev`):
   via dev compose, confirm memory retrieval + BYOK key storage work
   end-to-end before touching prod.
 
-- [ ] **D.7 — Write `deployment.md` (VPS runbook)**
-  Prerequisites checklist (Gmail, DuckDNS, second Oracle account, reserved
-  IP) → Oracle VPS setup (instance, Security List, host-iptables gotcha) →
-  external services (Google Cloud OAuth client + Drive API, DuckDNS A-record)
-  → VPS base setup (Docker, Nginx, certbot, private repo deploy key) →
-  production secrets population (file-based Docker secrets, final list
-  post-Supabase-removal) → frontend static build → Nginx config + TLS →
-  `docker-compose.prod.yml` (backend loopback-only, postgres named volume,
-  postgrest internal-only, no frontend service) → deploy & verify checklist
-  → release/update workflow → data safety notes (named Postgres volume backup,
-  never `down -v`) → firewall/exposure summary table.
+- [ ] **D.7 — Write `deployment.md` (VM runbook, second-app-on-Enma-VM style)**
+  Prerequisites checklist (new dedicated Gmail, new DuckDNS subdomain, SSH
+  access to the *existing* `enma-production` VM — **no new Oracle account,
+  no new instance, no Security List changes needed** since 80/443 are
+  already open and PAWN's backend stays loopback-only) → confirm VM headroom
+  and that Enma is currently healthy (`docker compose -f
+  /opt/enma/docker-compose.prod.yml ps`, `curl
+  https://enmaquant.duckdns.org/api/v1/health`) → external services (new
+  Google Cloud OAuth client + Drive API for PAWN, `pawnai.duckdns.org`
+  A-record pointed at the *same* reserved IP) → per-app setup on the shared VM
+  (`sudo mkdir -p /opt/pawn`, clone PAWN's repo there with its own deploy
+  key, own `docker-compose.prod.yml` with an explicit `name: pawn` project
+  name) → production secrets population for PAWN (file-based Docker
+  secrets, final list post-Supabase-removal, freshly generated — never
+  copied from Enma's `.env`) → frontend static build → new Nginx server
+  block at `/etc/nginx/sites-available/pawn` (`server_name
+  pawnai.duckdns.org`, `proxy_pass http://127.0.0.1:8001`), symlink
+  into `sites-enabled`, `sudo nginx -t` before every reload → TLS via
+  `sudo certbot --nginx -d pawnai.duckdns.org` (additive, doesn't
+  touch Enma's cert) → `docker-compose.prod.yml` for PAWN (backend bound to
+  `127.0.0.1:8001` only, `postgres` named volume `pawn_postgres_data`,
+  `postgrest` internal-only, no frontend service, resource limits per hard
+  rule 9) → deploy & verify checklist (PAWN's own health check, **then**
+  re-verify Enma's health endpoint and `docker compose ps` per hard rule 8)
+  → release/update workflow (`git pull` + rebuild inside `/opt/pawn` only)
+  → data safety notes (PAWN's named Postgres volume backup, never `down -v`
+  on `/opt/pawn`, and never touch Enma's volumes) → firewall/exposure
+  summary table covering both apps' ports side by side.
 
 - [ ] **D.8 — First live deploy + full verify checklist**
-  Execute `deployment.md` end to end on the real VPS. Health endpoint, HTTPS
-  load with clean CSP console, full Google OAuth round-trip, BYOK LLM SSE
-  round-trip, one Kaggle image-gen job exercising the new PostgREST
+  Execute `deployment.md` end to end on the shared VM. Health endpoint,
+  HTTPS load with clean CSP console, full Google OAuth round-trip, BYOK LLM
+  SSE round-trip, one Kaggle image-gen job exercising the new PostgREST
   rendezvous path (highest-risk item — newest, least-proven part of the
-  migration).
+  migration). Finish by confirming Enma is untouched: its health endpoint,
+  `docker compose ps` status, and that `enmaquant.duckdns.org` still
+  resolves and serves correctly.
 
 ## Critical files
 
@@ -122,6 +218,21 @@ record). Key facts verified against the codebase (commit `02f1921` on `dev`):
 - New `.gitattributes` (D.5)
 - New `deployment.md` at repo root (D.7)
 
+## Quick reference — what's whose (on the shared VM)
+
+| Thing | Enma's value | PAWN uses |
+|---|---|---|
+| Oracle account/VM | `enma-production` | **same** — no new account/VM |
+| Directory | `/opt/enma` | `/opt/pawn` |
+| Domain | `enmaquant.duckdns.org` | `pawnai.duckdns.org`, same reserved IP |
+| Nginx config file | `/etc/nginx/sites-available/enma` | `/etc/nginx/sites-available/pawn` |
+| Localhost port | `127.0.0.1:5000` | `127.0.0.1:8001` |
+| Compose project | `docker-compose.prod.yml` in `/opt/enma` | its own compose file, own directory, own project name |
+| Docker volumes | `enma_redis_data`, `enma_timescale_data`, `enma_engine_strategies` | `pawn_postgres_data` + any others, uniquely named |
+| Database | MongoDB Atlas (`enma_trading`/`enma_candles`) | self-hosted Postgres+pgvector, own container |
+| OAuth client | Enma's Google Cloud project/client | PAWN's own new client |
+| Secrets | `/opt/enma/.env` | Docker secret files under `/opt/pawn`, freshly generated |
+
 ## Working agreement
 
 Same as the rest of the project: implement steps sequentially, tests pass
@@ -129,4 +240,7 @@ before marking `[x]`, update `workspace/current_state.md` and
 `workspace/status/build_tracker.md` after every step. Given the size of this
 plan (a real DB migration, not a small feature), pause for confirmation
 between D.3/D.4 (the migration) and D.7/D.8 (the actual live deploy) rather
-than running straight through.
+than running straight through. Because D.7/D.8 now touch a VM that already
+runs a live trading app, treat every VM-side command as reversible-with-care:
+always confirm Enma's health before *and* after any shared-VM action
+(Nginx reload, certbot run, firewall check).

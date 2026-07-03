@@ -6,6 +6,20 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-03] — Phase D / D.1: kill hardcoded localhost values (CORS, OAuth redirect, CSP)
+
+**Built:** `backend/app/config.py` gains `CORS_ORIGINS`/`FRONTEND_URL`/`OAUTH_REDIRECT_URI`/`CSP_CONNECT_SRC` as `os.getenv(name, default)` constants (non-secret deployment config, not `read_secret` — no secret-file shadowing risk); defaults reproduce today's hardcoded localhost values exactly, so local `docker compose up` is unaffected. `main.py` CORS `allow_origins` now built from `CORS_ORIGINS` (comma-split) with a startup `ValueError` guard against `*`. `routes/auth.py` `_FRONTEND_URL`/`_REDIRECT_URI` sourced from config instead of hardcoded strings — `_REDIRECT_URI` is the highest-risk value (must exactly match the Google OAuth client's registered redirect URI in production). `middleware/security.py` CSP `connect-src` reads `CSP_CONNECT_SRC`. New `backend/tests/test_deployment_config.py` (6 tests).
+
+**Decisions:** Read via plain `os.getenv` rather than `read_secret` — these are non-secret URLs, not API keys, and `read_secret` has no default-value support. Values are read once at process/import time (standard 12-factor pattern); env-var overrides are proven at the `config.py` level via `importlib.reload` in tests rather than reloading every consumer module.
+
+**Issues found in review (both fixed):** code-reviewer caught a test-pollution bug — the `finally` block in the env-override test reloaded `app.config` while the monkeypatched env vars were still set (monkeypatch only tears down after the test returns), silently leaving the shared config module polluted for later tests; fixed by explicitly clearing the vars before the restorative reload. security-auditor caught that `CORS_ORIGINS` had no guard against an operator setting it to `*` (violates `.claude/rules/security.md`'s "never `allow_origins=['*']`"); fixed by raising at startup if `*` appears in the parsed origin list, with a new regression test.
+
+**Tests:** 148 backend tests green (was 147 + hotfix wildcard test = 148). `docker compose config` still validates cleanly (no new env vars referenced in `docker-compose.yml` yet — that's D.7's job).
+
+**Commit:** (pending — committed alongside doc updates)
+
+---
+
 ### [2026-07-03] — Mobile readiness pass + Phase 3 P3-1 (encryption foundation)
 
 **Built (mobile, implemented_phases/phase_7_mobile_readiness.md — all 7 fixes):** user bubble `max-w-[70%] sm:max-w-[50%]` (Message.tsx); hamburger hit area `p-3.5 -m-2` (ChatPage.tsx); delete-confirm buttons `h-8 min-w-[48px] text-sm` (Sidebar.tsx); conversation search enabled + case-insensitive `title` filter with "No matching chats" empty state, and mini-sidebar search button now opens the sidebar (Sidebar.tsx); trace row `flex-wrap gap-y-1` (Message.tsx); code blocks `text-sm sm:text-xs` (Message.tsx); settings colour swatches `w-8 h-8` (SettingsPage.tsx).

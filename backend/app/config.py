@@ -33,3 +33,11 @@ GOOGLE_CLIENT_SECRET = read_secret("google_client_secret")
 
 # JWT signing secret
 JWT_SECRET = read_secret("jwt_secret")
+
+# Deployment URLs (non-secret; env-var driven, default to today's local-dev values
+# so `docker compose up` locally is unaffected by these existing).
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5174")
+OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "http://localhost:8001/auth/callback")
+# Space-separated (CSP source-list syntax), not comma-separated like CORS_ORIGINS.
+CSP_CONNECT_SRC = os.getenv("CSP_CONNECT_SRC", "http://localhost:8000")

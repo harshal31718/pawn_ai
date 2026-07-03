@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-07-03
-Active step: Phase 3 P3-1 encryption FOUNDATION done (crypto module, session, passphrase gate, salt endpoint, vitest). Full encrypt/decrypt-on-write wiring DEFERRED (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) done.
+Active step: Phase D (Production Deployment) in progress — D.1 done, D.2 in progress. Phase 3 P3-1 encryption FOUNDATION done (crypto module, session, passphrase gate, salt endpoint, vitest). Full encrypt/decrypt-on-write wiring DEFERRED (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) done.
 Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30). All Phase W, img2img, and Phase 6 UI work is now on main. imageLab branch deleted. Next: `workspace/implemented_phases/phase_8_encryption.md`.
 
 ---
@@ -31,6 +31,15 @@ Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30).
 - Step R4: Frontend wiring — Integrated dynamic models dropdown from GET /registry/models, custom animated failover notices inline in chat, and provider badge indicators under assistant message bubbles.
 - Hotfix: Port/CORS configuration — `docker-compose.yml` pinned backend to `8001:8000` and frontend to `5174:5173` (range bindings caused backend to land on port 8001 while `VITE_API_URL` still pointed to 8000, a different host service). `VITE_API_URL` updated to `http://localhost:8001`. CORS `allow_origins` extended to include `http://localhost:5174`. `frontend/.env` created for local dev.
 - Step R5: UI visual overhaul + LAN access — CSS variable theme system (`@theme`/`:root`/`.dark`) with FOUC-prevention blocking script in `index.html`; `InteractiveGridBackground` animated canvas (184 lines); floating pill header islands with dark mode toggle; top gradient overlays trimmed to `h-16 via-theme-bg/25`; floating bottom input; `ChatWindow` smart scroll; `TracePanel.tsx` deleted — trace logic absorbed into `Message.tsx` as unified metadata row (provider left, "Agent Execution N steps" toggle right) with inline step/memory/model_call cards; `react-markdown` for assistant responses; collapsible long user messages; `MessageInput` auto-resize pill→card morph; `Sidebar` mini-sidebar `w-12`, click-to-expand column, fixed-width flicker-free transition, profile avatar, neutral delete colors, no close-on-thread-switch; registry `ModelResponse` extended with `providers` field; LAN IP `10.95.144.153` added to CORS + `VITE_API_URL`.
+
+### Phase D — D.1: kill hardcoded localhost values (plan/plan_deployment.md) — 2026-07-03
+
+- `backend/app/config.py` — `CORS_ORIGINS`, `FRONTEND_URL`, `OAUTH_REDIRECT_URI`, `CSP_CONNECT_SRC` added as plain `os.getenv(name, default)` module constants (non-secret deployment URLs, not routed through `read_secret`); defaults exactly match the prior hardcoded localhost values so `docker compose up` locally is unaffected.
+- `backend/app/main.py` — CORS `allow_origins` built from `CORS_ORIGINS.split(",")` (whitespace/empty-entry safe); raises `ValueError` at startup if `*` is ever present (guards against an operator accidentally enabling wildcard CORS).
+- `backend/app/routes/auth.py` — `_FRONTEND_URL`/`_REDIRECT_URI` now sourced from `config.FRONTEND_URL`/`config.OAUTH_REDIRECT_URI` instead of hardcoded strings.
+- `backend/app/middleware/security.py` — CSP `connect-src` now interpolates `config.CSP_CONNECT_SRC`.
+- New `backend/tests/test_deployment_config.py` (6 tests: defaults, env-var override via `importlib.reload`, CORS allow/reject, CSP default, wildcard-rejection guard). 148 backend tests green; `docker compose config` still validates.
+- code-reviewer PASS (2 WARN fixed: a `finally`-block test-pollution bug where reloading `app.config` while overrides were still set left the module polluted for later tests; a doc comment clarifying `CSP_CONNECT_SRC` is space-separated, not comma-separated like `CORS_ORIGINS`). security-auditor PASS (1 WARN fixed: added the `*` wildcard guard).
 
 ### Mobile readiness (implemented_phases/phase_7_mobile_readiness.md) — 2026-07-03
 

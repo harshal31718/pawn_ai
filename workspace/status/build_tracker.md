@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (not started)
-**Active step:** Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete. Phase D deployment not started.
+**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress)
+**Active step:** Phase D D.1 done (env-var-driven CORS/OAuth-redirect/CSP, defaults preserve local dev). D.2 in progress. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
@@ -362,10 +362,21 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
 
 Drop Supabase for a self-hosted Postgres+pgvector database, fix the three
 hardcoded-localhost prod blockers, and write a full `deployment.md` runbook
-for a second Oracle Cloud Always-Free ARM VM (separate account from the
-existing "Enma" deployment).
+for PAWN as a second, isolated app on the existing Oracle Cloud Always-Free
+ARM VM that already hosts Enma (same account — see plan for the reversed
+decision and coexistence rules).
 
-- [ ] **D.1 — Kill hardcoded localhost values (CORS, OAuth redirect, CSP)**
+- [x] **D.1 — Kill hardcoded localhost values (CORS, OAuth redirect, CSP)**
+  `backend/app/config.py` gains `CORS_ORIGINS`/`FRONTEND_URL`/`OAUTH_REDIRECT_URI`/
+  `CSP_CONNECT_SRC` env-var-backed constants (defaults = today's localhost values).
+  `main.py` CORS built from `CORS_ORIGINS` (comma-split, wildcard `*` guarded
+  against — raises at startup). `routes/auth.py` `_FRONTEND_URL`/`_REDIRECT_URI`
+  now read from config. `middleware/security.py` CSP `connect-src` reads
+  `CSP_CONNECT_SRC`. New `backend/tests/test_deployment_config.py` (6 tests:
+  defaults, env override, CORS allow/reject, wildcard guard). 148 backend tests
+  green. code-reviewer PASS (2 WARN fixed: test-pollution in reload teardown,
+  CSP format comment). security-auditor PASS (1 WARN fixed: `*` wildcard guard
+  added to CORS_ORIGINS parsing).
 - [ ] **D.2 — Fix frontend build-time API URL**
 - [ ] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
 - [ ] **D.4 — Migrate Kaggle rendezvous → self-hosted PostgREST**
