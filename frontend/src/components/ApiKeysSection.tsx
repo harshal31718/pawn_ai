@@ -6,7 +6,9 @@ import {
   getKaggleConfig,
   setKaggleConfig,
   deleteKaggleConfig,
+  getDriveStatus,
 } from '../api/client'
+import { useAuth } from '../contexts/AuthContext'
 
 // Mirrors backend key_store.VALID_PROVIDERS.
 const PROVIDERS: { id: string; label: string; hint: string }[] = [
@@ -94,10 +96,15 @@ function ProviderRow({
 }
 
 export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () => void }) {
+  const { login } = useAuth()
   const [configured, setConfigured] = useState<string[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // Drive link status: null = loading, then true/false. Drive is mandatory
+  // storage, so this is the first, most prominent row.
+  const [driveConnected, setDriveConnected] = useState<boolean | null>(null)
 
   function setError(id: string, msg: string | null) {
     setErrors((e) => msg ? { ...e, [id]: msg } : Object.fromEntries(Object.entries(e).filter(([k]) => k !== id)))
@@ -124,9 +131,28 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
     }
   }
 
+  // Isolated from refresh() so a Drive-status failure never blanks the keys list.
+  async function refreshDrive() {
+    try {
+      const { connected } = await getDriveStatus()
+      setDriveConnected(connected)
+    } catch {
+      setDriveConnected(false)
+    }
+  }
+
   useEffect(() => {
     refresh()
+    refreshDrive()
   }, [])
+
+  function handleConnectDrive() {
+    // Re-runs the Google OAuth consent (which requests drive.file) and stores
+    // fresh Drive tokens on callback. Redirects the page to Google, so there's
+    // nothing to await here.
+    setError('drive', null)
+    login().catch(() => setError('drive', 'Could not start Google sign-in.'))
+  }
 
   async function handleSave(provider: string) {
     const value = (drafts[provider] || '').trim()
@@ -209,6 +235,37 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
       )}
 
       <div className="bg-theme-surface border border-theme-border/50 rounded-xl divide-y divide-theme-border/30">
+
+        {/* Google Drive — mandatory storage backend; first and most prominent row */}
+        <div className="p-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <p className="text-xs font-medium text-theme-text">Google Drive</p>
+              {driveConnected === true && (
+                <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full shrink-0 select-none">
+                  Connected
+                </span>
+              )}
+              {driveConnected === false && (
+                <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0 select-none">
+                  Not connected
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleConnectDrive}
+              className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold shrink-0 cursor-pointer"
+            >
+              {driveConnected ? 'Reconnect' : 'Connect'}
+            </button>
+          </div>
+          <p className="text-[10px] text-theme-text-muted leading-relaxed">
+            PAWN stores your conversations and uploads in your own Google Drive. This is
+            required — {driveConnected ? 'reconnect if chats stop saving.' : 'connect it to start saving your chats.'}
+          </p>
+          {errors['drive'] && <p className="text-[10px] text-red-500">{errors['drive']}</p>}
+        </div>
 
         {/* Kaggle Credentials */}
         <ProviderRow

@@ -20,6 +20,7 @@ os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from starlette.concurrency import run_in_threadpool
 from google.auth.transport.requests import Request as GRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -171,6 +172,38 @@ async def me(request: Request):
     if not row:
         raise HTTPException(404, "User not found")
     return row
+
+
+@router.get("/drive/status")
+async def drive_status(request: Request):
+    """Report whether the current user's Google Drive is linked AND usable.
+
+    Not merely "a token row exists": a user can complete Google login but decline
+    the drive.file scope via granular consent, leaving a stored token that Drive
+    calls reject. So after confirming a DriveStorage can be built, we make one
+    cheap, idempotent Drive call (get_or_create_root) to prove the scope actually
+    works — otherwise the Settings page would show "Connected" for someone who
+    still gets 412s everywhere.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing token")
+    token = auth_header[7:]
+    try:
+        payload = decode_token(token)
+    except pyjwt.PyJWTError:
+        raise HTTPException(401, "Invalid token")
+
+    from app.core.drive_factory import get_drive_for_user
+
+    drive = await run_in_threadpool(get_drive_for_user, payload["sub"])
+    if drive is None:
+        return {"connected": False}
+    try:
+        await run_in_threadpool(drive.get_or_create_root)
+    except Exception:
+        return {"connected": False}
+    return {"connected": True}
 
 
 @router.post("/logout")

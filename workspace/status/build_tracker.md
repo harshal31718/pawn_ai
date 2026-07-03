@@ -515,6 +515,11 @@ as Phase 3.
   path deferred to D.8 staging verify.
 - [ ] **Phase 4 — Review, docs, commit** (in progress: docs updated + committing
   the promote script + plan updates; D.7/D.8 remain, gated)
+- [x] **Follow-up — "Connect Google Drive" control in Settings** — backend
+  `GET /auth/drive/status` (real Drive-call check, not token-existence) +
+  `ApiKeysSection` Drive row (first in the card, Connected/Not-connected badge,
+  Connect/Reconnect → existing `login()` OAuth). Closes the UX loop the
+  Drive-mandatory 412 message pointed at. 157 backend tests, build clean.
 
 ---
 

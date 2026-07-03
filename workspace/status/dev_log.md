@@ -6,6 +6,18 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-04] — Feature: "Connect Google Drive" control in Settings
+
+**Built:** The Drive-mandatory 412 tells users to "Connect your Google Drive in Settings," but no such control existed — this adds it. Backend: new `GET /auth/drive/status` in `routes/auth.py` (decodes the Bearer token itself, since `/auth/*` bypasses AuthMiddleware) → `get_drive_for_user` then a cheap idempotent `get_or_create_root` Drive call to prove the `drive.file` scope actually works → `{"connected": bool}`. Frontend: `client.getDriveStatus()`; `ApiKeysSection.tsx` now renders a **Google Drive** row FIRST in the API-keys card — Connected/Not-connected badge + a Connect/Reconnect button that runs the existing `useAuth().login()` OAuth flow (already requests `drive.file` with `prompt=consent` and stores fresh tokens on callback, evicting the drive cache). Drive status is fetched independently of the keys list so one failing doesn't blank the other.
+
+**Decisions:** Status is verified with a REAL Drive call, not token-existence — a login that declined `drive.file` via granular consent still leaves a stored token, and a naive check would show a false "Connected" for exactly the users this feature is meant to help (the original-bug scenario). Reused `login()` rather than adding a separate link-drive endpoint (re-consent is the correct fix and it already stores/evicts correctly). Reconnect lands back on the app root (the callback always redirects to `/`) — acceptable for v1.
+
+**Tests/verify:** New `backend/tests/test_auth.py` (5 tests: 401 on missing/bad token; connected=false when unlinked; true when usable; false when `get_or_create_root` raises = scope declined). Backend **157 passed**. `npm run build` clean (rebuilt the frontend image so the container had the new TSX). Live: `/auth/drive/status` → 401 unauthenticated, `{"connected":false}` for a token whose user has no Drive linked. The Connected=true happy path + the OAuth redirect still need a real Google account (covered by manual/D.8 staging verify).
+
+**Commit:** (pending — with this doc update)
+
+---
+
 ### [2026-07-04] — Phase D / D.6: pre-deploy gate executed (incl. live Drive-less 412)
 
 **Ran the full pre-deploy gate:** backend pytest **152 passed**; frontend `npm run build` clean; `docker compose config` valid for all three (dev compose + prod compose under both `.env.staging.example` and `.env.prod.example`). Live checks against the running dev backend (`:8001`): `GET /health` → 200, `GET /conversations` unauthenticated → 401.

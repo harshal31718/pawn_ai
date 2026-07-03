@@ -17,6 +17,18 @@ export async function healthCheck(): Promise<{ status: string }> {
 }
 
 /**
+ * Whether the current user's Google Drive is linked AND usable. The backend
+ * makes a real (cheap) Drive call, so this returns false for a login that never
+ * granted the drive.file scope — not just when no token exists.
+ */
+export async function getDriveStatus(): Promise<{ connected: boolean }> {
+  const res = await fetch(`${BASE_URL}/auth/drive/status`, { headers: { ...authHeaders() } })
+  if (handle401(res)) throw new Error('unauthorized')
+  if (!res.ok) throw new Error(`Drive status failed: ${res.status}`)
+  return res.json()
+}
+
+/**
  * Milestone A.0 — Kaggle round-trip proof. Sends an integer to the backend,
  * which runs the `findCube` kernel on the user's Kaggle account and returns the
  * cube. Proves the deploy→push→poll→output transport before any image model.
