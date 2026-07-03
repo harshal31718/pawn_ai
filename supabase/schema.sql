@@ -1,4 +1,6 @@
--- PAWN — Supabase schema (run once in the Supabase SQL editor).
+-- PAWN — Postgres schema (self-hosted; name kept for history, originally
+-- written for Supabase's SQL editor — plain Postgres now, run once via
+-- docker-entrypoint-initdb.d, see docker-compose.yml's `postgres` service).
 --
 -- Application data lives here: user profiles, encrypted Google Drive tokens,
 -- encrypted BYOK provider keys, and per-user memory embeddings (pgvector).
@@ -6,6 +8,7 @@
 -- user's own Google Drive.
 
 create extension if not exists vector;
+create extension if not exists pgcrypto;  -- gen_random_uuid() (image_sessions/image_jobs PKs)
 
 -- ---------------------------------------------------------------------------
 -- Tables
@@ -105,17 +108,17 @@ $$;
 -- Phase W — Warm/persistent Kaggle image sessions + durable job tracking
 -- ---------------------------------------------------------------------------
 -- A warm Kaggle kernel is unreachable through Kaggle's batch API once running,
--- so PAWN and the kernel rendezvous here: PAWN writes rows with the service key
--- (bypasses RLS), the kernel reads/writes with the public anon key.
+-- so PAWN and the kernel rendezvous here: the backend writes rows directly via
+-- its own Postgres connection (superuser/owner role, bypasses RLS), and the
+-- kernel reads/writes over HTTPS through the self-hosted PostgREST instance
+-- (D.4), which connects to Postgres as the restricted `pawn_anon` role.
 --
--- W.0 (this step) proves the loop with a CPU echo kernel. Supabase's new
--- publishable (sb_publishable_*) key enforces RLS on the anon role, so the two
--- tables get RLS enabled + a PERMISSIVE anon policy (the documented "anon-key-
--- open on the two dedicated tables only" single-user-trial fallback) — without
--- it the kernel could read but never write back results/heartbeats. W.1 replaces
--- the permissive policy with a scoped per-session JWT policy so a kernel can only
--- touch rows of its own session_id. The service key is NEVER injected into the
--- notebook; the backend's service key bypasses RLS server-side.
+-- W.0 originally proved the loop with a CPU echo kernel against Supabase's
+-- REST API; D.4 replaced Supabase's REST/anon-key layer with self-hosted
+-- PostgREST, connecting as `pawn_anon` (created below) instead of Supabase's
+-- built-in `anon` role — same PERMISSIVE-policy, single-user-trial posture as
+-- before (scoped per-session-JWT auth remains deferred, documented as
+-- mandatory before multi-user, unchanged from the original Phase W decision).
 
 create table if not exists image_sessions (
   id            uuid primary key default gen_random_uuid(),
@@ -142,6 +145,7 @@ create table if not exists image_jobs (
   mime        text default 'image/png',
   via         text,
   error       text,
+  params      jsonb not null default '{}',           -- generation params (steps/guidance/size/...)
   created_at  timestamptz not null default now(),
   started_at  timestamptz,
   done_at     timestamptz
@@ -152,10 +156,27 @@ create index if not exists image_jobs_user_idx
 create index if not exists image_jobs_session_status_idx
   on image_jobs (session_id, status);
 
--- RLS + permissive anon policy (W.0 single-user-trial fallback; see note above).
--- The new sb_publishable_* key maps to the anon role and is checked against RLS,
--- so the kernel needs an explicit policy to insert/update its rows. W.1 narrows
--- this to a per-session_id (scoped-JWT) policy.
+-- pawn_anon role (D.4) — replaces Supabase's built-in `anon` role. NOLOGIN here;
+-- a companion init script (supabase/init_pawn_anon.sh, run right after this
+-- file by docker-entrypoint-initdb.d) sets its password from the
+-- `postgrest_anon_password` secret and grants LOGIN, since a plain .sql file
+-- can't read a secret file. PostgREST connects to Postgres as this role.
+do $$
+begin
+  if not exists (select from pg_roles where rolname = 'pawn_anon') then
+    create role pawn_anon nologin;
+  end if;
+end
+$$;
+
+grant usage on schema public to pawn_anon;
+grant select, insert, update on image_sessions, image_jobs to pawn_anon;
+
+-- RLS + permissive policy for pawn_anon (W.0 single-user-trial fallback; see
+-- note above). Same posture as the original Supabase anon-key design: any
+-- request authenticated as pawn_anon can touch any row on these two tables
+-- only. A scoped per-session-JWT policy remains deferred (documented as
+-- mandatory before multi-user).
 alter table image_sessions enable row level security;
 alter table image_jobs     enable row level security;
 
@@ -163,6 +184,6 @@ drop policy if exists image_sessions_anon_trial on image_sessions;
 drop policy if exists image_jobs_anon_trial     on image_jobs;
 
 create policy image_sessions_anon_trial on image_sessions
-  for all to anon using (true) with check (true);
+  for all to pawn_anon using (true) with check (true);
 create policy image_jobs_anon_trial on image_jobs
-  for all to anon using (true) with check (true);
+  for all to pawn_anon using (true) with check (true);

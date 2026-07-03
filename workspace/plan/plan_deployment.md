@@ -141,19 +141,39 @@ must not touch, edit, or collide with any of it.
 - [ ] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
   Add `postgres` (pgvector image, named volume `pawn_postgres_data`) service
   to `docker-compose.yml`. Replace `backend/app/db/supabase_client.py` with
-  an asyncpg-based client. Rewrite `.table()/.rpc()` calls in `auth.py`,
-  `key_store.py`, `drive_factory.py`, `memory/index.py`, `memory/retrieve.py`
-  as direct parameterized SQL. Port `supabase/schema.sql` to plain Postgres
-  (`gen_random_uuid()`/`pgcrypto` check). Drop `supabase` from
-  `requirements.txt`, add `asyncpg`. Drop `supabase_url`/`supabase_service_key`/
-  `supabase_anon_key` secrets, add `postgres_password`/`postgres_dsn`.
+  a **psycopg3-based sync client** (connection pool via `psycopg_pool`) —
+  chosen over asyncpg because every existing Supabase call site today is a
+  synchronous function invoked through `run_in_threadpool` (~25 call sites
+  across `routes/chat.py`, `conversations.py`, `upload.py`, `generate.py`,
+  `crypto.py`, `memory/summarize.py`); psycopg3 preserves that exact
+  sync-function-behind-run_in_threadpool shape everywhere, so only the 7
+  files below change instead of a 15–20 file async ripple. Rewrite
+  `.table()/.rpc()` calls in `auth.py`, `key_store.py`, `drive_factory.py`,
+  `memory/index.py`, `memory/retrieve.py`, and `core/image_session.py`'s
+  session/job CRUD (its Kaggle-payload injection of `supabase_url`/`anon_key`
+  stays as-is until D.4 swaps it to PostgREST) as direct parameterized SQL
+  (`%s` placeholders — never string-format SQL). Port `supabase/schema.sql`
+  to plain Postgres (add `create extension if not exists pgcrypto;` — needed
+  for `gen_random_uuid()`, missing today). Drop `supabase` from
+  `requirements.txt`, add `psycopg[binary,pool]`. Drop `supabase_url`/
+  `supabase_service_key`/`supabase_anon_key` secrets, add
+  `postgres_password`/`postgres_dsn`. Because dropping `supabase_url`/
+  `supabase_anon_key` breaks `image_session.py`'s Kaggle-payload injection,
+  D.3 and D.4 are implemented together as one coherent change (tracked as
+  separate checklist items, committed together) — matches the plan's own
+  pause point (after D.3+D.4, before D.7/D.8).
 
 - [ ] **D.4 — Migrate Kaggle rendezvous → self-hosted PostgREST**
   Add `postgrest` service (internal only, no host port) pointed at the new
   Postgres. Rewrite RLS policies on `image_sessions`/`image_jobs` under
   PostgREST's role-switching model (`pawn_anon` role replacing Supabase's
-  `anon`). Update `backend/app/core/image_session.py` to call the new
-  PostgREST URL instead of Supabase's, with a `postgrest_jwt_secret`.
+  `anon`). Update `backend/app/core/image_session.py`'s `start_session()`
+  Kaggle-payload injection (currently `supabase_url`/`anon_key`) to inject
+  the new `postgrest_url`/`postgrest_anon_key` instead — this is the only
+  part of `image_session.py` D.4 touches; its own session/job CRUD already
+  moved to direct psycopg SQL in D.3. New `postgrest_jwt_secret` secret
+  (HS256, mints the anon role's JWT for PostgREST — Supabase's newer
+  `sb_publishable_*` keys don't apply here since this is self-hosted).
 
 - [ ] **D.5 — `.gitattributes` + branch hygiene**
   Create `.gitattributes` marking `.claude/**`, `workspace/**`, `CLAUDE.md`,

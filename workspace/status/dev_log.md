@@ -20,6 +20,25 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-03] — Phase D / D.3+D.4: Supabase → self-hosted Postgres+pgvector+PostgREST
+
+**Built:** Dropped Supabase entirely. New `backend/app/db/postgres_client.py` — psycopg3 sync client (chosen over asyncpg specifically to avoid rewriting ~25 `run_in_threadpool` call sites across 6 files into async; see the plan's D.3 entry for the full tradeoff), `fetchone`/`fetchall`/`execute` + a `transaction()` helper. Rewrote every Supabase `.table()/.rpc()` call to parameterized SQL across `routes/auth.py`, `core/key_store.py`, `core/drive_factory.py`, `memory/index.py`, `memory/retrieve.py`, and a full rewrite of `core/image_session.py` (session/job CRUD). D.4 (Kaggle→PostgREST rendezvous) done in the same pass since dropping the Supabase secrets in D.3 would otherwise break D.4's Kaggle-payload code: `supabase/schema.sql` gains a `pawn_anon` role + retargeted RLS policies, new `supabase/init_pawn_anon.sh` sets its password from a secret, `docker-compose.yml` gains `postgres`+`postgrest` services, and all 3 Kaggle session notebooks now talk to PostgREST directly instead of Supabase's REST gateway.
+
+**Decisions:** psycopg3 over asyncpg (see above). Per-call connections, no pool — simplest correct option at this app's single/few-user scale, and still cheaper per-call than the old HTTPS round-trip to Supabase's cloud. No JWT/bearer auth added to PostgREST's anon role — kept the same permissive-anon-on-two-tables posture the app already had and had already documented as "deferred until multi-user" (Phase W); adding scope here would have been solving a problem this app doesn't have yet.
+
+**Issues found (all fixed before commit):**
+- **Live-Postgres integration testing** (not just mocks) caught a real bug: `match_memory_chunks`/`search_memory_chunks` SQL-function calls failed with `UndefinedFunction` because Postgres won't implicitly cast a plain array parameter to `vector` in a function-call argument context (it will in an INSERT/UPDATE target-column context, which is why `memory/index.py`'s plain insert didn't need the same fix) — fixed with explicit `%s::vector`/`%s::int` casts in `memory/retrieve.py`.
+- **code-reviewer caught a CRITICAL bug**: `image_jobs.params` (jsonb) was never added to `schema.sql`'s `CREATE TABLE` — it only existed in a separate `add_image_jobs_params.sql` meant to be run manually in the Supabase SQL editor. Since Postgres now self-bootstraps from an empty volume via `docker-entrypoint-initdb.d`, that manual step had no automatic equivalent, so every job insert/list would have errored on a fresh deploy. Fixed by folding the column into the main `CREATE TABLE` and deleting the now-redundant file. Verified live against a fresh Postgres volume afterward.
+- **code-reviewer flagged read-then-write races**: `start_session` (evict-prior + insert-new), `extend_session`, and `submit_session_job` each did a liveness check followed by a separate write with no transaction linking them. Added `postgres_client.transaction()` and wrapped all three; verified commit/rollback semantics live against the real container.
+- **security-auditor flagged** a raw-exception leak in `routes/auth.py`'s `/callback` (pre-existing, not introduced by this diff, but in an already-touched file) — now logged server-side, generic message returned to the client. Also flagged stale, no-longer-referenced local Supabase secret files still on disk — deleted (they were gitignored, so this wasn't a leak, just cleanup).
+- **Unrelated pre-existing bug found while live-testing**: `frontend/.dockerignore` didn't exist, so the frontend's Docker build context (`./frontend`) pulled in the host's `node_modules` wholesale, and a broken symlink inside it crashed BuildKit. Added the missing `.dockerignore`.
+
+**Tests:** 148 backend tests green (rewrote `conftest.py`, `test_rag.py`, `test_image_session.py`, `test_image_jobs.py`, `test_keys_kaggle.py` to mock the new SQL functions — a simpler mock surface than the old chained Supabase-client fake). `npm run build` clean (backend-only migration). `docker compose config` validates. **Live-verified beyond mocks**: brought up real `postgres`+`postgrest`+`backend`+`frontend` containers from an empty volume; confirmed schema/role bootstrap, pgvector/pgcrypto/uuid/jsonb/timestamptz round-trips, the two SQL-function calls, PostgREST anonymous read+write access (and correctly-denied DELETE, confirming least-privilege grants), and both backend `/health` and the frontend responding. This live pass is ahead of D.6's own dry-run requirement, not a replacement for it.
+
+**Commit:** (pending — committed alongside doc updates)
+
+---
+
 ### [2026-07-03] — Phase D / D.2: fix frontend build-time API URL
 
 **Built:** `frontend/.env.example` port fixed 8000 → 8001 (doc-only, matches the actual dev backend port in `docker-compose.yml`). New committed `frontend/.env.production` with `VITE_API_URL=https://pawnai.duckdns.org`.

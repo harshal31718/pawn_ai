@@ -1,6 +1,6 @@
 """Tests for the Kaggle config routes and key_store round-trip.
 
-The Supabase-backed store is mocked. These verify: the token is never returned,
+The Postgres-backed store is mocked. These verify: the token is never returned,
 validation, and that set_kaggle/get_kaggle round-trip a dict through real
 AES-GCM encryption.
 """
@@ -64,51 +64,22 @@ def test_kaggle_store_roundtrip():
     """set_kaggle then get_kaggle returns the same dict, through real crypto."""
     from app.core import key_store
 
-    class FakeResult:
-        def __init__(self, data):
-            self.data = data
-
-    class FakeTable:
-        def __init__(self, store):
-            self.store = store
-            self._mode = None
-
-        def upsert(self, row):
-            self.store["row"] = row
-            self._mode = "upsert"
-            return self
-
-        def select(self, *a):
-            self._mode = "select"
-            return self
-
-        def delete(self):
-            self._mode = "delete"
-            return self
-
-        def eq(self, *a):
-            return self
-
-        def single(self):
-            return self
-
-        def execute(self):
-            if self._mode == "select":
-                return FakeResult(self.store.get("row"))
-            return FakeResult(None)
-
-    class FakeDB:
-        def __init__(self, store):
-            self.store = store
-
-        def table(self, name):
-            return FakeTable(self.store)
-
     store: dict = {}
+
+    def fake_execute(sql, params=()):
+        # insert into user_api_keys (user_id, provider, key_enc) values (...)
+        store["key_enc"] = params[2]
+
+    def fake_fetchone(sql, params=()):
+        if "key_enc" not in store:
+            return None
+        return {"key_enc": store["key_enc"]}
+
     cfg = {"username": "alice", "api_token": "tok-123", "kernels": {"cube": True}}
-    with patch("app.core.key_store.get_db", return_value=FakeDB(store)):
+    with patch("app.core.key_store.execute", side_effect=fake_execute), \
+         patch("app.core.key_store.fetchone", side_effect=fake_fetchone):
         key_store.set_kaggle("user-1", cfg)
         # The persisted value must be encrypted (no plaintext token on disk).
-        assert "tok-123" not in store["row"]["key_enc"]
+        assert "tok-123" not in store["key_enc"]
         got = key_store.get_kaggle("user-1")
     assert got == cfg

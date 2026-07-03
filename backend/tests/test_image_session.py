@@ -1,10 +1,11 @@
 """Tests for Phase W.0 — warm/persistent Kaggle image sessions (CPU echo POC).
 
-Supabase (`get_db`) and Kaggle (`deploy_kernel`) are mocked — no real external
-calls (testing rule). These cover the session manager and the session/job routes
-that prove the persistent-loop rendezvous.
+Postgres (`fetchone`/`fetchall`/`execute`) and Kaggle (`deploy_kernel`) are
+mocked — no real external calls (testing rule). These cover the session
+manager and the session/job routes that prove the persistent-loop rendezvous.
 """
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -19,70 +20,56 @@ def _iso(dt):
     return dt.isoformat()
 
 
-class _Result:
-    def __init__(self, data):
-        self.data = data
-
-
-class _Query:
-    """Minimal chainable stand-in for a supabase-py table query.
-
-    Records the operation + filters/values and returns rows the FakeDB is seeded
-    with. Every chain method returns self; execute() returns the recorded result.
-    """
-
-    def __init__(self, db, table):
-        self._db = db
-        self._table = table
-        self._op = "select"
-        self._values = None
-
-    def insert(self, values):
-        self._op = "insert"
-        self._values = values
-        return self
-
-    def update(self, values):
-        self._op = "update"
-        self._values = values
-        return self
-
-    def select(self, *_a, **_k):
-        self._op = "select"
-        return self
-
-    def eq(self, *_a, **_k):
-        return self
-
-    def in_(self, *_a, **_k):
-        return self
-
-    def order(self, *_a, **_k):
-        return self
-
-    def limit(self, *_a, **_k):
-        return self
-
-    def execute(self):
-        self._db.calls.append((self._table, self._op, self._values))
-        if self._op == "insert":
-            row = dict(self._values)
-            row.setdefault("id", f"{self._table}-id-1")
-            self._db.inserted.append((self._table, row))
-            return _Result([row])
-        if self._op == "update":
-            return _Result([])
-        return _Result(list(self._db.rows.get(self._table, [])))
-
-
 class _FakeDB:
-    def __init__(self, rows=None):
-        self.rows = rows or {}
-        self.calls = []
-        self.inserted = []
+    """Routes fetchone/fetchall/execute calls to per-table row lists based on
+    simple substring sniffing of the SQL text — enough for these tests' shapes.
+    INSERTs return a fixed `{table}-id-1` id, mirroring the old Supabase-mock
+    fixture's ids so existing assertions don't need to change."""
 
-    def table(self, name):
-        return _Query(self, name)
+    def __init__(self, rows=None):
+        self.rows = {k: list(v) for k, v in (rows or {}).items()}
+        self.calls = []  # (kind, sql, params)
+
+    def _table(self, sql):
+        if "image_sessions" in sql:
+            return "image_sessions"
+        if "image_jobs" in sql:
+            return "image_jobs"
+        return None
+
+    def fetchone(self, sql, params=()):
+        self.calls.append(("fetchone", sql, params))
+        table = self._table(sql)
+        if sql.strip().lower().startswith("insert into"):
+            return {"id": f"{table}-id-1"}
+        rows = self.rows.get(table, [])
+        return rows[0] if rows else None
+
+    def fetchall(self, sql, params=()):
+        self.calls.append(("fetchall", sql, params))
+        table = self._table(sql)
+        return list(self.rows.get(table, []))
+
+    def execute(self, sql, params=()):
+        self.calls.append(("execute", sql, params))
+
+    @contextmanager
+    def tx(self):
+        """Fake for postgres_client.transaction() — same fetchone/fetchall/execute
+        shape, routed through this same fake DB (no real transaction semantics
+        needed for these tests)."""
+        yield self
+
+
+def _patch_db(db):
+    """Patch all postgres_client functions used by image_session.py onto one
+    fake so a single fixture works for every call shape in a test."""
+    return (
+        patch("app.core.image_session.fetchone", side_effect=db.fetchone),
+        patch("app.core.image_session.fetchall", side_effect=db.fetchall),
+        patch("app.core.image_session.execute", side_effect=db.execute),
+        patch("app.core.image_session.transaction", db.tx),
+    )
 
 
 @pytest.fixture()
@@ -106,11 +93,10 @@ def test_start_session_sdxl_uses_gpu_serve_loop():
         captured.update(kwargs)
 
     cfg = {"username": "alice", "api_token": "tok"}
+    p1, p2, p3, p4 = _patch_db(db)
     with patch("app.core.image_session.key_store.get_kaggle", return_value=cfg), \
-         patch("app.core.image_session.get_db", return_value=db), \
-         patch("app.core.image_session.config.SUPABASE_URL", "https://proj.supabase.co"), \
-         patch("app.core.image_session.config.SUPABASE_ANON_KEY", "anon-public-key"), \
-         patch("app.core.image_session.config.SUPABASE_SERVICE_KEY", "service-secret-key"), \
+         p1, p2, p3, p4, \
+         patch("app.core.image_session.config.POSTGREST_PUBLIC_URL", "https://pawnai.duckdns.org/rest"), \
          patch("app.core.image_session.kaggle.deploy_kernel", side_effect=fake_deploy):
         out = image_session.start_session("user-1", "sdxl", 60, None)
 
@@ -124,8 +110,9 @@ def test_start_session_sdxl_uses_gpu_serve_loop():
     assert captured["kernel_name"] == sdxl.session_slug == "pawn-sdxl-session"
 
 
-def test_start_session_injects_anon_key_never_service_key():
-    """Security: only the PUBLIC anon key is injected — never the service key."""
+def test_start_session_injects_postgrest_url_never_dsn():
+    """Security: only the public PostgREST URL is injected — never the
+    backend's own Postgres DSN (which can reach every table)."""
     db = _FakeDB()
     captured = {}
 
@@ -133,11 +120,11 @@ def test_start_session_injects_anon_key_never_service_key():
         captured.update(kwargs)
 
     cfg = {"username": "alice", "api_token": "tok"}
+    p1, p2, p3, p4 = _patch_db(db)
     with patch("app.core.image_session.key_store.get_kaggle", return_value=cfg), \
-         patch("app.core.image_session.get_db", return_value=db), \
-         patch("app.core.image_session.config.SUPABASE_URL", "https://proj.supabase.co"), \
-         patch("app.core.image_session.config.SUPABASE_ANON_KEY", "anon-public-key"), \
-         patch("app.core.image_session.config.SUPABASE_SERVICE_KEY", "service-secret-key"), \
+         p1, p2, p3, p4, \
+         patch("app.core.image_session.config.POSTGREST_PUBLIC_URL", "https://pawnai.duckdns.org/rest"), \
+         patch("app.core.image_session.config.POSTGRES_DSN", "postgresql://pawn:supersecret@postgres:5432/pawn"), \
          patch("app.core.image_session.kaggle.deploy_kernel", side_effect=fake_deploy):
         image_session.start_session("user-1", "sdxl", 60, None)
 
@@ -152,10 +139,10 @@ def test_start_session_injects_anon_key_never_service_key():
     m = re.search(r'b64decode\(\\?"([A-Za-z0-9+/=]+)\\?"', src)
     assert m, "injected base64 payload not found in kernel source"
     payload = json.loads(base64.b64decode(m.group(1)).decode())
-    assert payload["anon_key"] == "anon-public-key"
-    # The master service key must never reach the notebook (security).
-    assert "service-secret-key" not in src
-    assert "service-secret-key" not in json.dumps(payload)
+    assert payload["postgrest_url"] == "https://pawnai.duckdns.org/rest"
+    # The backend's own DSN/password must never reach the notebook (security).
+    assert "supersecret" not in src
+    assert "supersecret" not in json.dumps(payload)
 
 
 def test_start_session_flux_uses_gpu_and_dataset():
@@ -169,10 +156,10 @@ def test_start_session_flux_uses_gpu_and_dataset():
         captured.update(kwargs)
 
     cfg = {"username": "alice", "api_token": "tok"}
+    p1, p2, p3, p4 = _patch_db(db)
     with patch("app.core.image_session.key_store.get_kaggle", return_value=cfg), \
-         patch("app.core.image_session.get_db", return_value=db), \
-         patch("app.core.image_session.config.SUPABASE_URL", "https://proj.supabase.co"), \
-         patch("app.core.image_session.config.SUPABASE_ANON_KEY", "anon-public-key"), \
+         p1, p2, p3, p4, \
+         patch("app.core.image_session.config.POSTGREST_PUBLIC_URL", "https://pawnai.duckdns.org/rest"), \
          patch("app.core.image_session.kaggle.deploy_kernel", side_effect=fake_deploy):
         image_session.start_session("user-1", "flux", 60, None)
 
@@ -208,7 +195,8 @@ def test_extend_session_bumps_expiry_capped():
         "expires_at": _iso(now + timedelta(minutes=10)),
     }
     db = _FakeDB(rows={"image_sessions": [sess]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         out = image_session.extend_session("user-1", "s1", 30)
     new_exp = image_session._parse_ts(out["expires_at"])
     assert new_exp > now + timedelta(minutes=35)  # bumped from +10 by +30
@@ -221,7 +209,8 @@ def test_extend_session_dead_session_raises():
 
     dead = {"id": "s1", "user_id": "user-1", "status": "ended"}
     db = _FakeDB(rows={"image_sessions": [dead]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         with pytest.raises(NotConfiguredError):
             image_session.extend_session("user-1", "s1", 30)
 
@@ -249,10 +238,10 @@ def test_start_session_caps_duration():
 
     db = _FakeDB()
     cfg = {"username": "alice", "api_token": "tok"}
+    p1, p2, p3, p4 = _patch_db(db)
     with patch("app.core.image_session.key_store.get_kaggle", return_value=cfg), \
-         patch("app.core.image_session.get_db", return_value=db), \
-         patch("app.core.image_session.config.SUPABASE_URL", "u"), \
-         patch("app.core.image_session.config.SUPABASE_ANON_KEY", "k"), \
+         p1, p2, p3, p4, \
+         patch("app.core.image_session.config.POSTGREST_PUBLIC_URL", "https://pawnai.duckdns.org/rest"), \
          patch("app.core.image_session.kaggle.deploy_kernel"):
         out = image_session.start_session("user-1", "sdxl", 9999, None)
 
@@ -272,23 +261,27 @@ def test_submit_session_job_inserts_queued_row():
         "heartbeat_at": _iso(now),
     }
     db = _FakeDB(rows={"image_sessions": [live]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         job_id = image_session.submit_session_job("user-1", "s1", "a red apple")
 
     assert job_id == "image_jobs-id-1"
-    table, row = db.inserted[-1]
-    assert table == "image_jobs"
-    assert row["status"] == "queued"
-    assert row["session_id"] == "s1"
-    assert row["model"] == "flux"
-    assert row["prompt"] == "a red apple"
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[0] == "user-1"
+    assert params[1] == "s1"
+    assert params[2] == "flux"
+    assert params[3] == "a red apple"
 
 
 def test_submit_session_job_missing_session_raises():
     from app.exceptions import NotConfiguredError
 
     db = _FakeDB(rows={"image_sessions": []})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         with pytest.raises(NotConfiguredError):
             image_session.submit_session_job("user-1", "gone", "x")
 
@@ -299,19 +292,19 @@ def test_submit_session_job_dead_session_raises():
 
     dead = {"id": "s1", "user_id": "user-1", "model": "flux", "status": "ended"}
     db = _FakeDB(rows={"image_sessions": [dead]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         with pytest.raises(NotConfiguredError):
             image_session.submit_session_job("user-1", "s1", "x")
 
 
-def test_start_session_missing_supabase_config_raises():
-    """Without a Supabase URL/anon key the kernel can't rendezvous → fail early."""
+def test_start_session_missing_postgrest_config_raises():
+    """Without a public PostgREST URL the kernel can't rendezvous → fail early."""
     from app.exceptions import NotConfiguredError
 
     cfg = {"username": "alice", "api_token": "tok"}
     with patch("app.core.image_session.key_store.get_kaggle", return_value=cfg), \
-         patch("app.core.image_session.config.SUPABASE_URL", "https://proj.supabase.co"), \
-         patch("app.core.image_session.config.SUPABASE_ANON_KEY", None):
+         patch("app.core.image_session.config.POSTGREST_PUBLIC_URL", ""):
         with pytest.raises(NotConfiguredError):
             image_session.start_session("user-1", "sdxl")
 
@@ -329,7 +322,8 @@ def test_get_job_returns_result_once_done():
         "created_at": "2026-06-29T00:00:00+00:00",
     }
     db = _FakeDB(rows={"image_jobs": [row]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         out = image_session.get_job("user-1", "j1")
 
     assert out["job_id"] == "j1"
@@ -339,13 +333,15 @@ def test_get_job_returns_result_once_done():
 
 def test_get_job_missing_returns_none():
     db = _FakeDB(rows={"image_jobs": []})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         assert image_session.get_job("user-1", "nope") is None
 
 
 def test_get_session_status_none_when_absent():
     db = _FakeDB(rows={"image_sessions": []})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         out = image_session.get_session_status("user-1", "sdxl")
     assert out == {"status": "none", "alive": False}
 
@@ -361,7 +357,8 @@ def test_get_session_status_fresh_ready_is_alive():
         "max_images": 10,
     }
     db = _FakeDB(rows={"image_sessions": [row]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         out = image_session.get_session_status("user-1", "sdxl")
     assert out["alive"] is True
     assert out["images_done"] == 2
@@ -377,7 +374,8 @@ def test_get_session_status_stale_heartbeat_not_alive():
         "images_done": 0,
     }
     db = _FakeDB(rows={"image_sessions": [row]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         out = image_session.get_session_status("user-1", "sdxl")
     assert out["alive"] is False
 
@@ -392,16 +390,21 @@ def test_get_session_status_expired_not_alive():
         "images_done": 0,
     }
     db = _FakeDB(rows={"image_sessions": [row]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         out = image_session.get_session_status("user-1", "sdxl")
     assert out["alive"] is False
 
 
 def test_stop_session_sets_stopping():
     db = _FakeDB()
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
         image_session.stop_session("user-1", "s1")
-    assert any(op == "update" and vals == {"status": "stopping"} for _t, op, vals in db.calls)
+    assert any(
+        kind == "execute" and "'stopping'" in sql and params == ("s1", "user-1")
+        for kind, sql, params in db.calls
+    )
 
 
 # --- Routes ------------------------------------------------------------------

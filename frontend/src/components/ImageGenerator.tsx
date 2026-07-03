@@ -197,7 +197,7 @@ const ImageGenerator = forwardRef<
 
   const live = !!session?.alive
   // A session is "warm-routable" if it has a session_id — even during warmup.
-  // Jobs queued now sit in Supabase and the kernel picks them up on entering serve loop.
+  // Jobs queued now sit in Postgres and the kernel picks them up (via PostgREST) on entering serve loop.
   const hasSession = !!session?.alive
 
   // Poll submitted job IDs until each resolves; update inline preview with the latest.

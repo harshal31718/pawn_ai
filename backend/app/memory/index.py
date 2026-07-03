@@ -1,43 +1,36 @@
-"""Per-user memory chunk storage backed by Supabase (PostgreSQL + pgvector).
+"""Per-user memory chunk storage backed by self-hosted Postgres + pgvector.
 
-Replaces the previous local SQLite + sqlite-vec implementation. Memory chunks
-(conversation summaries and their 768-dim embeddings) live in the `memory_chunks`
-table in Supabase, scoped by `user_id`.
+Replaces the previous local SQLite + sqlite-vec implementation (and, before
+that, Supabase). Memory chunks (conversation summaries and their 768-dim
+embeddings) live in the `memory_chunks` table, scoped by `user_id`.
 
-All operations are exception-safe: if Supabase is unreachable or not yet
+All operations are exception-safe: if Postgres is unreachable or not yet
 configured, add_chunk() returns None (no-op) so chat continues to work without
-memory. The Supabase schema (table + RPC functions) is created once via the
-SQL in workspace/plan — see supabase_schema.sql.
+memory. The schema (table + SQL functions) is created once via the SQL at
+supabase/schema.sql (name kept for history; it's plain Postgres now).
 """
 
 import sys
 from typing import List, Optional
 
-from app.db.supabase_client import get_db
+from app.db.postgres_client import fetchone
 
 
 def add_chunk(user_id: str, conv_id: str, text: str, embedding: List[float]) -> Optional[int]:
     """
-    Insert a memory chunk (text + embedding) for a user into Supabase.
-    Returns the new row id, or None if the insert failed / Supabase unavailable.
+    Insert a memory chunk (text + embedding) for a user into Postgres.
+    Returns the new row id, or None if the insert failed / Postgres unavailable.
     """
     try:
-        db = get_db()
-        result = (
-            db.table("memory_chunks")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "conv_id": conv_id,
-                    "text": text,
-                    "embedding": embedding,
-                }
-            )
-            .execute()
+        row = fetchone(
+            """
+            insert into memory_chunks (user_id, conv_id, text, embedding)
+            values (%s, %s, %s, %s)
+            returning id
+            """,
+            (user_id, conv_id, text, embedding),
         )
-        if result.data:
-            return result.data[0].get("id")
-        return None
+        return row.get("id") if row else None
     except Exception as e:
         print(f"Failed to add memory chunk: {e}", file=sys.stderr)
         return None

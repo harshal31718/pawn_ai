@@ -12,7 +12,8 @@ langgraph>=0.3.0
 langchain-core
 langgraph-checkpoint-sqlite>=3.0.1
 # Multi-user / auth additions
-supabase>=2.0.0
+psycopg[binary]>=3.1
+pgvector>=0.3.0
 cryptography
 google-auth-oauthlib
 google-api-python-client

@@ -1,6 +1,6 @@
 """Factory for creating per-user DriveStorage instances.
 
-Fetches encrypted Drive tokens from Supabase, decrypts them,
+Fetches encrypted Drive tokens from Postgres, decrypts them,
 and returns a ready-to-use DriveStorage object.
 
 Usage in a FastAPI route:
@@ -13,10 +13,10 @@ import time
 from typing import Optional
 
 from app.core.crypto import decrypt
-from app.db.supabase_client import get_db
+from app.db.postgres_client import execute, fetchone
 from app.storage.drive import DriveStorage
 
-# Cache DriveStorage instances per user so we don't refetch tokens from Supabase
+# Cache DriveStorage instances per user so we don't refetch tokens from Postgres
 # and rebuild the Drive service (plus its folder/file-ID caches) on every request.
 # The instance refreshes its own OAuth token in place, so it stays valid for its
 # whole lifetime; we still bound it with a TTL so a re-link is eventually picked up
@@ -24,7 +24,7 @@ from app.storage.drive import DriveStorage
 _CACHE: dict[str, tuple[float, Optional[DriveStorage]]] = {}
 _CACHE_LOCK = threading.Lock()
 _TTL_OK = 600.0   # cache a live DriveStorage for 10 minutes
-_TTL_NONE = 30.0  # cache a "not linked / unavailable" result briefly to avoid hammering Supabase
+_TTL_NONE = 30.0  # cache a "not linked / unavailable" result briefly to avoid hammering Postgres
 
 
 def evict_user(user_id: str) -> None:
@@ -37,7 +37,7 @@ def get_drive_for_user(user_id: str) -> Optional[DriveStorage]:
     """
     Return a (cached) DriveStorage for the user, or None if Drive is unavailable.
 
-    Blocking: performs a Supabase fetch + token decrypt on a cache miss, so call
+    Blocking: performs a Postgres fetch + token decrypt on a cache miss, so call
     this off the event loop (e.g. via starlette.concurrency.run_in_threadpool).
     Callers should fall back to local filesystem storage when this returns None.
     """
@@ -61,45 +61,50 @@ def get_drive_for_user(user_id: str) -> Optional[DriveStorage]:
 
 def _build_drive_for_user(user_id: str) -> Optional[DriveStorage]:
     """
-    Load encrypted Drive tokens from Supabase, decrypt, and return DriveStorage.
+    Load encrypted Drive tokens from Postgres, decrypt, and return DriveStorage.
     Returns None if:
       - No Drive tokens found for this user (not yet linked)
-      - Supabase is not configured or unreachable (e.g. in tests)
+      - Postgres is not configured or unreachable (e.g. in tests)
       - Token decryption fails
     """
     try:
-        db = get_db()
-        result = (
-            db.table("user_drive_tokens")
-            .select("access_token_enc, refresh_token_enc, expires_at")
-            .eq("user_id", user_id)
-            .single()
-            .execute()
+        row = fetchone(
+            "select access_token_enc, refresh_token_enc, expires_at "
+            "from user_drive_tokens where user_id = %s",
+            (user_id,),
         )
-        if not result.data:
+        if not row:
             return None
     except Exception:
         return None
 
     try:
-        row = result.data
         access_token = decrypt(row["access_token_enc"])
         refresh_token = decrypt(row["refresh_token_enc"])
     except Exception:
         return None
-    expires_at: Optional[str] = row.get("expires_at")
+    # psycopg parses a `timestamptz` column into a native tz-aware datetime, not
+    # a string — DriveStorage expects an ISO string (matching what auth.py writes
+    # via creds.expiry.isoformat()), so re-stringify here.
+    expires_at_raw = row.get("expires_at")
+    expires_at: Optional[str] = (
+        expires_at_raw.isoformat() if hasattr(expires_at_raw, "isoformat") else expires_at_raw
+    )
 
     def on_refresh(access_token: str, refresh_token: str, expires_at: Optional[str]):
-        """Persist refreshed tokens back to Supabase."""
+        """Persist refreshed tokens back to Postgres."""
         from app.core.crypto import encrypt
-        db.table("user_drive_tokens").upsert(
-            {
-                "user_id": user_id,
-                "access_token_enc": encrypt(access_token),
-                "refresh_token_enc": encrypt(refresh_token),
-                "expires_at": expires_at,
-            }
-        ).execute()
+        execute(
+            """
+            insert into user_drive_tokens (user_id, access_token_enc, refresh_token_enc, expires_at)
+            values (%s, %s, %s, %s)
+            on conflict (user_id) do update
+              set access_token_enc = excluded.access_token_enc,
+                  refresh_token_enc = excluded.refresh_token_enc,
+                  expires_at = excluded.expires_at
+            """,
+            (user_id, encrypt(access_token), encrypt(refresh_token), expires_at),
+        )
 
     return DriveStorage(
         access_token=access_token,

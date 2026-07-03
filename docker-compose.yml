@@ -10,16 +10,24 @@ services:
       - huggingface_api_key
       - github_api_key
       - openrouter_api_key
-      - supabase_url
-      - supabase_service_key
-      - supabase_anon_key
+      - postgres_dsn
       - encryption_secret
       - google_client_id
       - google_client_secret
       - jwt_secret
+    environment:
+      # Public URL for the self-hosted PostgREST instance (D.4) — non-secret,
+      # injected into warm Kaggle-session payloads. Blank locally (dev has no
+      # publicly reachable PostgREST for a remote Kaggle kernel to call —
+      # warm-session live testing has always required a real deployed
+      # rendezvous endpoint, same as it did under Supabase).
+      - POSTGREST_PUBLIC_URL=
     volumes:
       - ./backend/data:/app/data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      postgres:
+        condition: service_healthy
     develop:
       watch:
         - action: sync
@@ -27,6 +35,46 @@ services:
           target: /app/app
         - action: rebuild
           path: ./backend/requirements.txt
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: pawn
+      POSTGRES_USER: pawn
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+      - postgrest_anon_password
+    volumes:
+      - pawn_postgres_data:/var/lib/postgresql/data
+      - ./supabase/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./supabase/init_pawn_anon.sh:/docker-entrypoint-initdb.d/02_pawn_anon.sh:ro
+    ports:
+      # 5433, not 5432 — 5432 collides with other local Postgres containers
+      # (e.g. a sibling project's timescaledb) on a dev machine. Loopback-only;
+      # only for host-side psql/GUI debugging, the backend reaches this over
+      # the internal Docker network at postgres:5432 regardless.
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pawn -d pawn"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    environment:
+      PGRST_DB_URI: "@/run/secrets/postgrest_db_uri"
+      PGRST_DB_SCHEMA: public
+      PGRST_DB_ANON_ROLE: pawn_anon
+    secrets:
+      - postgrest_db_uri
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No host port: internal-only, reached over HTTPS via the Nginx reverse
+    # proxy set up in D.7 (production). Not usable from a local dev compose up
+    # alone — see the POSTGREST_PUBLIC_URL note on the backend service above.
 
   frontend:
     build: ./frontend
@@ -45,6 +93,9 @@ services:
         - action: rebuild
           path: ./frontend/package.json
 
+volumes:
+  pawn_postgres_data:
+
 secrets:
   gemini_api_key:
     file: ./secrets/gemini_api_key
@@ -58,12 +109,14 @@ secrets:
     file: ./secrets/github_api_key
   openrouter_api_key:
     file: ./secrets/openrouter_api_key
-  supabase_url:
-    file: ./secrets/supabase_url
-  supabase_service_key:
-    file: ./secrets/supabase_service_key
-  supabase_anon_key:
-    file: ./secrets/supabase_anon_key
+  postgres_password:
+    file: ./secrets/postgres_password
+  postgres_dsn:
+    file: ./secrets/postgres_dsn
+  postgrest_anon_password:
+    file: ./secrets/postgrest_anon_password
+  postgrest_db_uri:
+    file: ./secrets/postgrest_db_uri
   encryption_secret:
     file: ./secrets/encryption_secret
   google_client_id:

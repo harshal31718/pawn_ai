@@ -1,6 +1,6 @@
 """Tests for BYOK /keys routes and resolver per-user key lookup.
 
-The Supabase-backed key_store is mocked — these tests verify routing, validation,
+The Postgres-backed key_store is mocked — these tests verify routing, validation,
 that key values are never returned to the client, and that the resolver prefers a
 user's BYOK key over the shared secret.
 """

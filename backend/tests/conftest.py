@@ -11,9 +11,7 @@ from unittest.mock import patch
 # Set secrets needed for config imports before any app code runs
 os.environ.setdefault("JWT_SECRET", "0" * 64)
 os.environ.setdefault("ENCRYPTION_SECRET", "0" * 64)
-os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
-os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
-os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
+os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost:5432/test")
 
 
 TEST_USER_ID = "test-user-id"

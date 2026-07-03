@@ -2,21 +2,27 @@
 
 Phase W keeps one Kaggle container alive so repeat images are fast. A running
 Kaggle kernel is unreachable through Kaggle's batch API (no output until it
-exits), so PAWN and the kernel rendezvous through Supabase: PAWN writes the
-session/job rows with the service key (bypasses RLS), and the live kernel
-reads/writes them with the PUBLIC anon key.
+exits), so PAWN and the kernel rendezvous through the database: PAWN writes the
+session/job rows directly via Postgres (the backend's own DB connection), and
+the live kernel reads/writes them over HTTPS through the self-hosted PostgREST
+instance, using the restricted `pawn_anon` Postgres role (RLS-scoped to just
+these two tables — see supabase/schema.sql).
 
 Two generation paths produce the same durable `image_jobs` row:
 - **Warm session** (W.1): the live kernel loads the model once then serves a
-  Supabase work-loop (FLUX -> real GPU serve-loop, SDXL -> CPU echo POC).
+  work-loop against PostgREST (FLUX -> real GPU serve-loop, SDXL -> CPU echo POC).
 - **Cold one-shot** (W.1): PAWN runs the existing blocking Kaggle round-trip as a
   fire-and-forget background worker (`create_cold_job` + `run_cold_job`), de-duped
   per (user, model) -- the server-tracked job that fixes the lost-result bug.
 
-Security: only the public anon key + URL are injected into the notebook -- the
-Supabase master service key is NEVER injected; the backend keeps it server-side.
+Security: only the PostgREST public URL is injected into the notebook -- the
+backend's own Postgres DSN (which can reach every table) is NEVER injected;
+the kernel only ever talks to the restricted, RLS-scoped `pawn_anon` role via
+PostgREST. Per-session-scoped JWT auth (narrower than "any pawn_anon request
+can touch any live session's rows") remains deferred -- documented as
+mandatory before multi-user, unchanged from the original Phase W decision.
 
-Every Supabase + Kaggle call here is BLOCKING -- routes invoke them via
+Every DB + Kaggle call here is BLOCKING -- routes invoke them via
 run_in_threadpool so the event loop is never stalled.
 """
 
@@ -26,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from pydantic import BaseModel
+from psycopg.types.json import Json
 
 from app import config
 from app.constants import (
@@ -36,7 +43,7 @@ from app.constants import (
 )
 from app.core import generate, kaggle, key_store
 from app.core.image_models import DEFAULT_IMAGE_MODEL, get_image_model
-from app.db.supabase_client import get_db
+from app.db.postgres_client import execute, fetchall, fetchone, transaction
 from app.exceptions import NotConfiguredError
 
 class ImageJobParams(BaseModel):
@@ -66,14 +73,18 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def _parse_ts(value: Optional[str]) -> Optional[datetime]:
-    """Parse a Supabase timestamptz string into a tz-aware datetime (or None)."""
+def _parse_ts(value) -> Optional[datetime]:
+    """Parse a Postgres timestamptz (already a datetime) or ISO string into a
+    tz-aware datetime (or None)."""
     if not value:
         return None
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
@@ -94,12 +105,6 @@ def _session_title(slug: str) -> str:
     return slug.replace("-", " ").title()
 
 
-def _first(res) -> Optional[dict]:
-    """First row of a Supabase response, or None."""
-    rows = res.data or []
-    return rows[0] if rows else None
-
-
 # --- Session lifecycle -------------------------------------------------------
 
 
@@ -112,49 +117,51 @@ def start_session(
     """Create a session row and push the notebook (non-blocking).
 
     The push itself starts the Kaggle run, which loads the model once then loops
-    on Supabase until the timer expires, the image cap is hit, or the session is
-    stopped. Returns immediately.
+    against PostgREST until the timer expires, the image cap is hit, or the
+    session is stopped. Returns immediately.
     """
     spec = get_image_model(model)  # validate model id before anything else
     if not spec.session_template or not spec.session_slug:
         raise NotConfiguredError(f"Warm sessions aren't available for '{model}' yet.")
     cfg = _load_creds(user_id)
-    if not config.SUPABASE_URL or not config.SUPABASE_ANON_KEY:
+    if not config.POSTGREST_PUBLIC_URL:
         raise NotConfiguredError(
-            "Supabase isn't configured for warm sessions yet "
-            "(set secrets/supabase_url and secrets/supabase_anon_key)."
+            "PostgREST isn't configured for warm sessions yet "
+            "(set POSTGREST_PUBLIC_URL once PAWN is deployed with the postgrest service)."
         )
-    db = get_db()
-
-    # Evict any prior live session for this (user, model).
-    db.table("image_sessions").update({"status": "ended"}).eq("user_id", user_id).eq(
-        "model", model
-    ).in_("status", list(_LIVE_STATUSES)).execute()
 
     duration = max(1, min(int(duration_minutes), IMAGE_SESSION_MAX_DURATION_MINUTES))
     expires_at = _now() + timedelta(minutes=duration)
     session_token = _secrets.token_urlsafe(24)
 
-    inserted = (
-        db.table("image_sessions")
-        .insert(
-            {
-                "user_id": user_id,
-                "model": model,
-                "session_token": session_token,
-                "status": "starting",
-                "expires_at": _iso(expires_at),
-                "max_images": max_images,
-            }
+    # Evict any prior live session for this (user, model) and insert the new one
+    # atomically -- avoids a crash between the two leaving neither state. Two
+    # concurrent start_session calls for the same (user, model) could still both
+    # pass eviction and each insert a "starting" row (no DB-level uniqueness
+    # constraint on live sessions per (user, model) yet); the per-(user,model)
+    # asyncio.Lock in routes/generate.py prevents that within one backend
+    # process, which covers the single/few-user scale this app runs at today.
+    with transaction() as tx:
+        tx.execute(
+            """
+            update image_sessions set status = 'ended'
+            where user_id = %s and model = %s and status = ANY(%s)
+            """,
+            (user_id, model, list(_LIVE_STATUSES)),
         )
-        .execute()
-    )
-    session_id = inserted.data[0]["id"]
+        row = tx.fetchone(
+            """
+            insert into image_sessions (user_id, model, session_token, status, expires_at, max_images)
+            values (%s, %s, %s, 'starting', %s, %s)
+            returning id
+            """,
+            (user_id, model, session_token, _iso(expires_at), max_images),
+        )
+    session_id = str(row["id"])
 
     payload = {
         "session_id": session_id,
-        "supabase_url": config.SUPABASE_URL,
-        "anon_key": config.SUPABASE_ANON_KEY,
+        "postgrest_url": config.POSTGREST_PUBLIC_URL,
         "session_token": session_token,
         "model": model,
         "expires_at": _iso(expires_at),
@@ -180,34 +187,35 @@ def start_session(
 
 def extend_session(user_id: str, session_id: str, add_minutes: int = 30) -> dict:
     """Bump a session's `expires_at` (capped at the max backstop)."""
-    db = get_db()
-    sess = _session_row(db, user_id, session_id)
-    if sess is None:
-        raise NotConfiguredError("That session no longer exists. Start a new session.")
-    if not _is_alive(sess):
-        raise NotConfiguredError("That session isn't running anymore. Start a new session.")
-    current = _parse_ts(sess.get("expires_at")) or _now()
-    new_expiry = current + timedelta(minutes=max(1, int(add_minutes)))
-    hard_cap = _now() + timedelta(minutes=IMAGE_SESSION_MAX_DURATION_MINUTES)
-    if new_expiry > hard_cap:
-        new_expiry = hard_cap
-    db.table("image_sessions").update({"expires_at": _iso(new_expiry)}).eq(
-        "id", session_id
-    ).eq("user_id", user_id).execute()
+    # Liveness check + update in one transaction, so a session that dies
+    # between the two can't still be extended.
+    with transaction() as tx:
+        sess = _session_row(user_id, session_id, _fetchone=tx.fetchone)
+        if sess is None:
+            raise NotConfiguredError("That session no longer exists. Start a new session.")
+        if not _is_alive(sess):
+            raise NotConfiguredError("That session isn't running anymore. Start a new session.")
+        current = _parse_ts(sess.get("expires_at")) or _now()
+        new_expiry = current + timedelta(minutes=max(1, int(add_minutes)))
+        hard_cap = _now() + timedelta(minutes=IMAGE_SESSION_MAX_DURATION_MINUTES)
+        if new_expiry > hard_cap:
+            new_expiry = hard_cap
+        tx.execute(
+            "update image_sessions set expires_at = %s where id = %s and user_id = %s",
+            (_iso(new_expiry), session_id, user_id),
+        )
     return {"session_id": session_id, "expires_at": _iso(new_expiry)}
 
 
-def _latest_session(db, user_id: str, model: str) -> Optional[dict]:
-    res = (
-        db.table("image_sessions")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("model", model)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
+def _latest_session(user_id: str, model: str) -> Optional[dict]:
+    return fetchone(
+        """
+        select * from image_sessions
+        where user_id = %s and model = %s
+        order by created_at desc limit 1
+        """,
+        (user_id, model),
     )
-    return _first(res)
 
 
 # Only 'ready' sessions are expected to send heartbeats; warmup phases are exempt.
@@ -237,8 +245,7 @@ def _is_alive(s: dict) -> bool:
 
 
 def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
-    db = get_db()
-    s = _latest_session(db, user_id, model)
+    s = _latest_session(user_id, model)
     if s is None:
         return {"status": "none", "alive": False}
 
@@ -257,13 +264,13 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
                     is_dead = True
         if is_dead:
             try:
-                db.table("image_sessions").update({"status": "ended"}).eq("id", s["id"]).execute()
+                execute("update image_sessions set status = 'ended' where id = %s", (s["id"],))
             except Exception:
                 pass
             s["status"] = "ended"
 
     return {
-        "session_id": s["id"],
+        "session_id": str(s["id"]),
         "status": s["status"],
         "expires_at": s.get("expires_at"),
         "images_done": s.get("images_done", 0),
@@ -274,25 +281,22 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
 
 def stop_session(user_id: str, session_id: str) -> None:
     """Cooperative stop -- flag the session; the kernel exits on its next poll."""
-    db = get_db()
-    db.table("image_sessions").update({"status": "stopping"}).eq("id", session_id).eq(
-        "user_id", user_id
-    ).execute()
+    execute(
+        "update image_sessions set status = 'stopping' where id = %s and user_id = %s",
+        (session_id, user_id),
+    )
 
 
 # --- Jobs (warm session) -----------------------------------------------------
 
 
-def _session_row(db, user_id: str, session_id: str) -> Optional[dict]:
-    res = (
-        db.table("image_sessions")
-        .select("*")
-        .eq("id", session_id)
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
+def _session_row(user_id: str, session_id: str, _fetchone=fetchone) -> Optional[dict]:
+    """`_fetchone` defaults to the module-level fetchone; pass `tx.fetchone` to
+    run this inside an existing transaction() block instead of its own connection."""
+    return _fetchone(
+        "select * from image_sessions where id = %s and user_id = %s limit 1",
+        (session_id, user_id),
     )
-    return _first(res)
 
 
 def submit_session_job(
@@ -303,49 +307,45 @@ def submit_session_job(
 ) -> str:
     """Insert a queued job for a live (or warming-up) session.
 
-    Jobs submitted during installing/loading_model queue in Supabase and are
-    picked up FIFO once the kernel enters its serve loop. Only truly dead
-    sessions (stopped/ended/expired) are rejected. Returns the new job id.
+    Jobs submitted during installing/loading_model queue up and are picked up
+    FIFO once the kernel enters its serve loop. Only truly dead sessions
+    (stopped/ended/expired) are rejected. Returns the new job id.
     """
-    db = get_db()
-    sess = _session_row(db, user_id, session_id)
-    if sess is None:
-        raise NotConfiguredError("That session no longer exists. Start a new session.")
-    if not _is_alive(sess):
-        raise NotConfiguredError("That session isn't running anymore. Start a new session.")
-    inserted = (
-        db.table("image_jobs")
-        .insert(
-            {
-                "user_id": user_id,
-                "session_id": session_id,
-                "model": sess["model"],
-                "prompt": prompt,
-                "status": "queued",
-                "params": params.model_dump(exclude_none=True) if params else {},
-            }
+    # Liveness check + insert in one transaction, so a session that dies
+    # between the two can't still have a job queued against it.
+    with transaction() as tx:
+        sess = _session_row(user_id, session_id, _fetchone=tx.fetchone)
+        if sess is None:
+            raise NotConfiguredError("That session no longer exists. Start a new session.")
+        if not _is_alive(sess):
+            raise NotConfiguredError("That session isn't running anymore. Start a new session.")
+        row = tx.fetchone(
+            """
+            insert into image_jobs (user_id, session_id, model, prompt, status, params)
+            values (%s, %s, %s, %s, 'queued', %s)
+            returning id
+            """,
+            (
+                user_id,
+                session_id,
+                sess["model"],
+                prompt,
+                Json(params.model_dump(exclude_none=True) if params else {}),
+            ),
         )
-        .execute()
-    )
-    return inserted.data[0]["id"]
+    return str(row["id"])
 
 
 def get_job(user_id: str, job_id: str) -> Optional[dict]:
     """Fetch one job (scoped to the owner), or None if it doesn't exist."""
-    db = get_db()
-    res = (
-        db.table("image_jobs")
-        .select("*")
-        .eq("id", job_id)
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
+    row = fetchone(
+        "select * from image_jobs where id = %s and user_id = %s limit 1",
+        (job_id, user_id),
     )
-    row = _first(res)
     if row is None:
         return None
     return {
-        "job_id": row["id"],
+        "job_id": str(row["id"]),
         "status": row["status"],
         "model": row.get("model"),
         "prompt": row.get("prompt"),
@@ -371,20 +371,17 @@ _JOB_LIST_COLUMNS = (
 )
 
 
-def _active_cold_job(db, user_id: str, model: str) -> Optional[dict]:
+def _active_cold_job(user_id: str, model: str) -> Optional[dict]:
     """A queued/running cold job (no session) for this (user, model), if any."""
-    res = (
-        db.table("image_jobs")
-        .select("id, status")
-        .eq("user_id", user_id)
-        .eq("model", model)
-        .is_("session_id", "null")
-        .in_("status", list(_ACTIVE_JOB_STATUSES))
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
+    return fetchone(
+        """
+        select id, status from image_jobs
+        where user_id = %s and model = %s and session_id is null
+          and status = ANY(%s)
+        order by created_at desc limit 1
+        """,
+        (user_id, model, list(_ACTIVE_JOB_STATUSES)),
     )
-    return _first(res)
 
 
 def create_cold_job(
@@ -398,61 +395,53 @@ def create_cold_job(
     Raises RuntimeError if a warm session is currently alive for this model.
     """
     get_image_model(model)  # validate before touching the DB
-    db = get_db()
-    latest = _latest_session(db, user_id, model)
+    latest = _latest_session(user_id, model)
     if latest is not None and _is_alive(latest):
         raise RuntimeError(
             f"A warm session is already running for '{model}'. "
             "Submit via the session -- use Generate on the warm session bar."
         )
-    existing = _active_cold_job(db, user_id, model)
+    existing = _active_cold_job(user_id, model)
     if existing is not None:
-        return existing["id"], False
-    inserted = (
-        db.table("image_jobs")
-        .insert(
-            {
-                "user_id": user_id,
-                "session_id": None,
-                "model": model,
-                "prompt": prompt,
-                "status": "queued",
-                "params": params.model_dump(exclude_none=True) if params else {},
-            }
-        )
-        .execute()
+        return str(existing["id"]), False
+    row = fetchone(
+        """
+        insert into image_jobs (user_id, session_id, model, prompt, status, params)
+        values (%s, NULL, %s, %s, 'queued', %s)
+        returning id
+        """,
+        (user_id, model, prompt, Json(params.model_dump(exclude_none=True) if params else {})),
     )
-    return inserted.data[0]["id"], True
+    return str(row["id"]), True
 
 
 def run_cold_job(job_id: str) -> None:
     """Background worker for a cold job: run the blocking Kaggle round-trip and
     write the result back onto the row. Idempotent -- only proceeds while the
     job is still 'queued'. Never raises: failures are recorded on the row."""
-    db = get_db()
-    res = db.table("image_jobs").select("*").eq("id", job_id).limit(1).execute()
-    job = _first(res)
+    job = fetchone("select * from image_jobs where id = %s limit 1", (job_id,))
     if job is None or job.get("status") != "queued":
         return  # de-duped, already handled, or gone
-    db.table("image_jobs").update(
-        {"status": "running", "started_at": _iso(_now())}
-    ).eq("id", job_id).execute()
+    execute(
+        "update image_jobs set status = 'running', started_at = %s where id = %s",
+        (_iso(_now()), job_id),
+    )
     try:
         out = generate.generate_image(job["user_id"], job["prompt"], job["model"])
-        db.table("image_jobs").update(
-            {
-                "status": "done",
-                "image_b64": out["image"],
-                "mime": out.get("mime", "image/png"),
-                "via": out.get("via"),
-                "done_at": _iso(_now()),
-            }
-        ).eq("id", job_id).execute()
+        execute(
+            """
+            update image_jobs
+            set status = 'done', image_b64 = %s, mime = %s, via = %s, done_at = %s
+            where id = %s
+            """,
+            (out["image"], out.get("mime", "image/png"), out.get("via"), _iso(_now()), job_id),
+        )
     except Exception as e:
         print(f"cold job {job_id} failed: {e}", file=sys.stderr)
-        db.table("image_jobs").update(
-            {"status": "error", "error": str(e)[:300], "done_at": _iso(_now())}
-        ).eq("id", job_id).execute()
+        execute(
+            "update image_jobs set status = 'error', error = %s, done_at = %s where id = %s",
+            (str(e)[:300], _iso(_now()), job_id),
+        )
 
 
 def reap_stale_jobs(user_id: str) -> None:
@@ -472,45 +461,38 @@ def reap_stale_jobs(user_id: str) -> None:
     now = _now()
     cutoff = _iso(now - timedelta(seconds=COLD_JOB_MAX_WALLCLOCK_SECONDS))
     try:
-        db = get_db()
         # Cold jobs: orphaned worker past wall-clock.
-        db.table("image_jobs").update(
-            {"status": "error", "error": "worker lost (timed out)", "done_at": _iso(now)}
-        ).eq("user_id", user_id).is_("session_id", "null").in_(
-            "status", list(_ACTIVE_JOB_STATUSES)
-        ).lt("created_at", cutoff).execute()
+        execute(
+            """
+            update image_jobs
+            set status = 'error', error = 'worker lost (timed out)', done_at = %s
+            where user_id = %s and session_id is null
+              and status = ANY(%s) and created_at < %s
+            """,
+            (_iso(now), user_id, list(_ACTIVE_JOB_STATUSES), cutoff),
+        )
 
         # Session jobs: reap queued + running jobs for any non-alive session.
         # Fetching full rows so _is_alive() can check heartbeat_at + expires_at.
-        sessions = (
-            db.table("image_sessions")
-            .select("*")
-            .eq("user_id", user_id)
-            .execute()
-        )
-        non_alive_ids = [
-            s["id"] for s in (sessions.data or [])
-            if not _is_alive(s)
-        ]
+        sessions = fetchall("select * from image_sessions where user_id = %s", (user_id,))
+        non_alive_ids = [s["id"] for s in sessions if not _is_alive(s)]
         if non_alive_ids:
-            db.table("image_jobs").update(
-                {
-                    "status": "error",
-                    "error": "session ended before this job ran",
-                    "done_at": _iso(now),
-                }
-            ).eq("user_id", user_id).in_(
-                "session_id", non_alive_ids
-            ).eq("status", "queued").execute()
-            db.table("image_jobs").update(
-                {
-                    "status": "error",
-                    "error": "Session terminated unexpectedly",
-                    "done_at": _iso(now),
-                }
-            ).eq("user_id", user_id).in_(
-                "session_id", non_alive_ids
-            ).eq("status", "running").execute()
+            execute(
+                """
+                update image_jobs
+                set status = 'error', error = 'session ended before this job ran', done_at = %s
+                where user_id = %s and session_id = ANY(%s) and status = 'queued'
+                """,
+                (_iso(now), user_id, non_alive_ids),
+            )
+            execute(
+                """
+                update image_jobs
+                set status = 'error', error = 'Session terminated unexpectedly', done_at = %s
+                where user_id = %s and session_id = ANY(%s) and status = 'running'
+                """,
+                (_iso(now), user_id, non_alive_ids),
+            )
     except Exception as e:
         print(f"reap_stale_jobs failed for {user_id}: {e}", file=sys.stderr)
 
@@ -519,15 +501,28 @@ def list_jobs(user_id: str, model: Optional[str] = None, limit: int = 20) -> lis
     """Recent jobs for the monitor panel (newest first), WITHOUT image bytes.
     Reaps stale cold jobs first so the panel self-heals."""
     reap_stale_jobs(user_id)
-    db = get_db()
-    q = db.table("image_jobs").select(_JOB_LIST_COLUMNS).eq("user_id", user_id)
     if model:
-        q = q.eq("model", model)
-    res = q.order("created_at", desc=True).limit(limit).execute()
+        rows = fetchall(
+            f"""
+            select {_JOB_LIST_COLUMNS} from image_jobs
+            where user_id = %s and model = %s
+            order by created_at desc limit %s
+            """,
+            (user_id, model, limit),
+        )
+    else:
+        rows = fetchall(
+            f"""
+            select {_JOB_LIST_COLUMNS} from image_jobs
+            where user_id = %s
+            order by created_at desc limit %s
+            """,
+            (user_id, limit),
+        )
     return [
         {
-            "job_id": r["id"],
-            "session_id": r.get("session_id"),
+            "job_id": str(r["id"]),
+            "session_id": str(r["session_id"]) if r.get("session_id") else None,
             "model": r.get("model"),
             "prompt": r.get("prompt"),
             "status": r.get("status"),
@@ -540,5 +535,5 @@ def list_jobs(user_id: str, model: Optional[str] = None, limit: int = 20) -> lis
             "done_at": r.get("done_at"),
             "has_image": r.get("status") == "done",
         }
-        for r in (res.data or [])
+        for r in rows
     ]

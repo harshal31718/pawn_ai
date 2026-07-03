@@ -14,7 +14,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress)
-**Active step:** Phase D D.1 done (env-var-driven CORS/OAuth-redirect/CSP, defaults preserve local dev). D.2 done (frontend env URLs). D.3 (Supabase→Postgres migration) in progress. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
+**Active step:** Phase D D.1, D.2 done. D.3+D.4 done together (Supabase → self-hosted Postgres+pgvector+PostgREST migration — see below). D.5 (`.gitattributes` + branch hygiene) next, then D.6 (pre-deploy test gate), then pause for confirmation before D.7/D.8 (live deploy). Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
@@ -384,11 +384,70 @@ decision and coexistence rules).
   the production build bundle. `npm run build` clean. code-reviewer PASS (1
   NOTE, pre-existing/out of scope). No security audit needed (no
   secrets/auth/uploads touched).
-- [ ] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
-- [ ] **D.4 — Migrate Kaggle rendezvous → self-hosted PostgREST**
+- [x] **D.3+D.4 — Migrate Supabase → self-hosted Postgres+pgvector, and Kaggle
+  rendezvous → self-hosted PostgREST** (done together — dropping the Supabase
+  secrets in D.3 breaks D.4's Kaggle-payload code otherwise, so both were
+  implemented and committed as one change)
+  New `backend/app/db/postgres_client.py` (psycopg3 sync client — deliberately
+  chosen over asyncpg to avoid a ~20-file async ripple across every
+  `run_in_threadpool` call site; `fetchone`/`fetchall`/`execute` helpers plus a
+  `transaction()` context manager for atomic read-then-write sequences).
+  Rewrote all Supabase `.table()/.rpc()` calls to parameterized SQL in
+  `routes/auth.py`, `core/key_store.py`, `core/drive_factory.py`,
+  `memory/index.py`, `memory/retrieve.py` (SQL-function calls need explicit
+  `::vector`/`::int` casts — found via live-Postgres testing), and
+  `core/image_session.py` (full rewrite: session/job CRUD to SQL, `str()`
+  wrapping at API boundaries for psycopg's native `uuid.UUID` returns, a
+  `_parse_ts` fix for native `datetime` returns, `Json(...)` wrapping for
+  jsonb columns; `start_session`/`extend_session`/`submit_session_job` now use
+  `transaction()` to close read-then-write race windows). `config.py`:
+  `SUPABASE_URL/SERVICE_KEY/ANON_KEY` → `POSTGRES_DSN` (secret) +
+  `POSTGREST_PUBLIC_URL` (non-secret, D.4). `supabase/schema.sql`: added
+  `pgcrypto` extension (was missing, breaks `gen_random_uuid()`), folded in
+  `image_jobs.params jsonb` (previously only in a separate manual-apply file
+  that never got auto-mounted — a CRITICAL bug caught by code review before
+  merge), added a `pawn_anon` role (NOLOGIN, idempotent `DO` block) with
+  `GRANT select/insert/update` on `image_sessions`/`image_jobs` only, RLS
+  policies retargeted from Supabase's `anon` to `pawn_anon` (same
+  single-user-trial permissive posture as before — scoped JWT still
+  deferred, unchanged decision from Phase W). New
+  `supabase/init_pawn_anon.sh` sets `pawn_anon`'s password from the
+  `postgrest_anon_password` secret via injection-safe `psql -v`/`:'var'`
+  substitution (a `.sql` file can't read a secret file). `docker-compose.yml`:
+  new `postgres` (pgvector image, healthcheck, named volume
+  `pawn_postgres_data`, host port 5433 not 5432 — avoids colliding with a
+  sibling project's Postgres) and `postgrest` (internal only, no host port)
+  services. `requirements.txt`: dropped `supabase`, added `psycopg[binary]` +
+  `pgvector`. Secrets: dropped 3 supabase secrets, added `postgres_password`/
+  `postgres_dsn`/`postgrest_anon_password`/`postgrest_db_uri` (`.example`
+  files + real generated local-dev values). All 3 Kaggle session notebooks
+  (`session_poc`, `image_flux_session`, `image_sdxl_session`) updated: payload
+  now carries `postgrest_url` instead of `supabase_url`/`anon_key`; headers
+  drop `apikey`/`Authorization` (anonymous PostgREST requests get `pawn_anon`
+  automatically via `PGRST_DB_ANON_ROLE`). Also fixed an unrelated pre-existing
+  bug: `frontend/.dockerignore` was missing, so the frontend Docker build
+  context pulled in local `node_modules` (a broken symlink there crashed
+  BuildKit) — added it.
+  148 backend tests green (rewrote `conftest.py`, `test_rag.py`,
+  `test_image_session.py`, `test_image_jobs.py`, `test_keys_kaggle.py` to mock
+  the new SQL functions instead of a chained Supabase-client fake).
+  `npm run build` clean (unaffected, backend-only migration).
+  code-reviewer FAIL→PASS (1 CRITICAL fixed: missing `image_jobs.params`
+  column; 2 WARN fixed: read-then-write races now wrapped in `transaction()`,
+  stale "Supabase" wording in docstrings/comments cleaned up).
+  security-auditor PASS (fixed 2 WARN: stale unreferenced local Supabase
+  secret files deleted, raw OAuth exception no longer leaked to the client in
+  `auth.py`'s `/callback`).
+  **Live-verified** (not just mocks): brought up real `postgres`+`postgrest`+
+  `backend`+`frontend` containers from an empty volume — schema/role init
+  scripts ran cleanly, PostgREST connected and served both anonymous reads
+  *and* writes to `image_sessions` as `pawn_anon` (correctly denied DELETE,
+  matching its grants), backend `/health` and frontend both responded. This is
+  ahead of D.6's dry-run requirement, not a replacement for it — D.6 still
+  needs a full BYOK + memory-retrieval + Kaggle-job pass.
 - [ ] **D.5 — `.gitattributes` + branch hygiene**
 - [ ] **D.6 — Pre-deploy test gate**
-- [ ] **D.7 — Write `deployment.md` (VPS runbook)**
+- [ ] **D.7 — Write `deployment.md` (second-app-on-Enma-VM runbook)**
 - [ ] **D.8 — First live deploy + full verify checklist**
 
 ---
