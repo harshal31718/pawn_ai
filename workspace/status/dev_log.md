@@ -6,6 +6,18 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-04] — Phase D / D.7: deployment.md runbook + parameterized prod compose
+
+**Built:** Repo-root `deployment.md` — a full second-app-on-the-Enma-VM runbook covering **both** environments staging-first (hard rules, prerequisites, DuckDNS/OAuth setup, per-env clone→secrets→frontend build→compose up→Nginx block→certbot, promote step, prod repeat, verify checklists, Enma re-check, firewall table, release/rollback, known deferrals). New `docker-compose.prod.yml` — ONE parameterized file for both envs: an `--env-file` (`.env.prod` / `.env.staging`) sets `COMPOSE_PROJECT_NAME`, loopback ports, and the non-secret deployment URLs; Docker's project-name prefixing isolates volumes/networks (`pawn_postgres_data` vs `pawn-dev_postgres_data`). Backend loopback-only, default (non-reload) uvicorn CMD, `mem_limit`/`cpus` caps per hard rule 9; no frontend service (Nginx serves the static `dist`); postgrest on a loopback port for the Nginx `/pgrst/` rendezvous. New `.env.prod.example`/`.env.staging.example`; `.gitignore` now excludes the real `.env.prod`/`.env.staging`.
+
+**Decisions:** Same-origin layout — one Nginx `server_name` per env serves the SPA at `/`, reverse-proxies the root-level API paths (regex `^/(health|auth|chat|generate|conversations|registry|keys|upload|crypto)`) to the backend with SSE-friendly settings (`proxy_buffering off`, long read timeout), and proxies `/pgrst/` to PostgREST. One Google OAuth client with both redirect URIs (staging + prod) rather than two clients. PostgREST is internet-exposed with the permissive `pawn_anon` role — documented as a carried-over deferral (scoped JWT mandatory before multi-user).
+
+**Verification:** `docker compose --env-file .env.{staging,prod}.example -f docker-compose.prod.yml config` validates cleanly for both — resolved project name, ports, volume names, and env vars all correct. Not yet run on a real VM — that is D.8 (gated).
+
+**Commit:** (pending — committed alongside this doc update)
+
+---
+
 ### [2026-07-03] — Drive-Mandatory Phase 3 (D.5 clean-`main` mechanism + D.6 gate) + branch/env strategy
 
 **Discussed & decided:** (1) User BYOK provider keys stay in Postgres (`user_api_keys`, AES-256-GCM via `encryption_secret`, cached + `prefetch` per chat) — **not** moved to Drive; keys are hot-path, Drive is for cold user docs. (2) `dev` is tested via a **VM staging stack** (`dev.pawnai.duckdns.org`) fully isolated from prod — never against live data/account. (3) `main` kept doc-free; (4) deploy **staging-first**, then promote `dev`→`main`, then prod.
