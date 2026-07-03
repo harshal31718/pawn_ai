@@ -14,7 +14,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress) + Plan: Drive-Mandatory Storage (in progress, sequenced before D.5-D.8)
-**Active step:** Phase D D.1-D.4 done (see below). `workspace/plan/plan_drive_mandatory.md` Phase 1+2 done (Drive is now the mandatory, only storage backend — no local-filesystem fallback anywhere; manually verified live, not via automated pytest this pass). Phase 3 (folds in D.5+D.6) next. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
+**Active step:** Phase D D.1-D.4 done (see below). `workspace/plan/plan_drive_mandatory.md` Phase 1+2 done. Phase 3 IN PROGRESS: pytest loose end from Phase 2 closed (full suite 152 passed via pytest); **D.5 clean-`main` mechanism DONE** — `scripts/promote-to-main.sh` (normal merge + strip docs) replaces the abandoned `.gitattributes merge=ours` (tested — broken for modify/delete), proven against a real repo clone; first real run deferred to staging-first deploy (D.8). **D.6 automated gate DONE** (pytest green + `npm run build` clean + 412-when-Drive-unavailable covered); D.6 manual live-Drive check with a real Google account OUTSTANDING. `plan_deployment.md` amended for two-environment staging-first deploy (D.6b staging stack, staging-first D.8). Next: D.6 manual check → Phase 4 review/commit → D.7 (`deployment.md`) → D.8 (gated deploy). **Env decisions:** `dev`→VM staging (`dev.pawnai.duckdns.org`, isolated DB/secrets/ports/OAuth, test Google account only); `main`→prod (`pawnai.duckdns.org`), doc-free via promote script; BYOK keys stay in Postgres (not Drive); each env needs its own `encryption_secret`+Postgres. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
@@ -447,12 +447,17 @@ decision and coexistence rules).
   matching its grants), backend `/health` and frontend both responded. This is
   ahead of D.6's dry-run requirement, not a replacement for it — D.6 still
   needs a full BYOK + memory-retrieval + Kaggle-job pass.
-- [ ] **D.5 — `.gitattributes` + branch hygiene** (folded into
-  plan_drive_mandatory.md Phase 3)
-- [ ] **D.6 — Pre-deploy test gate** (folded into plan_drive_mandatory.md
-  Phase 3)
-- [ ] **D.7 — Write `deployment.md` (second-app-on-Enma-VM runbook)**
-- [ ] **D.8 — First live deploy + full verify checklist**
+- [x] **D.5 — Clean-`main` mechanism** (`scripts/promote-to-main.sh`; abandoned
+  `.gitattributes merge=ours` after sandbox test proved it broken for
+  modify/delete — see plan_deployment.md D.5). Proven against a repo clone;
+  first real run deferred to D.8. `dev`→`main` must always use the script.
+- [~] **D.6 — Pre-deploy test gate** — automated portion DONE (pytest 152 green,
+  `npm run build` clean, Drive-less 412 covered by suite); manual live-Drive
+  check with a real Google account outstanding.
+- [ ] **D.6b — Staging stack on the shared VM** (`/opt/pawn-dev`, `dev` branch,
+  `dev.pawnai.duckdns.org`, isolated volume/secrets/port/redirect)
+- [ ] **D.7 — Write `deployment.md` (staging + prod, second-app-on-Enma-VM runbook)**
+- [ ] **D.8 — First live deploy (staging → promote → prod) + full verify checklist**
 
 ---
 
@@ -497,8 +502,11 @@ as Phase 3.
   — stale, misleading name once Supabase was dropped in D.3/D.4; updated
   `docker-compose.yml`'s mounts and all doc references; verified a fresh
   Postgres volume still bootstraps correctly from the renamed files.
-- [ ] **Phase 3 — Fold in D.5 (`.gitattributes`) + D.6 (pre-deploy test gate)**
-- [ ] **Phase 4 — Review, docs, commit**
+- [~] **Phase 3 — Fold in D.5 + D.6** — D.5 done (`scripts/promote-to-main.sh`,
+  replacing the abandoned `merge=ours`); D.6 automated gate done (pytest 152 +
+  build clean), manual live-Drive check outstanding.
+- [ ] **Phase 4 — Review, docs, commit** (in progress: docs updated + committing
+  the promote script + plan updates; D.7/D.8 remain, gated)
 
 ---
 

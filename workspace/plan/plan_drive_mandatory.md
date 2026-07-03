@@ -128,17 +128,24 @@ dead code once these are rewritten: `backend/app/storage/conversations.py`,
     LOGIN, `image_jobs.params` column) from the renamed files.
 
 - [ ] **Phase 3 — Fold in D.5 + D.6 from the deployment plan**
-  - **D.5** — `.gitattributes` marking `.claude/**`, `workspace/**`,
-    `CLAUDE.md`, `**/CLAUDE.md` as `merge=ours`; one-time `git config
-    merge.ours.driver true`; dry-run `dev`→`main` merge to confirm.
-  - **D.6** — Pre-deploy test gate: full `pytest` green, `npm run build`
-    clean, local dry run bringing up `postgres`+`postgrest`+`backend` (the
-    stack already proven working live during D.3/D.4) — this time also
-    confirming the Drive-mandatory flow end-to-end against a real linked
-    Google account (salt fetch, conversation persistence, upload, BYOK key
-    storage all working), and that a request without Drive access cleanly
-    returns the 412 error instead of a raw 500 like the one that started
-    this plan.
+  - **D.5** — Clean-`main` mechanism. Original `.gitattributes merge=ours`
+    plan **tested and abandoned** (never consulted for the modify/delete case →
+    conflicts on every `dev`→`main` merge that touched a doc). Replaced by a
+    committed `scripts/promote-to-main.sh` (normal merge + unconditional strip
+    of `.claude/`, `workspace/`, `CLAUDE.md`/`AGENTS.md`; keeps `README.md`),
+    proven clean/repeatable against a real repo clone (39 doc paths → 0, 123
+    code files preserved). Script **created**; the first real run against
+    `main` is deferred to the staging-first deploy (D.8), not run standalone.
+    `dev`→`main` must always go through this script. See `plan_deployment.md`
+    D.5.
+  - **D.6** — Pre-deploy test gate. **Automated portion done:** full `pytest`
+    green (152 passed), `npm run build` clean, and the "412 `not_configured`
+    when Drive unavailable" behavior is covered by the (now-run) suite. **Still
+    outstanding (manual, needs a real linked Google account):** live
+    Drive-mandatory flow end-to-end (salt fetch, conversation persistence,
+    upload, BYOK key storage) plus confirming a Drive-less request returns the
+    clear 412 instead of a raw 500 — to be run on the local stack (already up)
+    or on staging.
 
 - [ ] **Phase 4 — Review, docs, commit**
   code-reviewer + security-auditor + build-validator across the combined

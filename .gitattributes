@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings — they run on the Linux VM, and a CRLF
+# shebang breaks `bash` there. (This file is line-ending normalization only;
+# the docs-off-main split is handled by scripts/promote-to-main.sh, NOT merge=ours.)
+*.sh text eol=lf

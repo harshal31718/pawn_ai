@@ -6,6 +6,20 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-03] — Drive-Mandatory Phase 3 (D.5 clean-`main` mechanism + D.6 gate) + branch/env strategy
+
+**Discussed & decided:** (1) User BYOK provider keys stay in Postgres (`user_api_keys`, AES-256-GCM via `encryption_secret`, cached + `prefetch` per chat) — **not** moved to Drive; keys are hot-path, Drive is for cold user docs. (2) `dev` is tested via a **VM staging stack** (`dev.pawnai.duckdns.org`) fully isolated from prod — never against live data/account. (3) `main` kept doc-free; (4) deploy **staging-first**, then promote `dev`→`main`, then prod.
+
+**Built:** `scripts/promote-to-main.sh` — the clean-`main` mechanism. Does a normal `dev`→`main` merge (advances merge base → code merges cleanly every round) then unconditionally strips dev-only doc paths (`.claude/`, `workspace/`, any `CLAUDE.md`/`AGENTS.md`; keeps `README.md`) and commits. Amended `plan_deployment.md` for the two-environment staging-first deploy (new D.6b staging stack, rewritten D.5, staging-first D.8, prod-vs-staging reference table) and `plan_drive_mandatory.md` Phase 3.
+
+**Decisions / key finding:** The originally-planned `.gitattributes merge=ours` mechanism (deployment D.5) was **tested in a sandbox and abandoned** — `merge=ours` is never consulted for the modify/delete case, so once docs are removed from `main`, every `dev`→`main` merge that touched a doc (i.e. nearly all, since `workspace/` changes each step) throws a modify/delete conflict. A naive `git merge --squash` + strip also fails (merge base never advances → real code files conflict on later promotions). The normal-merge promotion script is the proven-clean, repeatable alternative. **Constraint:** `dev`→`main` must always go through the script; a plain `git merge dev` re-adds docs.
+
+**Verification:** Step A closed the pytest loose end from Phase 2 — full suite **152 passed** (had been manually-verified-only, never run via pytest). `npm run build` clean. Promote script proven end-to-end against a real repo clone: 39 doc paths → 0 on `main`, 123 backend/frontend code files preserved, `README.md` kept, returned to `dev`. Real `main` left untouched — first strip deferred to the staging-first deploy (D.8). **Outstanding (D.6, manual, needs real linked Google account):** live Drive-mandatory flow + Drive-less 412 on the running/staging stack.
+
+**Commit:** (pending — committed alongside this doc update)
+
+---
+
 ### [2026-07-03] — Drive-Mandatory Storage Phase 1+2: remove local-storage fallback everywhere
 
 **Built:** Triggered by investigating a passphrase-gate 500 (Drive OAuth scope gap in `routes/crypto.py`). Rather than patch just that route, Google Drive became the only storage backend for user data — no local-filesystem fallback anywhere. New `core/drive_factory.py` helpers: `require_drive_for_user()` (raises the existing `NotConfiguredError`, HTTP 412, when Drive isn't linked) and `call_drive()` (translates ANY Drive-operation failure into that same clear error instead of an unhandled 500). Removed the `if drive: ... else: local_storage...` branch from `routes/crypto.py`, `routes/conversations.py`, `routes/upload.py`, `routes/chat.py`, `memory/summarize.py`; deleted the now-dead `storage/conversations.py`/`storage/documents.py`. `chat.py` only requires Drive when a request actually needs storage (`conversation_id`/`doc_id` present) — stateless chat keeps working with no Drive link. Background tasks fail soft instead of raising (no HTTP response to attach an error to). New `backend/tests/fake_drive.py` (in-memory `FakeDriveStorage` running the real `conversations_drive.py`/`documents_drive.py` logic); rewrote `test_conversations.py`, `test_upload.py`, `test_summarize.py`, `test_rag.py`, `test_crypto.py`; added 412-path tests.
