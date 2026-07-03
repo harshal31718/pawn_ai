@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress)
-**Active step:** Phase D D.1, D.2 done. D.3+D.4 done together (Supabase → self-hosted Postgres+pgvector+PostgREST migration — see below). D.5 (`.gitattributes` + branch hygiene) next, then D.6 (pre-deploy test gate), then pause for confirmation before D.7/D.8 (live deploy). Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
+**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress) + Plan: Drive-Mandatory Storage (in progress, sequenced before D.5-D.8)
+**Active step:** Phase D D.1-D.4 done (see below). `workspace/plan/plan_drive_mandatory.md` Phase 1+2 done (Drive is now the mandatory, only storage backend — no local-filesystem fallback anywhere; manually verified live, not via automated pytest this pass). Phase 3 (folds in D.5+D.6) next. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
@@ -402,7 +402,9 @@ decision and coexistence rules).
   jsonb columns; `start_session`/`extend_session`/`submit_session_job` now use
   `transaction()` to close read-then-write race windows). `config.py`:
   `SUPABASE_URL/SERVICE_KEY/ANON_KEY` → `POSTGRES_DSN` (secret) +
-  `POSTGREST_PUBLIC_URL` (non-secret, D.4). `supabase/schema.sql`: added
+  `POSTGREST_PUBLIC_URL` (non-secret, D.4). `postgres/schema.sql` (directory
+  renamed from `supabase/` — no longer accurate once Supabase was dropped):
+  added
   `pgcrypto` extension (was missing, breaks `gen_random_uuid()`), folded in
   `image_jobs.params jsonb` (previously only in a separate manual-apply file
   that never got auto-mounted — a CRITICAL bug caught by code review before
@@ -411,7 +413,7 @@ decision and coexistence rules).
   policies retargeted from Supabase's `anon` to `pawn_anon` (same
   single-user-trial permissive posture as before — scoped JWT still
   deferred, unchanged decision from Phase W). New
-  `supabase/init_pawn_anon.sh` sets `pawn_anon`'s password from the
+  `postgres/init_pawn_anon.sh` sets `pawn_anon`'s password from the
   `postgrest_anon_password` secret via injection-safe `psql -v`/`:'var'`
   substitution (a `.sql` file can't read a secret file). `docker-compose.yml`:
   new `postgres` (pgvector image, healthcheck, named volume
@@ -445,10 +447,58 @@ decision and coexistence rules).
   matching its grants), backend `/health` and frontend both responded. This is
   ahead of D.6's dry-run requirement, not a replacement for it — D.6 still
   needs a full BYOK + memory-retrieval + Kaggle-job pass.
-- [ ] **D.5 — `.gitattributes` + branch hygiene**
-- [ ] **D.6 — Pre-deploy test gate**
+- [ ] **D.5 — `.gitattributes` + branch hygiene** (folded into
+  plan_drive_mandatory.md Phase 3)
+- [ ] **D.6 — Pre-deploy test gate** (folded into plan_drive_mandatory.md
+  Phase 3)
 - [ ] **D.7 — Write `deployment.md` (second-app-on-Enma-VM runbook)**
 - [ ] **D.8 — First live deploy + full verify checklist**
+
+---
+
+## Plan: Drive-Mandatory Storage (Remove Local-Storage Fallback)
+*Plan reference: `workspace/plan/plan_drive_mandatory.md`*
+*Branch: dev (merges → main). Reference/last-stable commit: `9350664`
+(marked in `workspace/stable_commits.md`).*
+
+Triggered by a passphrase-gate 500 caused by a Drive-scope gap in
+`routes/crypto.py`'s error handling. Rather than patch just that route, the
+local-filesystem fallback pattern is being removed everywhere — Google Drive
+becomes the only storage backend for conversations, uploads, memory-summary
+indexing, and the encryption salt. Sequenced before D.5-D.8; folds D.5/D.6 in
+as Phase 3.
+
+- [x] **Phase 1 — Backend: remove local-storage fallback, Drive mandatory**
+  `core/drive_factory.py` gains `require_drive_for_user()` (raises
+  `NotConfiguredError`, HTTP 412, when Drive isn't linked) and `call_drive()`
+  (translates ANY Drive-operation failure — API error, insufficient OAuth
+  scope, revoked grant — into the same clear error, not a raw 500). Every
+  `if drive: ... else: local_storage...` branch removed from `routes/crypto.py`,
+  `routes/conversations.py`, `routes/upload.py`, `routes/chat.py`,
+  `memory/summarize.py`. Background tasks (`auto_title_background_task`,
+  `summarize_conversation_task`) fail soft (log + return) rather than raising,
+  since there's no HTTP response to attach the error to. `chat.py` only
+  requires Drive when a request actually needs storage (`conversation_id` or
+  `doc_id` present) — pure stateless chat still works without Drive linked.
+  Deleted now-dead `backend/app/storage/conversations.py` and
+  `backend/app/storage/documents.py`.
+- [x] **Phase 2 — Tests: mock Drive as available everywhere it's implicitly relied on**
+  New `backend/tests/fake_drive.py` (in-memory `FakeDriveStorage` running the
+  real `conversations_drive.py`/`documents_drive.py` logic). Rewrote
+  `test_conversations.py`, `test_upload.py`, `test_summarize.py`,
+  `test_rag.py`, `test_crypto.py`; added 412-error-path tests.
+  **Manually verified live** (full docker compose stack) per user request —
+  automated pytest run was skipped this pass; re-run before D.6.
+  **Related fixes found during manual testing:** removed the unwired Phase 3
+  passphrase gate from the auth flow (`App.tsx`, deleted
+  `PassphraseGate.tsx`) — it blocked the whole app for a feature that never
+  got its encrypt/decrypt-on-write wiring done, pure friction with no
+  benefit. Renamed `supabase/` → `postgres/` (schema.sql + init_pawn_anon.sh)
+  — stale, misleading name once Supabase was dropped in D.3/D.4; updated
+  `docker-compose.yml`'s mounts and all doc references; verified a fresh
+  Postgres volume still bootstraps correctly from the renamed files.
+- [ ] **Phase 3 — Fold in D.5 (`.gitattributes`) + D.6 (pre-deploy test gate)**
+- [ ] **Phase 4 — Review, docs, commit**
 
 ---
 

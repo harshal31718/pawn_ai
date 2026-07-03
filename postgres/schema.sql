@@ -1,6 +1,5 @@
--- PAWN — Postgres schema (self-hosted; name kept for history, originally
--- written for Supabase's SQL editor — plain Postgres now, run once via
--- docker-entrypoint-initdb.d, see docker-compose.yml's `postgres` service).
+-- PAWN — self-hosted Postgres schema. Run once via docker-entrypoint-initdb.d,
+-- see docker-compose.yml's `postgres` service.
 --
 -- Application data lives here: user profiles, encrypted Google Drive tokens,
 -- encrypted BYOK provider keys, and per-user memory embeddings (pgvector).
@@ -157,7 +156,7 @@ create index if not exists image_jobs_session_status_idx
   on image_jobs (session_id, status);
 
 -- pawn_anon role (D.4) — replaces Supabase's built-in `anon` role. NOLOGIN here;
--- a companion init script (supabase/init_pawn_anon.sh, run right after this
+-- a companion init script (postgres/init_pawn_anon.sh, run right after this
 -- file by docker-entrypoint-initdb.d) sets its password from the
 -- `postgrest_anon_password` secret and grants LOGIN, since a plain .sql file
 -- can't read a secret file. PostgREST connects to Postgres as this role.

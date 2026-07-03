@@ -3,9 +3,18 @@
 Fetches encrypted Drive tokens from Postgres, decrypts them,
 and returns a ready-to-use DriveStorage object.
 
+Google Drive is the only storage backend for user data (conversations,
+uploads, memory-summary triggers, the encryption salt) — there is no
+local-filesystem fallback. Routes must use `require_drive_for_user()` (not
+`get_drive_for_user()` directly) and wrap actual Drive operations with
+`call_drive()` so any failure — not linked, insufficient OAuth scope, token
+decrypt failure, a Drive API error — surfaces as the same clear,
+frontend-actionable error instead of an unhandled 500.
+
 Usage in a FastAPI route:
-    from app.core.drive_factory import get_drive_for_user
-    drive = get_drive_for_user(request.state.user_id)
+    from app.core.drive_factory import require_drive_for_user, call_drive
+    drive = require_drive_for_user(request.state.user_id)
+    result = call_drive(some_drive_backed_function, drive, ...)
 """
 
 import threading
@@ -14,7 +23,10 @@ from typing import Optional
 
 from app.core.crypto import decrypt
 from app.db.postgres_client import execute, fetchone
+from app.exceptions import NotConfiguredError
 from app.storage.drive import DriveStorage
+
+_DRIVE_REQUIRED_MSG = "Connect your Google Drive in Settings to use PAWN."
 
 # Cache DriveStorage instances per user so we don't refetch tokens from Postgres
 # and rebuild the Drive service (plus its folder/file-ID caches) on every request.
@@ -57,6 +69,29 @@ def get_drive_for_user(user_id: str) -> Optional[DriveStorage]:
     with _CACHE_LOCK:
         _CACHE[user_id] = (time.time(), drive)
     return drive
+
+
+def require_drive_for_user(user_id: str) -> DriveStorage:
+    """Like get_drive_for_user, but raises NotConfiguredError (HTTP 412)
+    instead of returning None when Drive isn't linked. Use this in routes."""
+    drive = get_drive_for_user(user_id)
+    if drive is None:
+        raise NotConfiguredError(_DRIVE_REQUIRED_MSG)
+    return drive
+
+
+def call_drive(fn, *args, **kwargs):
+    """Call a blocking Drive-backed operation, translating any failure — an
+    API error, a revoked/expired grant, insufficient OAuth scope, etc. — into
+    the same clear NotConfiguredError instead of letting it surface as a raw
+    500. A mid-operation Drive failure should look the same to the caller as
+    Drive never having been linked at all."""
+    try:
+        return fn(*args, **kwargs)
+    except NotConfiguredError:
+        raise
+    except Exception as exc:
+        raise NotConfiguredError(_DRIVE_REQUIRED_MSG) from exc
 
 
 def _build_drive_for_user(user_id: str) -> Optional[DriveStorage]:

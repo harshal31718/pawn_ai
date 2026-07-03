@@ -47,8 +47,8 @@ services:
       - postgrest_anon_password
     volumes:
       - pawn_postgres_data:/var/lib/postgresql/data
-      - ./supabase/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-      - ./supabase/init_pawn_anon.sh:/docker-entrypoint-initdb.d/02_pawn_anon.sh:ro
+      - ./postgres/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./postgres/init_pawn_anon.sh:/docker-entrypoint-initdb.d/02_pawn_anon.sh:ro
     ports:
       # 5433, not 5432 — 5432 collides with other local Postgres containers
       # (e.g. a sibling project's timescaledb) on a dev machine. Loopback-only;

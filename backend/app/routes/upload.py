@@ -5,9 +5,8 @@ import pdfplumber
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 
-from app.core.drive_factory import get_drive_for_user
+from app.core.drive_factory import call_drive, require_drive_for_user
 from app.storage import documents_drive
-from app.storage.documents import store_doc
 
 router = APIRouter()
 
@@ -19,10 +18,7 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
 
 
 def _store(drive, doc_id, text, user_id):
-    if drive:
-        documents_drive.store_doc(doc_id, text, drive)
-    else:
-        store_doc(doc_id, text, user_id=user_id)
+    documents_drive.store_doc(doc_id, text, drive)
 
 
 @router.post("/upload")
@@ -76,7 +72,7 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         )
 
     doc_id = str(uuid.uuid4())
-    drive = await run_in_threadpool(get_drive_for_user, user_id)
-    await run_in_threadpool(_store, drive, doc_id, text, user_id)
+    drive = await run_in_threadpool(require_drive_for_user, user_id)
+    await run_in_threadpool(call_drive, _store, drive, doc_id, text, user_id)
 
     return {"doc_id": doc_id, "filename": filename, "char_count": len(text)}

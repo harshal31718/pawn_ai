@@ -6,7 +6,7 @@ exits), so PAWN and the kernel rendezvous through the database: PAWN writes the
 session/job rows directly via Postgres (the backend's own DB connection), and
 the live kernel reads/writes them over HTTPS through the self-hosted PostgREST
 instance, using the restricted `pawn_anon` Postgres role (RLS-scoped to just
-these two tables — see supabase/schema.sql).
+these two tables — see postgres/schema.sql).
 
 Two generation paths produce the same durable `image_jobs` row:
 - **Warm session** (W.1): the live kernel loads the model once then serves a

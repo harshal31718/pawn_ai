@@ -1,8 +1,8 @@
 from typing import Optional
 from starlette.concurrency import run_in_threadpool
 from app.core.normalize import chat_stream
-from app.core.drive_factory import get_drive_for_user
-from app.storage import conversations as local_storage
+from app.core.drive_factory import call_drive, require_drive_for_user
+from app.exceptions import NotConfiguredError
 from app.storage import conversations_drive
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
@@ -71,21 +71,26 @@ async def summarize_conversation_task(
     """
     Loads all messages for the conversation, generates a summary, and writes it to disk.
     Ingests the summary into the memory vector index (RAG).
+
+    Best-effort background task: if Drive isn't available for this user, it
+    silently skips (no local fallback — Drive is the only conversation store).
     """
-    drive = await run_in_threadpool(get_drive_for_user, user_id) if user_id else None
-    if drive:
-        messages = await run_in_threadpool(conversations_drive.load_messages, drive, conv_id)
-    else:
-        messages = await run_in_threadpool(local_storage.load_messages, conv_id, user_id=user_id)
+    if not user_id:
+        return
+    try:
+        drive = await run_in_threadpool(require_drive_for_user, user_id)
+        messages = await run_in_threadpool(call_drive, conversations_drive.load_messages, drive, conv_id)
+    except NotConfiguredError:
+        return
     if not messages:
         return
 
     summary = await summarize_history(messages, resolver, rate_limiter, user_id=user_id)
     if summary:
-        if drive:
-            await run_in_threadpool(conversations_drive.save_summary, drive, conv_id, summary)
-        else:
-            await run_in_threadpool(local_storage.save_summary, conv_id, summary, user_id=user_id)
+        try:
+            await run_in_threadpool(call_drive, conversations_drive.save_summary, drive, conv_id, summary)
+        except NotConfiguredError:
+            return
 
         if user_id:
             try:

@@ -153,7 +153,8 @@ must not touch, edit, or collide with any of it.
   session/job CRUD (its Kaggle-payload injection of `supabase_url`/`anon_key`
   stays as-is until D.4 swaps it to PostgREST) as direct parameterized SQL
   (`%s` placeholders — never string-format SQL). Port `supabase/schema.sql`
-  to plain Postgres (add `create extension if not exists pgcrypto;` — needed
+  (renamed to `postgres/schema.sql` once done — the old name stopped making
+  sense) to plain Postgres (add `create extension if not exists pgcrypto;` — needed
   for `gen_random_uuid()`, missing today). Drop `supabase` from
   `requirements.txt`, add `psycopg[binary,pool]`. Drop `supabase_url`/
   `supabase_service_key`/`supabase_anon_key` secrets, add
@@ -231,7 +232,8 @@ must not touch, edit, or collide with any of it.
 - `backend/app/db/supabase_client.py` → new Postgres client module (D.3)
 - `backend/app/core/key_store.py`, `drive_factory.py`, `memory/index.py`,
   `memory/retrieve.py`, `core/image_session.py` (D.3, D.4)
-- `supabase/schema.sql` → adapted for plain Postgres + PostgREST roles (D.3, D.4)
+- `supabase/schema.sql` → adapted for plain Postgres + PostgREST roles, then
+  renamed to `postgres/schema.sql` (D.3, D.4)
 - `backend/app/config.py`, `backend/requirements.txt` (D.3)
 - `docker-compose.yml`, new `docker-compose.prod.yml` (D.3, D.4, D.7)
 - `frontend/.env.example`, new `frontend/.env.production` (D.2)

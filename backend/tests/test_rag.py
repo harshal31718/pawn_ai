@@ -14,27 +14,22 @@ import pytest
 from starlette.testclient import TestClient
 
 from app.main import app
-from app.storage import conversations as storage
-from app.constants import CONVERSATIONS_DIR
+from app.storage import conversations_drive as storage
 from app.memory.index import add_chunk
 from app.memory.retrieve import retrieve
-
-
-@pytest.fixture(autouse=True)
-def clean_conversations():
-    import shutil
-
-    if CONVERSATIONS_DIR.exists():
-        shutil.rmtree(CONVERSATIONS_DIR)
-    yield
-    if CONVERSATIONS_DIR.exists():
-        shutil.rmtree(CONVERSATIONS_DIR)
+from tests.fake_drive import FakeDriveStorage
 
 
 @pytest.fixture()
-def client():
-    with TestClient(app) as c:
-        yield c
+def fake_drive():
+    return FakeDriveStorage()
+
+
+@pytest.fixture()
+def client(fake_drive):
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with TestClient(app) as c:
+            yield c
 
 
 def _fake_fetchall(vec_rows=None, fts_rows=None):
@@ -125,9 +120,9 @@ def test_retrieve_returns_empty_when_postgres_unavailable():
     assert hits == []
 
 
-def test_chat_yields_memory_hit_events(client):
+def test_chat_yields_memory_hit_events(client, fake_drive):
     """If retrieve() returns hits, /chat must stream memory_hit SSE events."""
-    storage.create_conversation(user_id="test-user-id", conv_id="active-conv")
+    storage.create_conversation(fake_drive, user_id="test-user-id", conv_id="active-conv")
 
     emb = [1.0] + [0.0] * 767
     vec_rows = [{"id": 1, "conv_id": "past-conv", "text": "Remember that Bob loves blue cheese."}]

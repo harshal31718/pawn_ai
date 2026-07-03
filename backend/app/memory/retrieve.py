@@ -4,8 +4,7 @@ Combines vector similarity search (pgvector `<=>`) and full-text search
 (`tsvector @@ plainto_tsquery`) via two Postgres SQL functions, then fuses the
 two ranked lists with Reciprocal Rank Fusion (RRF) in Python.
 
-SQL functions (defined in supabase/schema.sql — name kept for history, it's
-plain Postgres now):
+SQL functions (defined in postgres/schema.sql):
   - match_memory_chunks(query_embedding, match_user_id, exclude_conv_id, match_count)
   - search_memory_chunks(query_text, match_user_id, exclude_conv_id, match_count)
 

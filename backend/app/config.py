@@ -24,7 +24,7 @@ POSTGRES_DSN = read_secret("postgres_dsn")
 # the warm Kaggle kernel payload so it can rendezvous with PAWN over the
 # internet. Non-secret (just a URL); PostgREST itself has no host port and is
 # only reachable via this reverse-proxied path. Anonymous requests to it get
-# the restricted `pawn_anon` Postgres role (see supabase/schema.sql) — same
+# the restricted `pawn_anon` Postgres role (see postgres/schema.sql) — same
 # permissive-anon-on-two-tables posture as the prior Supabase setup, scoped
 # per-session JWT auth remains deferred (documented as mandatory before
 # multi-user, unchanged from Phase W).

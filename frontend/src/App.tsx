@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { AppContextProvider } from './contexts/AppContext'
 import LoginPage from './pages/LoginPage'
-import PassphraseGate from './pages/PassphraseGate'
 import Layout from './pages/Layout'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPageWrapper'
@@ -33,11 +32,7 @@ function AppRoutes() {
 function AuthGate() {
   const { isAuthenticated } = useAuth()
   if (!isAuthenticated) return <LoginPage />
-  return (
-    <PassphraseGate>
-      <AppRoutes />
-    </PassphraseGate>
-  )
+  return <AppRoutes />
 }
 
 export default function App() {

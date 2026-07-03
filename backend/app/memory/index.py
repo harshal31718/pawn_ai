@@ -7,7 +7,7 @@ embeddings) live in the `memory_chunks` table, scoped by `user_id`.
 All operations are exception-safe: if Postgres is unreachable or not yet
 configured, add_chunk() returns None (no-op) so chat continues to work without
 memory. The schema (table + SQL functions) is created once via the SQL at
-supabase/schema.sql (name kept for history; it's plain Postgres now).
+postgres/schema.sql.
 """
 
 import sys
