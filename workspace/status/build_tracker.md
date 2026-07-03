@@ -458,8 +458,10 @@ decision and coexistence rules).
   `dev.pawnai.duckdns.org`, isolated volume/secrets/port/redirect)
 - [x] **D.7 — `deployment.md` + prod compose** — root `deployment.md`
   (two-env staging-first runbook), `docker-compose.prod.yml` (parameterized,
-  `config`-validated for both envs), `.env.prod.example`/`.env.staging.example`,
-  `.gitignore` for the real env files. Unvalidated on a real VM until D.8.
+  `config`-validated AND live-boot-tested locally: fresh-volume schema init,
+  backend `/health`, PostgREST anon rendezvous 200 / denied-table 401),
+  `.env.prod.example`/`.env.staging.example`, `.gitignore` for the real env
+  files. Real-VM run behind Nginx/TLS/OAuth still pending D.8.
 - [ ] **D.8 — First live deploy (staging → promote → prod) + full verify checklist** (GATED)
 
 ---
