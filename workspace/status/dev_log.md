@@ -6,6 +6,18 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-04] — Phase D / D.6: pre-deploy gate executed (incl. live Drive-less 412)
+
+**Ran the full pre-deploy gate:** backend pytest **152 passed**; frontend `npm run build` clean; `docker compose config` valid for all three (dev compose + prod compose under both `.env.staging.example` and `.env.prod.example`). Live checks against the running dev backend (`:8001`): `GET /health` → 200, `GET /conversations` unauthenticated → 401.
+
+**Live-verified the Drive-mandatory 412 path** (the exact regression this plan targeted) without a Google account, by minting a valid JWT in-container (`app.core.jwt_utils.create_token`) for a user with no linked Drive and calling Drive-required endpoints: `GET /conversations` → **HTTP 412** and `GET /crypto/salt` → **HTTP 412**, both with `{"detail":"Connect your Google Drive in Settings to use PAWN.","code":"not_configured"}`. `/crypto/salt` is the very endpoint whose unhandled 500 started the Drive-mandatory plan — now a clean 412.
+
+**Outstanding:** only the Drive-**linked** happy path (create conversation → persists to Drive, BYOK chat), which needs a real OAuth/Drive token and can't be faked locally. It's covered by the D.8 staging verify checklist (`deployment.md §8`), so D.6 is effectively closed for gating.
+
+**Commit:** (pending — with this doc update)
+
+---
+
 ### [2026-07-04] — Phase D / D.7: deployment.md runbook + parameterized prod compose
 
 **Built:** Repo-root `deployment.md` — a full second-app-on-the-Enma-VM runbook covering **both** environments staging-first (hard rules, prerequisites, DuckDNS/OAuth setup, per-env clone→secrets→frontend build→compose up→Nginx block→certbot, promote step, prod repeat, verify checklists, Enma re-check, firewall table, release/rollback, known deferrals). New `docker-compose.prod.yml` — ONE parameterized file for both envs: an `--env-file` (`.env.prod` / `.env.staging`) sets `COMPOSE_PROJECT_NAME`, loopback ports, and the non-secret deployment URLs; Docker's project-name prefixing isolates volumes/networks (`pawn_postgres_data` vs `pawn-dev_postgres_data`). Backend loopback-only, default (non-reload) uvicorn CMD, `mem_limit`/`cpus` caps per hard rule 9; no frontend service (Nginx serves the static `dist`); postgrest on a loopback port for the Nginx `/pgrst/` rendezvous. New `.env.prod.example`/`.env.staging.example`; `.gitignore` now excludes the real `.env.prod`/`.env.staging`.

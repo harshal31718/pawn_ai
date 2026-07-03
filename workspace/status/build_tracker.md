@@ -451,9 +451,11 @@ decision and coexistence rules).
   `.gitattributes merge=ours` after sandbox test proved it broken for
   modify/delete — see plan_deployment.md D.5). Proven against a repo clone;
   first real run deferred to D.8. `dev`→`main` must always use the script.
-- [~] **D.6 — Pre-deploy test gate** — automated portion DONE (pytest 152 green,
-  `npm run build` clean, Drive-less 412 covered by suite); manual live-Drive
-  check with a real Google account outstanding.
+- [x] **D.6 — Pre-deploy test gate** — pytest 152 green, `npm run build` clean,
+  all 3 compose configs valid, and **live-verified the Drive-less 412 path** on
+  the running backend (`/conversations` + `/crypto/salt` with a no-Drive JWT →
+  412 `not_configured`, not 500). Only the Drive-LINKED happy path remains
+  (needs a real Google token) — covered by the D.8 staging verify (§8).
 - [ ] **D.6b — Staging stack on the shared VM** (`/opt/pawn-dev`, `dev` branch,
   `dev.pawnai.duckdns.org`, isolated volume/secrets/port/redirect)
 - [x] **D.7 — `deployment.md` + prod compose** — root `deployment.md`
@@ -507,9 +509,10 @@ as Phase 3.
   — stale, misleading name once Supabase was dropped in D.3/D.4; updated
   `docker-compose.yml`'s mounts and all doc references; verified a fresh
   Postgres volume still bootstraps correctly from the renamed files.
-- [~] **Phase 3 — Fold in D.5 + D.6** — D.5 done (`scripts/promote-to-main.sh`,
-  replacing the abandoned `merge=ours`); D.6 automated gate done (pytest 152 +
-  build clean), manual live-Drive check outstanding.
+- [x] **Phase 3 — Fold in D.5 + D.6** — D.5 done (`scripts/promote-to-main.sh`,
+  replacing the abandoned `merge=ours`); D.6 gate done (pytest 152 + build clean
+  + compose configs valid + live Drive-less 412 verified). Drive-linked happy
+  path deferred to D.8 staging verify.
 - [ ] **Phase 4 — Review, docs, commit** (in progress: docs updated + committing
   the promote script + plan updates; D.7/D.8 remain, gated)
 
