@@ -14,7 +14,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress)
-**Active step:** Phase D D.1 done (env-var-driven CORS/OAuth-redirect/CSP, defaults preserve local dev). D.2 in progress. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
+**Active step:** Phase D D.1 done (env-var-driven CORS/OAuth-redirect/CSP, defaults preserve local dev). D.2 done (frontend env URLs). D.3 (Supabase→Postgres migration) in progress. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
@@ -377,7 +377,13 @@ decision and coexistence rules).
   green. code-reviewer PASS (2 WARN fixed: test-pollution in reload teardown,
   CSP format comment). security-auditor PASS (1 WARN fixed: `*` wildcard guard
   added to CORS_ORIGINS parsing).
-- [ ] **D.2 — Fix frontend build-time API URL**
+- [x] **D.2 — Fix frontend build-time API URL**
+  `frontend/.env.example` port fixed 8000 → 8001 (matches actual dev backend
+  port). New committed `frontend/.env.production` with
+  `VITE_API_URL=https://pawnai.duckdns.org` — confirmed embedded correctly in
+  the production build bundle. `npm run build` clean. code-reviewer PASS (1
+  NOTE, pre-existing/out of scope). No security audit needed (no
+  secrets/auth/uploads touched).
 - [ ] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
 - [ ] **D.4 — Migrate Kaggle rendezvous → self-hosted PostgREST**
 - [ ] **D.5 — `.gitattributes` + branch hygiene**

@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-07-03
-Active step: Phase D (Production Deployment) in progress — D.1 done, D.2 in progress. Phase 3 P3-1 encryption FOUNDATION done (crypto module, session, passphrase gate, salt endpoint, vitest). Full encrypt/decrypt-on-write wiring DEFERRED (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) done.
+Active step: Phase D (Production Deployment) in progress — D.1, D.2 done. D.3 (Supabase→Postgres migration) in progress. Phase 3 P3-1 encryption FOUNDATION done (crypto module, session, passphrase gate, salt endpoint, vitest). Full encrypt/decrypt-on-write wiring DEFERRED (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) done.
 Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30). All Phase W, img2img, and Phase 6 UI work is now on main. imageLab branch deleted. Next: `workspace/implemented_phases/phase_8_encryption.md`.
 
 ---
@@ -40,6 +40,12 @@ Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30).
 - `backend/app/middleware/security.py` — CSP `connect-src` now interpolates `config.CSP_CONNECT_SRC`.
 - New `backend/tests/test_deployment_config.py` (6 tests: defaults, env-var override via `importlib.reload`, CORS allow/reject, CSP default, wildcard-rejection guard). 148 backend tests green; `docker compose config` still validates.
 - code-reviewer PASS (2 WARN fixed: a `finally`-block test-pollution bug where reloading `app.config` while overrides were still set left the module polluted for later tests; a doc comment clarifying `CSP_CONNECT_SRC` is space-separated, not comma-separated like `CORS_ORIGINS`). security-auditor PASS (1 WARN fixed: added the `*` wildcard guard).
+
+### Phase D — D.2: fix frontend build-time API URL (plan/plan_deployment.md) — 2026-07-03
+
+- `frontend/.env.example` — `VITE_API_URL` port fixed 8000 → 8001 (doc-only, matches actual dev backend port).
+- New committed `frontend/.env.production` — `VITE_API_URL=https://pawnai.duckdns.org`. Confirmed embedded correctly in the production build bundle (`vite build` output contains the domain string). Vite only loads `.env.production` in `production` mode (`vite build` default); local `npm run dev` reads `.env`/`.env.development`, so no local-dev regression.
+- `npm run build` clean. code-reviewer PASS (1 NOTE: `client.ts`'s hardcoded fallback default is still `:8000`, pre-existing and out of scope — only hit if `VITE_API_URL` is entirely absent).
 
 ### Mobile readiness (implemented_phases/phase_7_mobile_readiness.md) — 2026-07-03
 

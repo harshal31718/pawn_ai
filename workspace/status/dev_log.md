@@ -20,6 +20,18 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-03] — Phase D / D.2: fix frontend build-time API URL
+
+**Built:** `frontend/.env.example` port fixed 8000 → 8001 (doc-only, matches the actual dev backend port in `docker-compose.yml`). New committed `frontend/.env.production` with `VITE_API_URL=https://pawnai.duckdns.org`.
+
+**Decisions:** Committing `.env.production` is intentional per plan — it holds a public URL, not a secret, consistent with `.claude/rules/frontend.md`'s "non-secret env values are committed" convention.
+
+**Tests:** `npm run build` (tsc + vite build) clean; verified the built `dist/assets/*.js` bundle actually embeds `pawnai.duckdns.org` (confirms Vite picked up `.env.production`). code-reviewer PASS (1 NOTE, pre-existing, out of scope: `client.ts`'s hardcoded fallback is still `:8000`).
+
+**Commit:** (pending — committed alongside doc updates)
+
+---
+
 ### [2026-07-03] — Mobile readiness pass + Phase 3 P3-1 (encryption foundation)
 
 **Built (mobile, implemented_phases/phase_7_mobile_readiness.md — all 7 fixes):** user bubble `max-w-[70%] sm:max-w-[50%]` (Message.tsx); hamburger hit area `p-3.5 -m-2` (ChatPage.tsx); delete-confirm buttons `h-8 min-w-[48px] text-sm` (Sidebar.tsx); conversation search enabled + case-insensitive `title` filter with "No matching chats" empty state, and mini-sidebar search button now opens the sidebar (Sidebar.tsx); trace row `flex-wrap gap-y-1` (Message.tsx); code blocks `text-sm sm:text-xs` (Message.tsx); settings colour swatches `w-8 h-8` (SettingsPage.tsx).
