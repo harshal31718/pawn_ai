@@ -544,3 +544,17 @@ export async function deleteKey(provider: string): Promise<void> {
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
 }
+
+// --- Encryption salt --------------------------------------------------------
+// The (non-secret) PBKDF2 salt used to derive the browser-side encryption key.
+// Created server-side on first request; stable per user thereafter.
+export async function fetchSalt(): Promise<Uint8Array> {
+  const res = await fetch(`${BASE_URL}/crypto/salt`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  const { salt } = (await res.json()) as { salt: string }
+  const binary = atob(salt)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}

@@ -13,11 +13,11 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phase:** Phase 3 — WebCrypto Encryption (not started)
-**Active step:** None — ready to begin P3-1.
+**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (not started)
+**Active step:** Phase 3 P3-1 encryption FOUNDATION complete (crypto module + session + passphrase gate + backend salt endpoint + vitest). Full encrypt/decrypt-on-write wiring DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete. Phase D deployment not started.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
-**Plan:** `workspace/plan/plan_encryption.md`
+**Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
 
 > All prior phases (MU, W, imageLab A.0/A.1, Phase 6 UI) are merged and live on main.
 > imageLab Milestones A.0/A.1 are tracked in `workspace/implemented_phases/phase_5_kaggle_image.md`.
@@ -353,6 +353,26 @@ back. Image Lab only (chat composer deferred to Milestone B). Targets the top de
   Restructured settings page to 3 responsive vertical columns for desktop viewports. Refined responsiveness of BYOK API key inputs and vertical Kaggle input fields; grouped bubble color presets into horizontally scrollable carousels with aligned horizontal start offsets and chevron scroll buttons.
 - [x] **Settings page layout polish & API keys row alignment**
   Reverted global theme toggle to a single animated micro-interaction button. Refactored Settings Page columns (Appearance & Defaults) to stack controls, preventing boundary overflow on narrow column sizes. Corrected sliding theme selector background alignment calculation in ThemeToggle.tsx to handle gaps. Made detailed theme switcher responsive (hiding labels and adjusting padding on medium columns/viewports). Refactored Profile card rows (Display Name, Email, Actions) to stack vertically to avoid overflow. Restructured ApiKeysSection.tsx cards into separate rows for Title, Description, Status (Configured badge and Remove button placed at opposite corners with flex-wrap justification), and Inputs, converting credentials guide descriptions to interactive helper icons that toggle info boxes when clicked/tapped. Reduced outer spacing and card paddings (p-4 to p-3, gap-6 to gap-4, px-6 to px-4) across the Settings page. tsc zero errors; npm run build clean.
+
+---
+
+## Phase D — Production Deployment (Self-Hosted Postgres Migration + Oracle VPS)
+*Plan reference: `workspace/plan/plan_deployment.md`*
+*Branch: dev (merges → main)*
+
+Drop Supabase for a self-hosted Postgres+pgvector database, fix the three
+hardcoded-localhost prod blockers, and write a full `deployment.md` runbook
+for a second Oracle Cloud Always-Free ARM VM (separate account from the
+existing "Enma" deployment).
+
+- [ ] **D.1 — Kill hardcoded localhost values (CORS, OAuth redirect, CSP)**
+- [ ] **D.2 — Fix frontend build-time API URL**
+- [ ] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
+- [ ] **D.4 — Migrate Kaggle rendezvous → self-hosted PostgREST**
+- [ ] **D.5 — `.gitattributes` + branch hygiene**
+- [ ] **D.6 — Pre-deploy test gate**
+- [ ] **D.7 — Write `deployment.md` (VPS runbook)**
+- [ ] **D.8 — First live deploy + full verify checklist**
 
 ---
 

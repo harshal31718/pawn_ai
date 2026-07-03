@@ -165,11 +165,11 @@ Commit: `feat: WebCrypto AES-256-GCM — all personal Drive data encrypted in br
 
 ## Phase 3 Completion Checklist
 
-- [ ] Passphrase gate shown before conversations load (first time or after tab close)
-- [ ] PBKDF2 key derivation with 600K iterations and stored salt
-- [ ] All sensitive Drive files encrypted before upload
-- [ ] All reads decrypt correctly with the right passphrase
-- [ ] Wrong passphrase shows clear error (not a crash)
-- [ ] Key lives only in browser memory — not in localStorage, not sent to server
-- [ ] Drive files are opaque ciphertext when opened directly in Google Drive
-- [ ] Encryption/decryption tests pass in vitest
+- [x] Passphrase gate shown before conversations load (first time or after tab close)
+- [x] PBKDF2 key derivation with 600K iterations and stored salt
+- [ ] All sensitive Drive files encrypted before upload — DEFERRED: encrypting on every write / decrypting on every read is incompatible with the current server-side LLM streaming, RAG retrieval, per-chat summarization and auto-titling, which all read plaintext. Needs a product decision (client-side RAG/summaries, or accept no server-side memory) before wiring. Foundation (crypto module, session, salt endpoint, passphrase gate) is in place.
+- [ ] All reads decrypt correctly with the right passphrase — DEFERRED: encrypting on every write / decrypting on every read is incompatible with the current server-side LLM streaming, RAG retrieval, per-chat summarization and auto-titling, which all read plaintext. Needs a product decision (client-side RAG/summaries, or accept no server-side memory) before wiring. Foundation (crypto module, session, salt endpoint, passphrase gate) is in place.
+- [ ] Wrong passphrase shows clear error (not a crash) — DEFERRED: encrypting on every write / decrypting on every read is incompatible with the current server-side LLM streaming, RAG retrieval, per-chat summarization and auto-titling, which all read plaintext. Needs a product decision (client-side RAG/summaries, or accept no server-side memory) before wiring. Foundation (crypto module, session, salt endpoint, passphrase gate) is in place.
+- [x] Key lives only in browser memory — not in localStorage, not sent to server
+- [ ] Drive files are opaque ciphertext when opened directly in Google Drive — DEFERRED: encrypting on every write / decrypting on every read is incompatible with the current server-side LLM streaming, RAG retrieval, per-chat summarization and auto-titling, which all read plaintext. Needs a product decision (client-side RAG/summaries, or accept no server-side memory) before wiring. Foundation (crypto module, session, salt endpoint, passphrase gate) is in place.
+- [x] Encryption/decryption tests pass in vitest

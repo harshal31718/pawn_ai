@@ -1,8 +1,8 @@
 # PAWN — Current State
 
-Last updated: 2026-06-30
-Active step: Ready to begin Phase 3 — WebCrypto Encryption (P3-1).
-Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30). All Phase W, img2img, and Phase 6 UI work is now on main. imageLab branch deleted. Next: `workspace/plan/plan_encryption.md`.
+Last updated: 2026-07-03
+Active step: Phase 3 P3-1 encryption FOUNDATION done (crypto module, session, passphrase gate, salt endpoint, vitest). Full encrypt/decrypt-on-write wiring DEFERRED (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) done.
+Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30). All Phase W, img2img, and Phase 6 UI work is now on main. imageLab branch deleted. Next: `workspace/implemented_phases/phase_8_encryption.md`.
 
 ---
 
@@ -31,6 +31,19 @@ Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30).
 - Step R4: Frontend wiring — Integrated dynamic models dropdown from GET /registry/models, custom animated failover notices inline in chat, and provider badge indicators under assistant message bubbles.
 - Hotfix: Port/CORS configuration — `docker-compose.yml` pinned backend to `8001:8000` and frontend to `5174:5173` (range bindings caused backend to land on port 8001 while `VITE_API_URL` still pointed to 8000, a different host service). `VITE_API_URL` updated to `http://localhost:8001`. CORS `allow_origins` extended to include `http://localhost:5174`. `frontend/.env` created for local dev.
 - Step R5: UI visual overhaul + LAN access — CSS variable theme system (`@theme`/`:root`/`.dark`) with FOUC-prevention blocking script in `index.html`; `InteractiveGridBackground` animated canvas (184 lines); floating pill header islands with dark mode toggle; top gradient overlays trimmed to `h-16 via-theme-bg/25`; floating bottom input; `ChatWindow` smart scroll; `TracePanel.tsx` deleted — trace logic absorbed into `Message.tsx` as unified metadata row (provider left, "Agent Execution N steps" toggle right) with inline step/memory/model_call cards; `react-markdown` for assistant responses; collapsible long user messages; `MessageInput` auto-resize pill→card morph; `Sidebar` mini-sidebar `w-12`, click-to-expand column, fixed-width flicker-free transition, profile avatar, neutral delete colors, no close-on-thread-switch; registry `ModelResponse` extended with `providers` field; LAN IP `10.95.144.153` added to CORS + `VITE_API_URL`.
+
+### Mobile readiness (implemented_phases/phase_7_mobile_readiness.md) — 2026-07-03
+
+- All 7 fixes applied: user bubble `max-w-[70%] sm:max-w-[50%]`; hamburger hit area `p-3.5 -m-2`; delete-confirm buttons `h-8 min-w-[48px] text-sm`; conversation search enabled (case-insensitive title filter + "No matching chats" state; mini-sidebar search button opens the drawer); trace row `flex-wrap gap-y-1`; code blocks `text-sm sm:text-xs`; settings colour swatches `w-8 h-8`.
+
+### Phase 3 — P3-1 encryption foundation (implemented_phases/phase_8_encryption.md) — 2026-07-03
+
+- `frontend/src/crypto/index.ts` — WebCrypto AES-256-GCM, PBKDF2-SHA256 600K, non-exportable key, encrypt/decrypt + base64/salt helpers.
+- `frontend/src/crypto/session.ts` — per-tab key held in memory only (no storage); initSession/getKey/hasKey/clearSession.
+- `frontend/src/pages/PassphraseGate.tsx` — gate after auth/before app; fetches salt, derives key. Wired in `App.tsx`. `AuthContext.logout()` clears the key. `client.ts` gains `fetchSalt()`.
+- Backend `GET /crypto/salt` (`routes/crypto.py`, registered in `main.py`) — stores/returns the public PBKDF2 salt in `PAWN/.salt` on Drive (local fallback `<DATA_DIR>/salts/<user>.salt`), idempotent.
+- Tests: 7 vitest crypto tests + backend `tests/test_crypto.py` (3). `tsc -b` + `vite build` clean. `vitest` added as devDep.
+- DEFERRED: encrypting on every write / decrypting on every read — incompatible with current server-side LLM streaming, RAG, summarization, auto-titling (all read plaintext). Needs a product decision before wiring.
 
 ### Phase MU — Multi-User / Auth / BYOK / Drive (all code steps complete; awaiting manual Supabase/OAuth setup)
 

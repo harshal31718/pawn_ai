@@ -50,7 +50,7 @@ export default function MessageBubble({ message, isStreaming }: Props) {
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
-      <div className={`flex flex-col w-fit ${isUser ? 'max-w-[50%] ml-auto' : 'max-w-[85%] md:max-w-[75%] mr-auto'}`}>
+      <div className={`flex flex-col w-fit ${isUser ? 'max-w-[70%] sm:max-w-[50%] ml-auto' : 'max-w-[85%] md:max-w-[75%] mr-auto'}`}>
         <div
           ref={contentRef}
           className={`rounded-2xl px-4 py-2 text-sm leading-relaxed relative break-words break-all ${
@@ -96,14 +96,14 @@ export default function MessageBubble({ message, isStreaming }: Props) {
                   h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
                   h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
                   pre: ({ children }) => (
-                    <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-xs leading-normal">
+                    <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-sm sm:text-xs leading-normal">
                       {children}
                     </pre>
                   ),
                   code: ({ children, className }) => {
                     const isInline = !className
                     return isInline ? (
-                      <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-xs border border-theme-border/30">
+                      <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-sm sm:text-xs border border-theme-border/30">
                         {children}
                       </code>
                     ) : (
@@ -131,7 +131,7 @@ export default function MessageBubble({ message, isStreaming }: Props) {
         {!isUser && (message.viaProvider || (message.trace && message.trace.length > 0)) && (
           <div className="mt-1.5 flex flex-col w-full px-2 relative z-10">
             {/* Metadata Row */}
-            <div className="flex items-center justify-between text-[10px] text-theme-text-muted font-medium select-none">
+            <div className="flex flex-wrap items-center justify-between gap-y-1 text-[10px] text-theme-text-muted font-medium select-none">
               {/* Left: Provider badge */}
               <div>
                 {message.viaProvider && (

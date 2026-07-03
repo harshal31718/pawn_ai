@@ -38,7 +38,14 @@ export default function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const filteredConversations = query.trim()
+    ? conversations.filter((c) =>
+        (c.title || '').toLowerCase().includes(query.trim().toLowerCase())
+      )
+    : conversations
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -177,10 +184,11 @@ export default function Sidebar({
                 <input
                   type="text"
                   placeholder="Search chats"
-                  disabled
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
                   className="
                     w-full pl-9 pr-3 py-1.5 rounded-xl text-xs bg-theme-bg border border-theme-border/50 text-theme-text placeholder-theme-text-muted
-                    focus:outline-none cursor-not-allowed opacity-60 select-none
+                    focus:outline-none focus:border-theme-text-muted transition-colors
                   "
                 />
               </div>
@@ -188,14 +196,20 @@ export default function Sidebar({
 
             {/* Conversations List */}
             <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
-              {conversations.length === 0 ? (
+              {filteredConversations.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
                   <ChatBubbleIcon className="w-6 h-6 opacity-40" />
-                  <span className="text-xs">No conversations yet</span>
-                  <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
+                  {query.trim() ? (
+                    <span className="text-xs">No matching chats</span>
+                  ) : (
+                    <>
+                      <span className="text-xs">No conversations yet</span>
+                      <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
+                    </>
+                  )}
                 </div>
               ) : (
-                conversations.map((conv) => {
+                filteredConversations.map((conv) => {
                   const isActive = conv.id === activeId
                   const isEditing = conv.id === editingId
 
@@ -257,7 +271,7 @@ export default function Sidebar({
                             <button
                               type="button"
                               onClick={() => setDeleteConfirmId(null)}
-                              className="px-2 py-0.5 rounded border border-theme-border hover:bg-theme-surface-hover text-theme-text text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
+                              className="px-2 h-8 min-w-[48px] rounded border border-theme-border hover:bg-theme-surface-hover text-theme-text text-sm font-semibold transition-colors active:scale-95 cursor-pointer"
                             >
                               No
                             </button>
@@ -267,7 +281,7 @@ export default function Sidebar({
                                 onDelete(conv.id)
                                 setDeleteConfirmId(null)
                               }}
-                              className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-700 text-white border border-red-700 text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
+                              className="px-2 h-8 min-w-[48px] rounded bg-red-600 hover:bg-red-700 text-white border border-red-700 text-sm font-semibold transition-colors active:scale-95 cursor-pointer"
                             >
                               Yes
                             </button>
@@ -378,10 +392,13 @@ export default function Sidebar({
 
               {/* 4. Search Chat Option */}
               <button
-                disabled
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpen()
+                }}
                 className="
-                  p-2 rounded-xl text-theme-text-muted opacity-60 cursor-not-allowed flex items-center justify-center
+                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
+                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
                 "
                 title="Search chats"
               >

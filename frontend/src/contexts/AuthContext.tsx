@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
 import { BASE_URL } from '../api/client'
+import { clearSession } from '../crypto/session'
 
 export interface AuthUser {
   id: string
@@ -53,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
+    clearSession() // wipe the in-memory encryption key
     localStorage.removeItem('pawn-token')
     localStorage.removeItem('pawn-user')
     setToken(null)

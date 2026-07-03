@@ -6,6 +6,22 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-03] — Mobile readiness pass + Phase 3 P3-1 (encryption foundation)
+
+**Built (mobile, implemented_phases/phase_7_mobile_readiness.md — all 7 fixes):** user bubble `max-w-[70%] sm:max-w-[50%]` (Message.tsx); hamburger hit area `p-3.5 -m-2` (ChatPage.tsx); delete-confirm buttons `h-8 min-w-[48px] text-sm` (Sidebar.tsx); conversation search enabled + case-insensitive `title` filter with "No matching chats" empty state, and mini-sidebar search button now opens the sidebar (Sidebar.tsx); trace row `flex-wrap gap-y-1` (Message.tsx); code blocks `text-sm sm:text-xs` (Message.tsx); settings colour swatches `w-8 h-8` (SettingsPage.tsx).
+
+**Built (encryption, implemented_phases/phase_8_encryption.md P3-1):** `frontend/src/crypto/index.ts` (PBKDF2-SHA256 600K → AES-256-GCM, non-exportable key; encrypt/decrypt; base64 + salt helpers; EncryptedBlob), `frontend/src/crypto/session.ts` (per-tab key in memory only — initSession/getKey/hasKey/clearSession, self-roundtrip check), `frontend/src/pages/PassphraseGate.tsx` (gate shown after auth, before app; fetches salt, derives key), wired into `App.tsx` AuthGate; `client.ts` `fetchSalt()`; `AuthContext.logout()` calls `clearSession()`. Backend `GET /crypto/salt` (`routes/crypto.py`) stores/returns the public PBKDF2 salt in `PAWN/.salt` on Drive (local fallback `<DATA_DIR>/salts/<user>.salt`), created idempotently on first request; registered in `main.py`.
+
+**Decisions:** Full encrypt-on-write / decrypt-on-read of Drive payloads was NOT wired — it conflicts with the current server-side LLM streaming, RAG, summarization and auto-titling (all read plaintext). Delivered the reusable, tested foundation + gate instead and flagged the conflict in implemented_phases/phase_8_encryption.md for a product decision. Added `vitest` as a devDep.
+
+**Issues:** The Windows→Linux workspace mount intermittently truncated tool-written files; affected files were reconstructed deterministically from `git HEAD` via scripted replacements and re-verified.
+
+**Tests:** 7 vitest crypto tests pass (roundtrip, fresh-IV, wrong-passphrase, tampered-ciphertext, session lifecycle, cross-session). `tsc -b` clean, `vite build` clean. Backend `tests/test_crypto.py` added (3 tests — Drive create/reuse + local-fallback idempotency); run under Docker per project convention (backend deps not installed in this sandbox).
+
+**Commit:** (uncommitted)
+
+---
+
 ## Format
 
 ### [YYYY-MM-DD] — Step N: [Step Name]
