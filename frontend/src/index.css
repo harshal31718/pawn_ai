@@ -1,6 +1,43 @@
 @import "tailwindcss";
 
+/* Self-hosted (no third-party font CDN requests from the deployed site).
+   Fraunces: display serif for the wordmark/hero headline and brand accents.
+   IBM Plex Mono: technical labels, badges, eyebrows.
+   Instrument Sans: body copy, replacing the generic system-sans default. */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-var.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fraunces';
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/fraunces-600-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-mono-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/instrument-sans-var.woff2') format('woff2');
+}
+
 @theme {
+  --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces', ui-serif, Georgia, serif;
+  --font-accent-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
   --color-theme-bg: var(--theme-bg);
   --color-theme-surface: var(--theme-surface);
   --color-theme-surface-hover: var(--theme-surface-hover);
