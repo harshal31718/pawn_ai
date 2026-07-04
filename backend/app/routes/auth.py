@@ -14,8 +14,9 @@ from datetime import datetime, timezone
 
 # Google may return scopes in a different order, or drop a scope the user did not
 # grant via granular consent (e.g. drive.file). oauthlib treats any scope change as
-# an error by default; relax that so the token exchange completes. Drive access is
-# optional — when drive.file is absent the app falls back to local filesystem storage.
+# an error by default; relax that so the token exchange completes. Drive is mandatory
+# for storage — if drive.file was declined, the request later fails clearly via
+# require_drive_for_user()/412, not a silent fallback.
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 from fastapi import APIRouter, HTTPException, Request
@@ -201,7 +202,8 @@ async def drive_status(request: Request):
         return {"connected": False}
     try:
         await run_in_threadpool(drive.get_or_create_root)
-    except Exception:
+    except Exception as exc:
+        print(f"Drive status check failed for {payload['sub']}: {exc}", file=sys.stderr)
         return {"connected": False}
     return {"connected": True}
 

@@ -1,4 +1,5 @@
 import io
+import sys
 import uuid
 
 import pdfplumber
@@ -39,9 +40,10 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     try:
         file_bytes = await file.read()
     except Exception as exc:
+        print(f"Failed to read upload file {filename!r}: {exc}", file=sys.stderr)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to read upload file: {exc}",
+            detail="Failed to read upload file.",
         )
 
     text = ""
@@ -49,9 +51,10 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         try:
             text = await run_in_threadpool(_extract_pdf_text, file_bytes)
         except Exception as exc:
+            print(f"Failed to parse PDF document {filename!r}: {exc}", file=sys.stderr)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to parse PDF document: {exc}",
+                detail="Failed to parse PDF document.",
             )
     else:
         try:
@@ -60,9 +63,10 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
             try:
                 text = file_bytes.decode("latin-1").strip()
             except Exception as exc:
+                print(f"Failed to decode text file {filename!r}: {exc}", file=sys.stderr)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Failed to decode text file: {exc}",
+                    detail="Failed to decode text file.",
                 )
 
     if not text:

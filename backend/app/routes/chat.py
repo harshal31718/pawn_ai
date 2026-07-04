@@ -223,10 +223,10 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             success = True
         except ProviderError as exc:
             yield events.error_event(exc.message)
-        except Exception as exc:
+        except Exception:
             import traceback
             traceback.print_exc()
-            yield events.error_event(str(exc))
+            yield events.error_event("An unexpected error occurred while generating the response.")
             
         if active_provider == "unknown":
             try:

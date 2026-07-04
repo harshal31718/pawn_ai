@@ -118,14 +118,36 @@ must not touch, edit, or collide with any of it.
    `scripts/promote-to-main.sh` (normal merge + strip docs), NOT by
    `.gitattributes merge=ours` (tested — broken for the modify/delete case).
    See D.5.
-8. Two-environment deploy on the shared VM: a `dev`-branch **staging** stack
-   (`dev.pawnai.duckdns.org`) fully isolated from the `main`-branch **prod**
-   stack (`pawnai.duckdns.org`) — separate directory, compose project, DB
-   volume, secrets (incl. `encryption_secret`/`jwt_secret` — a shared
-   `encryption_secret` would let one env decrypt the other's BYOK keys),
-   ports, Nginx block, TLS cert, and OAuth redirect URI. Deploy order:
-   **staging first → validate → promote `dev`→`main` → prod.** Test only with
-   a throwaway Google account, never live user data.
+8. **Revised 2026-07-04 — no VM staging environment.** `dev` stays **local-only**
+   (your machine, existing local Docker Compose stack) — it is never deployed
+   to the shared VM. Only `main` is deployed, to `pawnai.duckdns.org`, as the
+   single environment on the VM. Rationale: PAWN currently has no real user
+   base (Google OAuth consent screen is in Testing mode with an explicit
+   allowlist, not public), so the blast radius of a bad prod deploy is small,
+   and the pre-deploy gate (D.6 — full pytest + build + live local Drive-less
+   412 check) already substitutes for a dedicated staging environment. Deploy
+   order is now: **verify locally (D.6) → promote `dev`→`main` via the script →
+   deploy `main` to prod → verify on prod.** The one accepted tradeoff: local
+   dev runs on x86, the VM is ARM64, so the first time any ARM-specific issue
+   surfaces is during the real prod deploy, not a disposable staging box —
+   acceptable at this stage given the small, allowlisted user base.
+   OAuth/Drive/accounts: local dev and prod **share the same Google OAuth
+   client** (both `http://localhost:8001/auth/callback` and
+   `https://pawnai.duckdns.org/auth/callback` registered as redirect URIs on
+   one client) and the same Google account(s) log into both — no separate
+   throwaway account needed. Database/secrets stay **separate**: local dev
+   keeps its own local Postgres container + its own `encryption_secret`/
+   `jwt_secret`/`postgres_password`; prod gets its own freshly-generated set
+   on the VM. This is deliberate, not an oversight — a shared DB would let
+   bugs from local `dev`-branch testing corrupt real prod data, and a shared
+   `encryption_secret` would let a compromised dev machine decrypt prod's
+   BYOK keys. (If you'd rather share the same Postgres instance too, flag it —
+   the safer default was chosen without an explicit answer from you.)
+   **Known pre-existing gap, not blocking this deploy:** the Postgres RLS on
+   `image_sessions`/`image_jobs` uses a permissive `pawn_anon` role, not
+   scoped per-user — already documented elsewhere (Phase W) as "mandatory to
+   fix before opening this app beyond the current allowlist," i.e. before
+   flipping the OAuth consent screen from Testing to Production/public.
 9. Database: self-hosted Postgres + pgvector, replacing Supabase, running as
    PAWN's own container(s) — never Enma's `timescaledb`. Kaggle kernel
    reaches it via a self-hosted **PostgREST** container, reverse proxied
@@ -136,7 +158,7 @@ must not touch, edit, or collide with any of it.
 
 ## Steps
 
-- [ ] **D.1 — Kill hardcoded localhost values (CORS, OAuth redirect, CSP)**
+- [x] **D.1 — Kill hardcoded localhost values (CORS, OAuth redirect, CSP)**
   `backend/app/main.py` CORS → `CORS_ORIGINS` env var. `backend/app/routes/auth.py`
   `_FRONTEND_URL`/`_REDIRECT_URI` → `FRONTEND_URL`/`OAUTH_REDIRECT_URI` env
   vars (highest risk — must exactly match the Google OAuth client's
@@ -144,12 +166,12 @@ must not touch, edit, or collide with any of it.
   `connect-src` → same prod origin. All default to today's localhost values
   so dev is unaffected.
 
-- [ ] **D.2 — Fix frontend build-time API URL**
+- [x] **D.2 — Fix frontend build-time API URL**
   Fix `frontend/.env.example` port (8000 → 8001, doc-only). Create
   `frontend/.env.production` (committed) with
   `VITE_API_URL=https://pawnai.duckdns.org`.
 
-- [ ] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
+- [x] **D.3 — Migrate Supabase → self-hosted Postgres + pgvector**
   Add `postgres` (pgvector image, named volume `pawn_postgres_data`) service
   to `docker-compose.yml`. Replace `backend/app/db/supabase_client.py` with
   a **psycopg3-based sync client** (connection pool via `psycopg_pool`) —
@@ -175,7 +197,7 @@ must not touch, edit, or collide with any of it.
   separate checklist items, committed together) — matches the plan's own
   pause point (after D.3+D.4, before D.7/D.8).
 
-- [ ] **D.4 — Migrate Kaggle rendezvous → self-hosted PostgREST**
+- [x] **D.4 — Migrate Kaggle rendezvous → self-hosted PostgREST**
   Add `postgrest` service (internal only, no host port) pointed at the new
   Postgres. Rewrite RLS policies on `image_sessions`/`image_jobs` under
   PostgREST's role-switching model (`pawn_anon` role replacing Supabase's
@@ -187,7 +209,7 @@ must not touch, edit, or collide with any of it.
   (HS256, mints the anon role's JWT for PostgREST — Supabase's newer
   `sb_publishable_*` keys don't apply here since this is self-hosted).
 
-- [ ] **D.5 — Clean-`main` promotion mechanism (`scripts/promote-to-main.sh`)**
+- [x] **D.5 — Clean-`main` promotion mechanism (`scripts/promote-to-main.sh`)**
   **Superseded mechanism:** the original `.gitattributes merge=ours` approach
   was tested and **does not work** for this goal — once docs are removed from
   `main`, `merge=ours` is never consulted for the resulting modify/delete, so
@@ -200,56 +222,40 @@ must not touch, edit, or collide with any of it.
   Proven clean and repeatable against a real repo clone (39 doc paths → 0,
   123 code files preserved). **Constraint:** `dev`→`main` must ALWAYS go through
   this script — a plain `git merge dev` re-adds the docs. The first real run
-  (which strips the current docs off `main`) happens at deploy time in the
-  staging-first flow (D.7), not as a standalone step.
+  (which strips the current docs off `main`) happens at deploy time in D.8,
+  not as a standalone step.
 
-- [ ] **D.6 — Pre-deploy test gate**
-  `pytest` full suite green (Supabase-mocking tests rewritten for Postgres),
-  `npm run build` clean. Local dry run: bring up `postgres`+`postgrest`+`backend`
-  via dev compose, confirm memory retrieval + BYOK key storage work
-  end-to-end before touching prod.
+- [x] **D.6 — Pre-deploy test gate**
+  `pytest` full suite green (152 passed), `npm run build` clean, all compose
+  configs valid, and the Drive-mandatory 412-when-unavailable path
+  live-verified against the running local stack. The Drive-**linked** happy
+  path (needs a real Google token) is deferred to D.8's live prod verify —
+  there is no separate staging environment to run it against first (see the
+  no-staging decision above).
 
-- [ ] **D.6b — Staging stack on the shared VM (deploy `dev` first)**
-  A second, fully isolated PAWN environment tracking `dev`, used to prove the
-  whole runbook before prod exists. Everything is distinct from prod and from
-  Enma: directory `/opt/pawn-dev`, compose project `pawn-dev`, DB volume
-  `pawn_dev_postgres_data`, loopback backend port `127.0.0.1:8002`, its own
-  freshly-generated secrets (**distinct `encryption_secret`, `jwt_secret`,
-  `postgres_password`** — a shared `encryption_secret` would let staging
-  decrypt prod's BYOK keys and vice-versa), Nginx block
-  `/etc/nginx/sites-available/pawn-dev` (`server_name dev.pawnai.duckdns.org`,
-  `proxy_pass http://127.0.0.1:8002`), its own certbot cert, and a dev OAuth
-  redirect (`https://dev.pawnai.duckdns.org/auth/callback`) — either a separate
-  Google OAuth client or that URI added to PAWN's existing client. New DuckDNS
-  subdomain `dev.pawnai.duckdns.org` → same reserved IP. Frontend built with
-  `VITE_API_URL=https://dev.pawnai.duckdns.org`. Same hard rules as prod
-  (never touch Enma; confirm Enma health before/after every Nginx/certbot
-  action; resource limits per hard rule 9). Test only with a throwaway Google
-  account. This is where the `dev`-branch code is exercised end-to-end before
-  `scripts/promote-to-main.sh` promotes it to `main` for the prod deploy.
-
-- [ ] **D.7 — Write `deployment.md` (VM runbook, second-app-on-Enma-VM style)**
-  Covers **both** environments (staging `/opt/pawn-dev` and prod `/opt/pawn`),
-  emphasizing staging-first. Prod section below; the staging section mirrors it
-  with the D.6b values (own dir/project/volume/port/secrets/subdomain/redirect).
-  Prerequisites checklist (new dedicated Gmail, new DuckDNS subdomains — both
-  `pawnai` and `dev.pawnai`, SSH
-  access to the *existing* `enma-production` VM — **no new Oracle account,
-  no new instance, no Security List changes needed** since 80/443 are
-  already open and PAWN's backend stays loopback-only) → confirm VM headroom
-  and that Enma is currently healthy (`docker compose -f
+- [x] **D.7 — Write `deployment.md` (VM runbook, second-app-on-Enma-VM style)**
+  ~~Originally scoped for two environments (staging + prod); simplified~~
+  **Revised 2026-07-04 — single environment (prod only).** Covers `/opt/pawn`
+  on the shared VM. Prerequisites checklist (dedicated Gmail, DuckDNS subdomain
+  `pawnai.duckdns.org`, SSH access to the *existing* `enma-production` VM —
+  **no new Oracle account, no new instance, no Security List changes needed**
+  since 80/443 are already open and PAWN's backend stays loopback-only) →
+  confirm VM headroom and that Enma is currently healthy (`docker compose -f
   /opt/enma/docker-compose.prod.yml ps`, `curl
-  https://enmaquant.duckdns.org/api/v1/health`) → external services (new
-  Google Cloud OAuth client + Drive API for PAWN, `pawnai.duckdns.org`
-  A-record pointed at the *same* reserved IP) → per-app setup on the shared VM
-  (`sudo mkdir -p /opt/pawn`, clone PAWN's repo there with its own deploy
-  key, own `docker-compose.prod.yml` with an explicit `name: pawn` project
-  name) → production secrets population for PAWN (file-based Docker
-  secrets, final list post-Supabase-removal, freshly generated — never
-  copied from Enma's `.env`) → frontend static build → new Nginx server
-  block at `/etc/nginx/sites-available/pawn` (`server_name
-  pawnai.duckdns.org`, `proxy_pass http://127.0.0.1:8001`), symlink
-  into `sites-enabled`, `sudo nginx -t` before every reload → TLS via
+  https://enmaquant.duckdns.org/api/v1/health`) → external services (Google
+  Cloud OAuth client + Drive API for PAWN — same client used for local dev,
+  with both `http://localhost:8001/auth/callback` and
+  `https://pawnai.duckdns.org/auth/callback` registered as redirect URIs;
+  `pawnai.duckdns.org` A-record pointed at the *same* reserved IP) → per-app
+  setup on the shared VM (`sudo mkdir -p /opt/pawn`, clone PAWN's repo there
+  with its own deploy key, own `docker-compose.prod.yml` with an explicit
+  `name: pawn` project name) → production secrets population for PAWN
+  (file-based Docker secrets, freshly generated and **distinct from local
+  dev's** — never copied from Enma's `.env` or from local dev's secrets) →
+  frontend static build → new Nginx server block at
+  `/etc/nginx/sites-available/pawn` (`server_name pawnai.duckdns.org`,
+  `proxy_pass http://127.0.0.1:8001`), symlink into `sites-enabled`,
+  `sudo nginx -t` before every reload → TLS via
   `sudo certbot --nginx -d pawnai.duckdns.org` (additive, doesn't
   touch Enma's cert) → `docker-compose.prod.yml` for PAWN (backend bound to
   `127.0.0.1:8001` only, `postgres` named volume `pawn_postgres_data`,
@@ -258,20 +264,24 @@ must not touch, edit, or collide with any of it.
   re-verify Enma's health endpoint and `docker compose ps` per hard rule 8)
   → release/update workflow (`git pull` + rebuild inside `/opt/pawn` only)
   → data safety notes (PAWN's named Postgres volume backup, never `down -v`
-  on `/opt/pawn`, and never touch Enma's volumes) → firewall/exposure
-  summary table covering both apps' ports side by side.
+  on `/opt/pawn`, and never touch Enma's volumes) → firewall/exposure summary
+  table. `deployment.md` itself still has the original two-environment text —
+  **needs a follow-up edit pass to strip the staging section** before D.8 is
+  executed; tracked as a note on D.8 below rather than reopening D.7.
 
-- [ ] **D.8 — First live deploy + full verify checklist (staging → prod)**
-  Execute `deployment.md` end to end on the shared VM, **staging first**:
-  1. **Staging** (`/opt/pawn-dev`, `dev` branch, `dev.pawnai.duckdns.org`) —
-     full verify: health endpoint, HTTPS with clean CSP console, full Google
-     OAuth round-trip, BYOK LLM SSE round-trip, one Kaggle image-gen job
-     exercising the new PostgREST rendezvous path (highest-risk item). This
-     proves the entire runbook against the non-critical env.
-  2. **Promote** `dev`→`main` via `scripts/promote-to-main.sh` (first run also
+- [ ] **D.8 — First live deploy + full verify checklist (prod only, no staging)**
+  Execute `deployment.md` end to end on the shared VM, single environment:
+  0. **Before starting:** trim the staging/`dev.pawnai` sections out of
+     `deployment.md` (D.7 produced the two-environment version; this project
+     no longer deploys `dev`) so the runbook that's actually followed matches
+     this simplified plan.
+  1. **Promote** `dev`→`main` via `scripts/promote-to-main.sh` (first run also
      strips docs off `main`); review, push `main`.
-  3. **Prod** (`/opt/pawn`, `main` branch, `pawnai.duckdns.org`) — repeat the
-     same full verify checklist.
+  2. **Prod** (`/opt/pawn`, `main` branch, `pawnai.duckdns.org`) — full verify:
+     health endpoint, HTTPS with clean CSP console, full Google OAuth
+     round-trip (this is also the first live check of the Drive-linked happy
+     path deferred from D.6), BYOK LLM SSE round-trip, one Kaggle image-gen
+     job exercising the PostgREST rendezvous path (highest-risk item).
   After each shared-VM action and at the end, confirm Enma is untouched: its
   health endpoint, `docker compose ps` status, and that `enmaquant.duckdns.org`
   still resolves and serves correctly.
@@ -286,10 +296,9 @@ must not touch, edit, or collide with any of it.
 - `supabase/schema.sql` → adapted for plain Postgres + PostgREST roles, then
   renamed to `postgres/schema.sql` (D.3, D.4)
 - `backend/app/config.py`, `backend/requirements.txt` (D.3)
-- `docker-compose.yml`, new `docker-compose.prod.yml` (prod) + staging compose
-  for `/opt/pawn-dev` (D.3, D.4, D.6b, D.7)
-- `frontend/.env.example`, `frontend/.env.production` (D.2), staging build with
-  `VITE_API_URL=https://dev.pawnai.duckdns.org` (D.6b)
+- `docker-compose.yml` (local dev), `docker-compose.prod.yml` (single prod
+  deploy, no staging variant) (D.3, D.4, D.7)
+- `frontend/.env.example`, `frontend/.env.production` (D.2)
 - New `scripts/promote-to-main.sh` (D.5) — replaces the abandoned `.gitattributes`
 - New `deployment.md` at repo root (D.7)
 
@@ -308,20 +317,11 @@ must not touch, edit, or collide with any of it.
 | OAuth client | Enma's Google Cloud project/client | PAWN's own new client |
 | Secrets | `/opt/enma/.env` | Docker secret files under `/opt/pawn`, freshly generated |
 
-The "PAWN uses" column above is **prod**. PAWN's **staging** stack is a second
-isolated environment on the same VM, distinct on every axis:
-
-| Thing | PAWN prod | PAWN staging |
-|---|---|---|
-| Branch | `main` (no docs) | `dev` (all docs) |
-| Directory | `/opt/pawn` | `/opt/pawn-dev` |
-| Compose project | `pawn` | `pawn-dev` |
-| Domain | `pawnai.duckdns.org` | `dev.pawnai.duckdns.org` (same IP) |
-| Nginx file | `/etc/nginx/sites-available/pawn` | `/etc/nginx/sites-available/pawn-dev` |
-| Backend port | `127.0.0.1:8001` | `127.0.0.1:8002` |
-| DB volume | `pawn_postgres_data` | `pawn_dev_postgres_data` |
-| Secrets (`encryption_secret`/`jwt_secret`/`postgres_password`) | prod set | **separate** set |
-| OAuth redirect | `…pawnai.…/auth/callback` | `…dev.pawnai.…/auth/callback` |
+The "PAWN uses" column above is the *only* deployed environment (prod). `dev`
+is never deployed to the VM — it stays local-only on your own machine, using
+its own local Postgres/secrets, and shares the Google OAuth client + account
+with prod (see the revised decision 8 above) rather than needing an isolated
+VM stack of its own.
 
 ## Working agreement
 

@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress) + Plan: Drive-Mandatory Storage (in progress, sequenced before D.5-D.8)
-**Active step:** Phase D D.1-D.4 done (see below). `workspace/plan/plan_drive_mandatory.md` Phase 1+2 done. Phase 3 IN PROGRESS: pytest loose end from Phase 2 closed (full suite 152 passed via pytest); **D.5 clean-`main` mechanism DONE** — `scripts/promote-to-main.sh` (normal merge + strip docs) replaces the abandoned `.gitattributes merge=ours` (tested — broken for modify/delete), proven against a real repo clone; first real run deferred to staging-first deploy (D.8). **D.6 automated gate DONE** (pytest green + `npm run build` clean + 412-when-Drive-unavailable covered); D.6 manual live-Drive check with a real Google account OUTSTANDING. `plan_deployment.md` amended for two-environment staging-first deploy (D.6b staging stack, staging-first D.8). Next: D.6 manual check → Phase 4 review/commit → D.7 (`deployment.md`) → D.8 (gated deploy). **Env decisions:** `dev`→VM staging (`dev.pawnai.duckdns.org`, isolated DB/secrets/ports/OAuth, test Google account only); `main`→prod (`pawnai.duckdns.org`), doc-free via promote script; BYOK keys stay in Postgres (not Drive); each env needs its own `encryption_secret`+Postgres. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
+**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress, only D.8 remains, GATED) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE)
+**Active step:** `plan_drive_mandatory.md` Phases 1-4 all done — Phase 4 (review/docs/commit) closed 2026-07-04: code-reviewer + security-auditor ran on the combined Phase 1-3 diff (a gap the plan called for but had never actually happened), both PASS with 4 WARN fixes applied (stale comment, missing error logging in `drive_factory.py`/`auth.py`, raw exception text leaking to clients in `upload.py`/`chat.py` genericized). 152 backend tests still green. **Deployment plan simplified 2026-07-04: dropped the two-environment staging-first deploy.** `dev` is now local-only, never deployed to the VM; only `main` deploys to prod (`pawnai.duckdns.org`) — D.6b (staging stack) is dropped, D.7/D.8 rewritten prod-only. Rationale: no public user base yet (Google OAuth consent screen is Testing-mode/allowlist-only), so D.6's local pre-deploy gate substitutes for a dedicated staging box. Local dev and prod **share one Google OAuth client** (both redirect URIs registered) and the same Google account for login; database/secrets stay **separate** per environment. Accepted tradeoff: local dev is x86, the VM is ARM64, so first-ever ARM issues surface at the real prod deploy. **Remaining before D.8:** strip the now-stale staging section out of `deployment.md` (currently still two-env text), then execute: promote `dev`→`main` → deploy to `/opt/pawn` → full verify (this is also where the Drive-linked OAuth happy path, untestable locally, finally gets exercised). **Env decisions:** `main`→prod (`pawnai.duckdns.org`), doc-free via promote script; BYOK keys stay in Postgres (not Drive); a known pre-existing gap (permissive `pawn_anon` RLS on image jobs, not scoped per-user) must close before ever flipping the OAuth consent screen from Testing to public. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
@@ -456,15 +456,35 @@ decision and coexistence rules).
   the running backend (`/conversations` + `/crypto/salt` with a no-Drive JWT →
   412 `not_configured`, not 500). Only the Drive-LINKED happy path remains
   (needs a real Google token) — covered by the D.8 staging verify (§8).
-- [ ] **D.6b — Staging stack on the shared VM** (`/opt/pawn-dev`, `dev` branch,
-  `dev.pawnai.duckdns.org`, isolated volume/secrets/port/redirect)
+- [x] **D.6b — DROPPED (2026-07-04, no VM staging environment).** Decision
+  reversed: `dev` stays local-only (never deployed to the VM); only `main`
+  goes to prod (`pawnai.duckdns.org`). D.6's local pre-deploy gate substitutes
+  for a dedicated staging box — acceptable given PAWN currently has no public
+  user base (Google OAuth consent screen is Testing-mode, allowlist only).
+  Local dev and prod now **share the same Google OAuth client** (both
+  `localhost` and `pawnai.duckdns.org` redirect URIs registered) and the same
+  Google account(s) for login; database/secrets stay **separate** per
+  environment (own local Postgres for dev, own Postgres+secrets on the VM for
+  prod) so a bad local test can't touch real prod data. See
+  `plan_deployment.md` decision 8 for full rationale/tradeoffs (accepted:
+  local dev is x86, the VM is ARM64, so ARM-specific issues surface at the
+  real prod deploy, not a disposable staging box).
 - [x] **D.7 — `deployment.md` + prod compose** — root `deployment.md`
-  (two-env staging-first runbook), `docker-compose.prod.yml` (parameterized,
-  `config`-validated AND live-boot-tested locally: fresh-volume schema init,
-  backend `/health`, PostgREST anon rendezvous 200 / denied-table 401),
-  `.env.prod.example`/`.env.staging.example`, `.gitignore` for the real env
-  files. Real-VM run behind Nginx/TLS/OAuth still pending D.8.
-- [ ] **D.8 — First live deploy (staging → promote → prod) + full verify checklist** (GATED)
+  (originally a two-env staging-first runbook; **now simplified to prod-only**
+  per the D.6b decision above — `deployment.md`'s own text still has the old
+  staging section and needs a follow-up strip pass before D.8 is run),
+  `docker-compose.prod.yml` (parameterized, `config`-validated AND
+  live-boot-tested locally: fresh-volume schema init, backend `/health`,
+  PostgREST anon rendezvous 200 / denied-table 401), `.env.prod.example`/
+  `.env.staging.example` (staging example now unused, harmless to keep),
+  `.gitignore` for the real env files. Real-VM run behind Nginx/TLS/OAuth
+  still pending D.8.
+- [ ] **D.8 — First live deploy (prod only, no staging) + full verify checklist**
+  (GATED). Order: strip staging section from `deployment.md` → promote
+  `dev`→`main` via `scripts/promote-to-main.sh` → deploy `main` to
+  `/opt/pawn` on the VM → full verify (health, HTTPS/CSP, Google OAuth +
+  Drive-linked happy path — the one thing D.6 couldn't test locally, BYOK LLM
+  round-trip, one Kaggle image-gen job) → confirm Enma untouched.
 
 ---
 
@@ -513,8 +533,23 @@ as Phase 3.
   replacing the abandoned `merge=ours`); D.6 gate done (pytest 152 + build clean
   + compose configs valid + live Drive-less 412 verified). Drive-linked happy
   path deferred to D.8 staging verify.
-- [ ] **Phase 4 — Review, docs, commit** (in progress: docs updated + committing
-  the promote script + plan updates; D.7/D.8 remain, gated)
+- [x] **Phase 4 — Review, docs, commit** — code-reviewer + security-auditor ran
+  on the full combined Phase 1-3 diff (this had never actually happened for
+  Phase 1+2 despite the plan calling for it — closed that gap). Both PASS, 0
+  critical. 4 WARN-level findings fixed: stale "Drive is optional/local
+  fallback" comment in `routes/auth.py` corrected to match the actual
+  Drive-mandatory architecture; `drive_factory.py`'s `_build_drive_for_user`
+  and `/auth/drive/status` were silently swallowing exceptions with no
+  logging (inconsistent with every other fail-soft path in this same plan) —
+  added stderr logging to both; `routes/upload.py` and `routes/chat.py`'s SSE
+  catch-all were returning raw exception text to the client — genericized to
+  fixed messages with server-side stderr logging instead. 152 backend tests
+  still green after the fixes. `plan_deployment.md` D.1-D.7 checkboxes synced
+  to `[x]` (previously out of sync with this file). D.5/D.6/D.7 build-validator
+  checks (deleted storage files, no leftover local-storage branches, compose
+  config valid) independently re-verified. This also folded in the
+  D.6b/no-staging simplification decision (see above) and its OAuth/DB
+  sharing model between local dev and prod.
 - [x] **Follow-up — "Connect Google Drive" control in Settings** — backend
   `GET /auth/drive/status` (real Drive-call check, not token-existence) +
   `ApiKeysSection` Drive row (first in the card, Connected/Not-connected badge,

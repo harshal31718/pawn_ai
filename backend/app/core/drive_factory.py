@@ -17,6 +17,7 @@ Usage in a FastAPI route:
     result = call_drive(some_drive_backed_function, drive, ...)
 """
 
+import sys
 import threading
 import time
 from typing import Optional
@@ -110,13 +111,15 @@ def _build_drive_for_user(user_id: str) -> Optional[DriveStorage]:
         )
         if not row:
             return None
-    except Exception:
+    except Exception as exc:
+        print(f"Drive token lookup failed for {user_id}: {exc}", file=sys.stderr)
         return None
 
     try:
         access_token = decrypt(row["access_token_enc"])
         refresh_token = decrypt(row["refresh_token_enc"])
-    except Exception:
+    except Exception as exc:
+        print(f"Drive token decrypt failed for {user_id}: {exc}", file=sys.stderr)
         return None
     # psycopg parses a `timestamptz` column into a native tz-aware datetime, not
     # a string — DriveStorage expects an ISO string (matching what auth.py writes
