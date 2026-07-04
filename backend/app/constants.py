@@ -41,6 +41,11 @@ KAGGLE_SESSION_SLUG = "pawn-session-poc"
 KAGGLE_SESSION_POLL_INTERVAL_SECONDS = 3
 # A 'ready' session whose heartbeat is older than this is considered dead.
 IMAGE_SESSION_HEARTBEAT_STALE_SECONDS = 90  # 3× typical FLUX inference time (~30–90 s)
+# A session still stuck in starting/installing/loading_model past this long is
+# considered dead (no heartbeat exists yet during this phase to check instead).
+# Cold-start cost is deps install + multi-GB model weight download/load, which
+# can run well past a few minutes depending on Kaggle's network/GPU queue.
+IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS = 900
 # Hard backstop on a session's duration (Kaggle's max batch run-time guardrail).
 IMAGE_SESSION_MAX_DURATION_MINUTES = 120
 # Backend/UI poll cadence while waiting for a durable job to finish.
