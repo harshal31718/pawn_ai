@@ -4,27 +4,24 @@ from unittest.mock import patch
 from starlette.testclient import TestClient
 
 from app.main import app
-from app.storage import conversations as storage
-from app.constants import CONVERSATIONS_DIR
+from app.storage import conversations_drive as storage
 from app.memory.summarize import summarize_history
+from tests.fake_drive import FakeDriveStorage
 
 # Must match conftest.TEST_USER_ID
 TEST_USER_ID = "test-user-id"
 
 
 @pytest.fixture()
-def client():
-    user_dir = CONVERSATIONS_DIR / TEST_USER_ID
-    if user_dir.exists():
-        import shutil
-        shutil.rmtree(user_dir)
+def fake_drive():
+    return FakeDriveStorage()
 
-    with TestClient(app) as c:
-        yield c
 
-    if user_dir.exists():
-        import shutil
-        shutil.rmtree(user_dir)
+@pytest.fixture()
+def client(fake_drive):
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with TestClient(app) as c:
+            yield c
 
 
 def test_summarize_history_direct():
@@ -39,16 +36,16 @@ def test_summarize_history_direct():
         assert summary == "Summary bullets here."
 
 
-def test_chat_truncates_context_to_last_10_messages(client):
+def test_chat_truncates_context_to_last_10_messages(client, fake_drive):
     """When loading history, context must truncate to the last 10 messages."""
-    meta = storage.create_conversation(user_id=TEST_USER_ID, title="Long Chat")
+    meta = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="Long Chat")
     conv_id = meta["id"]
 
     history = []
     for i in range(6):
         history.append({"role": "user", "content": f"User prompt {i}"})
         history.append({"role": "assistant", "content": f"Assistant response {i}"})
-    storage.append_messages(conv_id, history, user_id=TEST_USER_ID)
+    storage.append_messages(fake_drive, conv_id, history)
 
     captured_messages = []
 
@@ -73,13 +70,13 @@ def test_chat_truncates_context_to_last_10_messages(client):
     assert captured_messages[-2]["content"] == "Latest turn?"
 
 
-def test_chat_prepends_summary_context(client):
+def test_chat_prepends_summary_context(client, fake_drive):
     """If summary.md exists for a conversation, it must be injected as a system prompt."""
-    meta = storage.create_conversation(user_id=TEST_USER_ID, title="Chat with Summary")
+    meta = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="Chat with Summary")
     conv_id = meta["id"]
 
-    storage.save_summary(conv_id, "Summary text showing user name is Bob.", user_id=TEST_USER_ID)
-    storage.append_messages(conv_id, [{"role": "user", "content": "hi"}], user_id=TEST_USER_ID)
+    storage.save_summary(fake_drive, conv_id, "Summary text showing user name is Bob.")
+    storage.append_messages(fake_drive, conv_id, [{"role": "user", "content": "hi"}])
 
     captured_messages = []
 
@@ -106,16 +103,16 @@ def test_chat_prepends_summary_context(client):
     assert captured_messages[3]["content"] == "What is my name?"
 
 
-def test_chat_triggers_summarize_background_task_at_20_messages(client):
+def test_chat_triggers_summarize_background_task_at_20_messages(client, fake_drive):
     """Summarization task must be enqueued when message count becomes a multiple of 20."""
-    meta = storage.create_conversation(user_id=TEST_USER_ID, title="Threshold Chat")
+    meta = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="Threshold Chat")
     conv_id = meta["id"]
 
     history = []
     for i in range(9):
         history.append({"role": "user", "content": f"prompt {i}"})
         history.append({"role": "assistant", "content": f"response {i}"})
-    storage.append_messages(conv_id, history, user_id=TEST_USER_ID)
+    storage.append_messages(fake_drive, conv_id, history)
 
     async def mock_stream(*args, **kwargs):
         yield "AI reply"
@@ -134,3 +131,14 @@ def test_chat_triggers_summarize_background_task_at_20_messages(client):
 
             mock_summarize.assert_called_once()
             assert mock_summarize.call_args[0][0] == conv_id
+
+
+def test_summarize_conversation_task_skips_when_drive_unavailable():
+    """No local fallback anymore — the background task must silently skip
+    (not crash) when Drive isn't available for the user."""
+    from app.memory.summarize import summarize_conversation_task
+    import asyncio
+
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=None):
+        # Must not raise.
+        asyncio.run(summarize_conversation_task("conv-x", user_id=TEST_USER_ID))

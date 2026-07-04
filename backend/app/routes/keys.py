@@ -1,7 +1,7 @@
 """BYOK provider API key routes.
 
 All routes are auth-protected by AuthMiddleware (request.state.user_id is set).
-Keys are stored encrypted (AES-256-GCM) in Supabase and are never returned to
+Keys are stored encrypted (AES-256-GCM) in Postgres and are never returned to
 the client — GET /keys returns only the list of providers a user has configured.
 """
 

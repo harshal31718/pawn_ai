@@ -17,6 +17,18 @@ export async function healthCheck(): Promise<{ status: string }> {
 }
 
 /**
+ * Whether the current user's Google Drive is linked AND usable. The backend
+ * makes a real (cheap) Drive call, so this returns false for a login that never
+ * granted the drive.file scope — not just when no token exists.
+ */
+export async function getDriveStatus(): Promise<{ connected: boolean }> {
+  const res = await fetch(`${BASE_URL}/auth/drive/status`, { headers: { ...authHeaders() } })
+  if (handle401(res)) throw new Error('unauthorized')
+  if (!res.ok) throw new Error(`Drive status failed: ${res.status}`)
+  return res.json()
+}
+
+/**
  * Milestone A.0 — Kaggle round-trip proof. Sends an integer to the backend,
  * which runs the `findCube` kernel on the user's Kaggle account and returns the
  * cube. Proves the deploy→push→poll→output transport before any image model.
@@ -543,4 +555,18 @@ export async function deleteKey(provider: string): Promise<void> {
   })
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+// --- Encryption salt --------------------------------------------------------
+// The (non-secret) PBKDF2 salt used to derive the browser-side encryption key.
+// Created server-side on first request; stable per user thereafter.
+export async function fetchSalt(): Promise<Uint8Array> {
+  const res = await fetch(`${BASE_URL}/crypto/salt`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  const { salt } = (await res.json()) as { salt: string }
+  const binary = atob(salt)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
 }

@@ -1,6 +1,8 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from app.config import CSP_CONNECT_SRC
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -12,6 +14,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
-            "connect-src 'self' http://localhost:8000"
+            f"connect-src 'self' {CSP_CONNECT_SRC}"
         )
         return response

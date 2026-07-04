@@ -18,6 +18,11 @@ dist/
 .vite/
 .env
 
+# production/staging deploy env files (non-secret URLs, but env-specific; keep
+# only the *.example versions in git)
+.env.prod
+.env.staging
+
 # claude local settings
 .claude/settings.local.json
 

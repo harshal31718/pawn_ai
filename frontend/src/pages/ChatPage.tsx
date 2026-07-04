@@ -330,7 +330,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={() => setIsSidebarOpen(true)}
-              className="md:hidden px-0.5 py-0 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text focus:outline-none transition-colors"
+              className="md:hidden p-3.5 -m-2 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text focus:outline-none transition-colors"
               title="Open sidebar"
             >
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">

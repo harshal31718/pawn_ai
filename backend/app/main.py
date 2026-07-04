@@ -5,6 +5,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.middleware.auth import AuthMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
 from app.middleware.timeout import RequestTimeoutMiddleware
+from app.config import CORS_ORIGINS
 from app.exceptions import (
     ProviderError,
     NoEndpointError,
@@ -22,6 +23,7 @@ from app.routes.conversations import router as conversations_router
 from app.routes.registry import router as registry_router
 from app.routes.keys import router as keys_router
 from app.routes.generate import router as generate_router
+from app.routes.crypto import router as crypto_router
 from app.app_initializer import initialize_managers
 from app.core.llm_core import close_client
 
@@ -53,12 +55,13 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(RequestTimeoutMiddleware, timeout=45, sse_paths=["/chat", "/generate"])
 app.add_middleware(SecurityHeadersMiddleware)
+_cors_origins = [origin.strip() for origin in CORS_ORIGINS.split(",") if origin.strip()]
+if "*" in _cors_origins:
+    raise ValueError("CORS_ORIGINS must not contain '*' — list explicit allowed origins")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-    ],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -71,6 +74,7 @@ app.include_router(conversations_router)
 app.include_router(registry_router)
 app.include_router(keys_router)
 app.include_router(generate_router)
+app.include_router(crypto_router)
 
 
 

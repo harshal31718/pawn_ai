@@ -98,7 +98,7 @@ function BubbleColorRow({
             key={preset.id} type="button"
             onClick={() => onChange(selectedId === preset.id ? '' : preset.id)}
             title={preset.label}
-            className={`w-5 h-5 rounded-full border-2 transition-all shrink-0 ${selectedId === preset.id ? 'border-blue-500 scale-110 shadow-sm' : 'border-theme-border hover:border-theme-text-muted'
+            className={`w-8 h-8 rounded-full border-2 transition-all shrink-0 ${selectedId === preset.id ? 'border-blue-500 scale-110 shadow-sm' : 'border-theme-border hover:border-theme-text-muted'
               }`}
             style={{ backgroundColor: preset.bg }}
           />
@@ -107,7 +107,7 @@ function BubbleColorRow({
       <button
         type="button"
         onClick={scroll}
-        className="w-5 h-5 flex items-center justify-center rounded-full bg-theme-bg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover shrink-0 transition-colors focus:outline-none"
+        className="w-8 h-8 flex items-center justify-center rounded-full bg-theme-bg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover shrink-0 transition-colors focus:outline-none"
         title="Scroll colors"
       >
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-3 h-3">

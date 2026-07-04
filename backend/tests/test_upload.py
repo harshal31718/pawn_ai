@@ -4,21 +4,26 @@ from unittest.mock import patch, MagicMock
 from starlette.testclient import TestClient
 
 from app.main import app
-from app.storage.documents import store_doc, clear_docs, load_doc
+from app.storage import documents_drive
+from tests.fake_drive import FakeDriveStorage
 
 # Must match conftest.TEST_USER_ID
 TEST_USER_ID = "test-user-id"
 
 
 @pytest.fixture()
-def client():
-    clear_docs()
-    with TestClient(app) as c:
-        yield c
-    clear_docs()
+def fake_drive():
+    return FakeDriveStorage()
 
 
-def test_upload_text_file(client):
+@pytest.fixture()
+def client(fake_drive):
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with TestClient(app) as c:
+            yield c
+
+
+def test_upload_text_file(client, fake_drive):
     """Uploading a valid text file should successfully extract text and store it."""
     file_content = b"This is some sample document text.\nLine 2 content."
     response = client.post(
@@ -31,11 +36,11 @@ def test_upload_text_file(client):
     assert data["filename"] == "test.txt"
     assert data["char_count"] == len(file_content.decode("utf-8").strip())
 
-    stored_text = load_doc(data["doc_id"], user_id=TEST_USER_ID)
+    stored_text = documents_drive.load_doc(data["doc_id"], fake_drive)
     assert stored_text == "This is some sample document text.\nLine 2 content."
 
 
-def test_upload_pdf_file(client):
+def test_upload_pdf_file(client, fake_drive):
     """Uploading a PDF should call pdfplumber and store the extracted text."""
     pdf_text = "This text comes from a PDF page."
     mock_page = MagicMock()
@@ -53,7 +58,7 @@ def test_upload_pdf_file(client):
         data = response.json()
         assert "doc_id" in data
         assert data["filename"] == "document.pdf"
-        stored = load_doc(data["doc_id"], user_id=TEST_USER_ID)
+        stored = documents_drive.load_doc(data["doc_id"], fake_drive)
         assert stored == pdf_text
 
 
@@ -75,11 +80,24 @@ def test_upload_empty_file(client):
     assert "contains no readable text" in response.json()["detail"]
 
 
-def test_chat_injects_document_as_system_message(client):
+def test_upload_requires_drive_when_unavailable():
+    """No local fallback anymore — if Drive isn't linked, the request must
+    fail clearly (412 not_configured) instead of silently degrading."""
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=None):
+        with TestClient(app) as c:
+            resp = c.post(
+                "/upload",
+                files={"file": ("test.txt", b"some text", "text/plain")},
+            )
+    assert resp.status_code == 412
+    assert resp.json()["code"] == "not_configured"
+
+
+def test_chat_injects_document_as_system_message(client, fake_drive):
     """If a valid doc_id is sent to /chat, the document text must be prepended as a system message."""
     doc_id = "test-doc-123"
     doc_text = "Secrets of the universe are here."
-    store_doc(doc_id, doc_text, user_id=TEST_USER_ID)
+    documents_drive.store_doc(doc_id, doc_text, fake_drive)
 
     captured_messages = []
 

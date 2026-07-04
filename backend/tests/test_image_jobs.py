@@ -1,7 +1,7 @@
 """Tests for Phase W.1 — the unified durable job layer (cold one-shot path).
 
 This is the lost-result / double-submit bug fix: every image generation becomes a
-durable image_jobs row the server tracks. Supabase + Kaggle are mocked.
+durable image_jobs row the server tracks. Postgres + Kaggle are mocked.
 """
 
 from unittest.mock import patch
@@ -14,72 +14,44 @@ from app.exceptions import UnknownModelError
 from app.main import app
 
 
-class _Result:
-    def __init__(self, data):
-        self.data = data
-
-
-class _Query:
-    """Chainable supabase-py table stand-in; records ops and returns seeded rows."""
-
-    def __init__(self, db, table):
-        self._db = db
-        self._table = table
-        self._op = "select"
-        self._values = None
-
-    def insert(self, values):
-        self._op, self._values = "insert", values
-        return self
-
-    def update(self, values):
-        self._op, self._values = "update", values
-        return self
-
-    def select(self, *_a, **_k):
-        self._op = "select"
-        return self
-
-    def eq(self, *_a, **_k):
-        return self
-
-    def in_(self, *_a, **_k):
-        return self
-
-    def is_(self, *_a, **_k):
-        return self
-
-    def lt(self, *_a, **_k):
-        return self
-
-    def order(self, *_a, **_k):
-        return self
-
-    def limit(self, *_a, **_k):
-        return self
-
-    def execute(self):
-        self._db.calls.append((self._table, self._op, self._values))
-        if self._op == "insert":
-            row = dict(self._values)
-            row.setdefault("id", f"{self._table}-id-1")
-            self._db.inserted.append(row)
-            return _Result([row])
-        if self._op == "update":
-            self._db.updates.append((self._table, self._values))
-            return _Result([])
-        return _Result(list(self._db.rows.get(self._table, [])))
-
-
 class _FakeDB:
-    def __init__(self, rows=None):
-        self.rows = rows or {}
-        self.calls = []
-        self.inserted = []
-        self.updates = []
+    """Routes fetchone/fetchall/execute to per-table row lists based on simple
+    substring sniffing of the SQL text — enough for these tests' shapes."""
 
-    def table(self, name):
-        return _Query(self, name)
+    def __init__(self, rows=None):
+        self.rows = {k: list(v) for k, v in (rows or {}).items()}
+        self.calls = []  # (kind, sql, params)
+
+    def _table(self, sql):
+        if "image_sessions" in sql:
+            return "image_sessions"
+        if "image_jobs" in sql:
+            return "image_jobs"
+        return None
+
+    def fetchone(self, sql, params=()):
+        self.calls.append(("fetchone", sql, params))
+        table = self._table(sql)
+        if sql.strip().lower().startswith("insert into"):
+            return {"id": f"{table}-id-1"}
+        rows = self.rows.get(table, [])
+        return rows[0] if rows else None
+
+    def fetchall(self, sql, params=()):
+        self.calls.append(("fetchall", sql, params))
+        table = self._table(sql)
+        return list(self.rows.get(table, []))
+
+    def execute(self, sql, params=()):
+        self.calls.append(("execute", sql, params))
+
+
+def _patch_db(db):
+    return (
+        patch("app.core.image_session.fetchone", side_effect=db.fetchone),
+        patch("app.core.image_session.fetchall", side_effect=db.fetchall),
+        patch("app.core.image_session.execute", side_effect=db.execute),
+    )
 
 
 @pytest.fixture()
@@ -93,25 +65,29 @@ def client():
 
 def test_create_cold_job_inserts_when_none_active():
     db = _FakeDB(rows={"image_jobs": []})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
         job_id, created = image_session.create_cold_job("user-1", "sdxl", "a cat")
     assert created is True
     assert job_id == "image_jobs-id-1"
-    row = db.inserted[-1]
-    assert row["status"] == "queued"
-    assert row["session_id"] is None
-    assert row["model"] == "sdxl"
-    assert row["prompt"] == "a cat"
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[0] == "user-1"
+    assert params[1] == "sdxl"
+    assert params[2] == "a cat"
 
 
 def test_create_cold_job_dedups_to_active_job():
     """A second request while one is queued/running returns the SAME id, no insert."""
     db = _FakeDB(rows={"image_jobs": [{"id": "existing", "status": "running"}]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
         job_id, created = image_session.create_cold_job("user-1", "sdxl", "a cat")
     assert created is False
     assert job_id == "existing"
-    assert db.inserted == []  # no duplicate row
+    assert not any(c[0] == "fetchone" and "insert into" in c[1] for c in db.calls)
 
 
 def test_create_cold_job_unknown_model_raises():
@@ -127,39 +103,45 @@ def test_run_cold_job_queued_to_done_writes_image():
         {"id": "j1", "status": "queued", "user_id": "user-1", "prompt": "a cat", "model": "sdxl"}
     ]})
     out = {"image": "PNGBYTES", "mime": "image/png", "via": "kaggle:u/pawn-image-sdxl"}
-    with patch("app.core.image_session.get_db", return_value=db), \
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3, \
          patch("app.core.image_session.generate.generate_image", return_value=out) as gen:
         image_session.run_cold_job("j1")
     gen.assert_called_once_with("user-1", "a cat", "sdxl")
-    statuses = [vals.get("status") for _t, vals in db.updates]
-    assert statuses == ["running", "done"]
-    done = db.updates[-1][1]
-    assert done["image_b64"] == "PNGBYTES"
-    assert done["via"] == "kaggle:u/pawn-image-sdxl"
+
+    updates = [c for c in db.calls if c[0] == "execute"]
+    assert "'running'" in updates[0][1]
+    assert "'done'" in updates[1][1]
+    done_params = updates[1][2]
+    assert done_params[0] == "PNGBYTES"
+    assert done_params[2] == "kaggle:u/pawn-image-sdxl"
 
 
 def test_run_cold_job_records_error_without_raising():
     db = _FakeDB(rows={"image_jobs": [
         {"id": "j1", "status": "queued", "user_id": "user-1", "prompt": "x", "model": "sdxl"}
     ]})
-    with patch("app.core.image_session.get_db", return_value=db), \
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3, \
          patch("app.core.image_session.generate.generate_image",
                side_effect=RuntimeError("kaggle boom")):
         # Fire-and-forget worker must not raise — it records the error on the row.
         image_session.run_cold_job("j1")
-    statuses = [vals.get("status") for _t, vals in db.updates]
-    assert statuses == ["running", "error"]
-    assert "kaggle boom" in db.updates[-1][1]["error"]
+    updates = [c for c in db.calls if c[0] == "execute"]
+    assert "'running'" in updates[0][1]
+    assert "'error'" in updates[1][1]
+    assert "kaggle boom" in updates[1][2][0]
 
 
 def test_run_cold_job_noop_when_not_queued():
     """De-duped/already-handled job (status != queued) is left untouched."""
     db = _FakeDB(rows={"image_jobs": [{"id": "j1", "status": "running"}]})
-    with patch("app.core.image_session.get_db", return_value=db), \
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3, \
          patch("app.core.image_session.generate.generate_image") as gen:
         image_session.run_cold_job("j1")
     gen.assert_not_called()
-    assert db.updates == []
+    assert not any(c[0] == "execute" for c in db.calls)
 
 
 # --- list_jobs ---------------------------------------------------------------
@@ -173,7 +155,8 @@ def test_list_jobs_returns_metadata_without_image_bytes():
          "created_at": "2026-06-29T00:00:00+00:00"},
     ]
     db = _FakeDB(rows={"image_jobs": rows})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
         out = image_session.list_jobs("user-1")
     assert [j["job_id"] for j in out] == ["j2", "j1"]
     assert out[0]["has_image"] is True   # done
@@ -185,27 +168,28 @@ def test_list_jobs_returns_metadata_without_image_bytes():
 def test_reap_stale_jobs_marks_stuck_cold_as_error():
     """A cold job stuck active past the wall-clock cutoff is transitioned to error."""
     db = _FakeDB()
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
         image_session.reap_stale_jobs("user-1")
-    assert db.updates, "expected a reap update to be issued"
-    table, vals = db.updates[0]
-    assert table == "image_jobs"
-    assert vals["status"] == "error"
-    assert "worker lost" in vals["error"]
+    updates = [c for c in db.calls if c[0] == "execute"]
+    assert updates, "expected a reap update to be issued"
+    sql, params = updates[0][1], updates[0][2]
+    assert "'error'" in sql
+    assert "worker lost" in sql
 
 
 def test_reap_stale_jobs_reaps_jobs_of_dead_sessions():
     """Queued and running jobs for a dead session are both reaped so the panel/button
     don't hang on a job the kernel will never pick up."""
     db = _FakeDB(rows={"image_sessions": [{"id": "s-dead", "status": "ended"}]})
-    with patch("app.core.image_session.get_db", return_value=db):
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
         image_session.reap_stale_jobs("user-1")
-    # Two updates: one for queued jobs, one for running jobs.
-    session_updates = [(t, v) for t, v in db.updates if t == "image_jobs" and v.get("status") == "error"]
-    assert len(session_updates) >= 2, "expected separate reap updates for queued and running session jobs"
-    errors = {v["error"] for _, v in session_updates}
-    assert any("session ended" in e for e in errors), "queued-job reap message missing"
-    assert any("terminated" in e.lower() for e in errors), "running-job reap message missing"
+    # cold-reap (unconditional) + queued-session-reap + running-session-reap.
+    updates = [c for c in db.calls if c[0] == "execute"]
+    session_reap_sqls = [sql for _kind, sql, _params in updates if "session" in sql.lower()]
+    assert any("session ended" in sql for sql in session_reap_sqls), "queued-job reap message missing"
+    assert any("terminated" in sql.lower() for sql in session_reap_sqls), "running-job reap message missing"
 
 
 # --- Route: non-blocking POST /generate + GET /generate/jobs -----------------

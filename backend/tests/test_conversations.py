@@ -4,26 +4,23 @@ from unittest.mock import patch
 from starlette.testclient import TestClient
 
 from app.main import app
-from app.storage import conversations as storage
-from app.constants import CONVERSATIONS_DIR
+from app.storage import conversations_drive as storage
+from tests.fake_drive import FakeDriveStorage
 
 # Must match conftest.TEST_USER_ID so HTTP routes and direct storage calls agree
 TEST_USER_ID = "test-user-id"
 
 
 @pytest.fixture()
-def client():
-    user_dir = CONVERSATIONS_DIR / TEST_USER_ID
-    if user_dir.exists():
-        import shutil
-        shutil.rmtree(user_dir)
+def fake_drive():
+    return FakeDriveStorage()
 
-    with TestClient(app) as c:
-        yield c
 
-    if user_dir.exists():
-        import shutil
-        shutil.rmtree(user_dir)
+@pytest.fixture()
+def client(fake_drive):
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with TestClient(app) as c:
+            yield c
 
 
 def test_crud_endpoints(client):
@@ -75,9 +72,19 @@ def test_crud_endpoints(client):
     assert resp.status_code == 404
 
 
-def test_chat_persistence_saves_to_disk(client):
-    """When a chat has conversation_id, messages must be saved to messages.jsonl."""
-    meta = storage.create_conversation(user_id=TEST_USER_ID, title="Active Chat")
+def test_conversations_require_drive_when_unavailable():
+    """No local fallback anymore — if Drive isn't linked, the request must
+    fail clearly (412 not_configured) instead of silently degrading."""
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=None):
+        with TestClient(app) as c:
+            resp = c.get("/conversations")
+    assert resp.status_code == 412
+    assert resp.json()["code"] == "not_configured"
+
+
+def test_chat_persistence_saves_to_disk(client, fake_drive):
+    """When a chat has conversation_id, messages must be saved via Drive."""
+    meta = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="Active Chat")
     conv_id = meta["id"]
 
     async def mock_stream(*args, **kwargs):
@@ -96,18 +103,18 @@ def test_chat_persistence_saves_to_disk(client):
         ) as resp:
             resp.read()
 
-    messages = storage.load_messages(conv_id, user_id=TEST_USER_ID)
+    messages = storage.load_messages(fake_drive, conv_id)
     assert len(messages) == 2
     assert messages[0] == {"role": "user", "content": "How are you?"}
     assert messages[1] == {"role": "assistant", "content": "Response from AI."}
 
-    meta_updated = storage.get_conversation_meta(conv_id, user_id=TEST_USER_ID)
+    meta_updated = storage.get_conversation_meta(fake_drive, conv_id)
     assert meta_updated["message_count"] == 2
 
 
-def test_chat_auto_titling_trigger(client):
+def test_chat_auto_titling_trigger(client, fake_drive):
     """The first response to a 'New Chat' must trigger auto-titling background task."""
-    meta = storage.create_conversation(user_id=TEST_USER_ID, title="New Chat")
+    meta = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="New Chat")
     conv_id = meta["id"]
 
     async def mock_stream(*args, **kwargs):
@@ -125,11 +132,11 @@ def test_chat_auto_titling_trigger(client):
         ) as resp:
             resp.read()
 
-    updated_meta = storage.get_conversation_meta(conv_id, user_id=TEST_USER_ID)
+    updated_meta = storage.get_conversation_meta(fake_drive, conv_id)
     assert updated_meta["title"] == "Generated Title Output"
 
 
-def test_chat_lazy_creates_unknown_conversation(client):
+def test_chat_lazy_creates_unknown_conversation(client, fake_drive):
     """POST /chat with a client-owned conversation_id that doesn't exist yet must
     lazy-create it (no 404) and persist the turn — the optimistic-UI fail-proof path."""
     conv_id = "client-owned-conv-abc123"
@@ -150,11 +157,11 @@ def test_chat_lazy_creates_unknown_conversation(client):
             assert resp.status_code == 200
             resp.read()
 
-    meta = storage.get_conversation_meta(conv_id, user_id=TEST_USER_ID)
+    meta = storage.get_conversation_meta(fake_drive, conv_id)
     assert meta is not None
     assert meta["id"] == conv_id
 
-    messages = storage.load_messages(conv_id, user_id=TEST_USER_ID)
+    messages = storage.load_messages(fake_drive, conv_id)
     assert len(messages) == 2
     assert messages[0] == {"role": "user", "content": "hello"}
     assert messages[1]["role"] == "assistant"

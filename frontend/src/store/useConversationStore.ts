@@ -171,7 +171,7 @@ export function useConversationStore(
     [touchLru, backgroundLoadDetail],
   )
 
-  // New Chat: open a frontend-only DRAFT. Nothing is created on Drive/Supabase/local
+  // New Chat: open a frontend-only DRAFT. Nothing is created on Drive/Postgres/local
   // and no op is enqueued — the conversation materializes only when the first message
   // is sent (promoteDraft + the chat route's lazy-create). At most one draft exists,
   // so repeat clicks just re-focus it: no duplicates, no empty-chat files.
