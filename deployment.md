@@ -166,7 +166,21 @@ curl -fsS http://127.0.0.1:8001/health        # {"status":"ok"}
 First boot runs `postgres/schema.sql` + `init_pawn_anon.sh` on the empty
 `pawn_postgres_data` volume (pgvector, `pawn_anon` role, tables).
 
-### 4.6 Nginx server block
+### 4.6 Open the host firewall for 80/443
+The OCI Security List permits 80/443 already, but Oracle's stock Ubuntu image
+ships its **host-level** iptables with only SSH (22) allowed for new
+connections — everything else hits a default REJECT. Found live on the first
+real deploy: Nginx was correctly configured and listening, but every external
+request timed out until this was added. Insert the rule before the existing
+REJECT line (check `sudo iptables -L INPUT -n --line-numbers` for its number
+first — usually 5) and persist it:
+```bash
+sudo iptables -I INPUT 5 -p tcp -m state --state NEW -m multiport --dports 80,443 -j ACCEPT
+sudo apt-get install -y iptables-persistent   # prompts to save current rules — accept
+sudo netfilter-persistent save
+```
+
+### 4.7 Nginx server block
 Create `/etc/nginx/sites-available/pawn`:
 ```nginx
 server {
@@ -187,13 +201,34 @@ server {
     }
 
     # PostgREST rendezvous for the warm Kaggle kernel (trailing slash strips prefix).
+    # client_max_body_size is REQUIRED here: Nginx defaults to 1m, but the warm
+    # kernel PATCHes the finished base64 image back through this path, which is
+    # routinely several MB. Without this, every generation silently gets stuck
+    # at "running" forever — the kernel's write-back gets a 413 it doesn't
+    # surface anywhere in PAWN's own UI. Found live on the first real deploy.
     location /pgrst/ {
+        client_max_body_size 20m;
         proxy_pass http://127.0.0.1:3001/;
         proxy_set_header Host $host;
     }
 
-    # SPA fallback.
-    location / { try_files $uri /index.html; }
+    # SPA fallback. Mirrors backend/app/middleware/security.py's
+    # SecurityHeadersMiddleware so the actual page load (served here as a
+    # static file, never proxied through the backend) gets the same
+    # protections — Nginx does not inherit headers from proxied routes.
+    # img-src MUST include data: — Image Lab renders fetched job results as
+    # <img src="data:image/...;base64,...">, and default-src 'self' does NOT
+    # implicitly cover the data: scheme. Missing this silently breaks every
+    # thumbnail/lightbox with no visible error beyond a broken image icon.
+    # Found live on the first real deploy — keep both copies of this policy
+    # (here and in security.py) in sync if it ever changes.
+    location / {
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://pawnai.duckdns.org" always;
+        try_files $uri /index.html;
+    }
 }
 ```
 ```bash
@@ -201,13 +236,13 @@ sudo ln -s /etc/nginx/sites-available/pawn /etc/nginx/sites-enabled/pawn
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 4.7 TLS (additive — does not touch Enma's cert)
+### 4.8 TLS (additive — does not touch Enma's cert)
 ```bash
 sudo certbot --nginx -d pawnai.duckdns.org
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 4.8 Verify prod (§9), then re-verify Enma (§10).
+### 4.9 Verify prod (§7), then re-verify Enma (§8).
 
 ---
 
