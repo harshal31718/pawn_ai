@@ -6,6 +6,30 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-04] — D.8: first live production deploy, executed and verified (on a temporary bridge instance)
+
+**Built:** Split Enma's Always-Free Ampere A1 pool (4 OCPU/24GB) into two — resized `enma-production` down to 3 OCPU/18GB (verified healthy via SSH: `free -h`/`nproc` match, all 4 containers "Up (healthy)", app health green) and attempted to launch a new 1 OCPU/6GB Ampere instance for PAWN with the freed quota. Oracle returned `Out of host capacity` on every attempt in `ap-mumbai-1` (a known, common Always-Free constraint — the region has only one availability domain, so there was no alternate AD to fall back to). Rather than block indefinitely, launched PAWN instead on a temporary paid instance (`pawn-temp`, `VM.Standard.E5.Flex`, 1 OCPU/6GB, ~$46/month) funded by an existing Universal Credits balance (SGD 400, expires 2026-07-31), while a retry loop keeps polling for the free slot in the background via a saved OCI Resource Manager stack.
+
+Full deploy from scratch on `pawn-temp`: Docker Engine + Compose plugin, a fresh GitHub deploy key (generated on the VM itself, private key never leaves it), cloned `main`, generated fresh secrets, built the frontend, brought up postgres+postgrest+backend, DuckDNS repointed to the new IP, Nginx server block + Certbot TLS, and Google OAuth credentials (shared client with local dev) copied over.
+
+**4 real bugs found and fixed live** (all folded back into `deployment.md`):
+1. Oracle's stock Ubuntu image's host iptables allows only SSH (22) by default — the OCI Security List already permitted 80/443, but the host itself silently rejected everything else. The app was completely unreachable from the internet until this was found (via `sudo iptables -L INPUT -n`) and fixed with an explicit rule + `netfilter-persistent save`.
+2. `/pgrst/`'s Nginx `client_max_body_size` defaulted to 1MB. The warm Kaggle kernel's PATCH write-back of a finished image (base64, routinely 1-3MB) got silently 413'd — confirmed via the Nginx access log showing `413` responses from the Kaggle notebook's IP. Every image-gen job got stuck at "running" forever with zero error surfaced in PAWN's own UI. Fixed: `client_max_body_size 20m;`.
+3. `get_session_status()`'s cold-start timeout (a bare `300` in `image_session.py`, not even a named constant) was too short for a real SDXL cold start under this deploy's network conditions — the Kaggle kernel was still genuinely alive and loading past 8 minutes, but PAWN's own auto-cleanup declared the session dead and reaped its jobs with a misleading "session ended"/"terminated unexpectedly" error. Raised to a named `IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS = 900` in `constants.py`.
+4. CSP `img-src` gap: `default-src 'self'` does not implicitly permit the `data:` scheme. Image Lab renders every thumbnail/lightbox as `<img src="data:image/...;base64,...">`, and with no `img-src` directive set, browsers silently blocked all of them — diagnosed by checking the actual stored `image_b64` length in Postgres (correct), then the raw backend response bypassing Nginx (correct), then realizing the CSP itself (added earlier this same day for an unrelated static-frontend-headers fix) was the culprit. Fixed in both `SecurityHeadersMiddleware` and the static frontend's Nginx `location /` block.
+
+**Also found and fixed:** `scripts/promote-to-main.sh` silently died right before its final `git commit` on both real promotions run today — each time leaving the repo mid-merge on `main` with everything already correctly resolved, requiring a manual `git commit` to finish. Root cause: the `while read -r f; do ... done` loop stripping `CLAUDE.md`/`AGENTS.md` always exits 1 on EOF (standard, often-surprising bash behavior for `while read` from a pipe) regardless of how many lines it actually processed, and unlike every other risky line in the script, this one had no trailing `|| true`. Under `set -e` that killed the script immediately, every time. Fixed and verified against a throwaway clone — completes end-to-end now.
+
+**Decisions:** Accepted the paid-bridge approach rather than waiting indefinitely for free capacity, since Ampere A1 shortages in this region are unpredictable (could be minutes or days) and the credit balance covers the gap with margin. Deliberately generated the GitHub deploy key and OCI API signing keys directly on each target machine (never copied a private key across machines) — the Enma VM's own original deploy key had been "lost" earlier in this same session and was eventually found relocated (not actually lost) at `~/.ssh/enma_oci.key`, with an Windows ACL misconfiguration (an inherited sandbox-user grant) separately blocking OpenSSH from using it until `icacls` stripped the bad inheritance.
+
+**Verification:** Full `deployment.md` §7 checklist passed live — health, no CSP violations, Google OAuth + Drive-linked round-trip, BYOK chat, and a real Kaggle SDXL generation end-to-end through the PostgREST rendezvous. Enma re-verified healthy after every shared-account action (the resize, and indirectly via the retry-loop attempts against the same tenancy).
+
+**Outstanding:** migrate `pawn-temp` → the permanent free-tier instance once the retry loop succeeds (now being moved to run from `pawn-temp` itself via a fresh OCI CLI setup, so it survives the operator's laptop going offline); terminate `pawn-temp` afterward, well before its backing credit expires 2026-07-31.
+
+**Commit:** (pending — committed alongside this doc update)
+
+---
+
 ### [2026-07-04] — Drive-Mandatory Phase 4 (review/docs/commit) + deployment simplified to prod-only
 
 **Built:** Closed out `plan_drive_mandatory.md` Phase 4 — ran code-reviewer + security-auditor across the full combined Phase 1-3 diff (`git diff 9350664..28cfcc4`). This review had never actually happened for Phase 1+2 despite the plan explicitly calling for a security-auditor pass (it touches Drive-token/auth code); only manual live testing had been done. Both agents came back PASS, 0 critical, with 4 WARN-level fixes applied:

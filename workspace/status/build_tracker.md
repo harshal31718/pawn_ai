@@ -13,9 +13,21 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress, only D.8 remains, GATED) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE)
-**Active step:** `plan_drive_mandatory.md` Phases 1-4 all done — Phase 4 (review/docs/commit) closed 2026-07-04: code-reviewer + security-auditor ran on the combined Phase 1-3 diff (a gap the plan called for but had never actually happened), both PASS with 4 WARN fixes applied (stale comment, missing error logging in `drive_factory.py`/`auth.py`, raw exception text leaking to clients in `upload.py`/`chat.py` genericized). 152 backend tests still green. **Deployment plan simplified 2026-07-04: dropped the two-environment staging-first deploy.** `dev` is now local-only, never deployed to the VM; only `main` deploys to prod (`pawnai.duckdns.org`) — D.6b (staging stack) is dropped, D.7/D.8 rewritten prod-only. Rationale: no public user base yet (Google OAuth consent screen is Testing-mode/allowlist-only), so D.6's local pre-deploy gate substitutes for a dedicated staging box. Local dev and prod **share one Google OAuth client** (both redirect URIs registered) and the same Google account for login; database/secrets stay **separate** per environment. Accepted tradeoff: local dev is x86, the VM is ARM64, so first-ever ARM issues surface at the real prod deploy. `deployment.md` rewritten prod-only (2026-07-04) — the staging section is fully removed, not just flagged. **Remaining before D.8:** just execute it — promote `dev`→`main` → deploy to `/opt/pawn` → full verify (this is also where the Drive-linked OAuth happy path, untestable locally, finally gets exercised). **Env decisions:** `main`→prod (`pawnai.duckdns.org`), doc-free via promote script; BYOK keys stay in Postgres (not Drive); a known pre-existing gap (permissive `pawn_anon` RLS on image jobs, not scoped per-user) must close before ever flipping the OAuth consent screen from Testing to public. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
-**Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
+**Active phases (merged track):** Phase D — Production Deployment (D.8 executed and verified on a temporary instance, migration to the permanent free-tier instance PENDING) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + Phase 3 — WebCrypto Encryption (not started)
+**Active step:** **D.8 live deploy done, on a temporary bridge instance (2026-07-04).** Original plan called for a free-tier Ampere A1 (1 OCPU/6GB) instance carved out of Enma's Always-Free pool by resizing `enma-production` down to 3 OCPU/18GB (done, verified healthy) — but Oracle's Ampere A1 capacity in `ap-mumbai-1` was exhausted at request time, so PAWN is live on **`pawn-temp`**, a paid `VM.Standard.E5.Flex` x86 instance (1 OCPU/6GB, ~$46/month against a Universal Credits balance expiring 2026-07-31), as a bridge until free capacity opens up. A retry loop (`oci resource-manager job create-apply-job` against a saved stack) is still polling for the free slot. **Once it succeeds:** repeat the now-corrected `deployment.md` on the new instance, repoint `pawnai.duckdns.org` in DuckDNS, re-verify, then terminate `pawn-temp`.
+
+Full `deployment.md` §7 verification checklist passed on `pawn-temp`: HTTPS health, no CSP violations, full Google OAuth round-trip (Drive-linked — the one path untestable locally), BYOK chat streaming, and a real Kaggle SDXL image generation through the PostgREST rendezvous. Enma re-verified healthy throughout (health endpoint + all 4 containers "Up (healthy)" both before and after every VM-side action).
+
+**4 real bugs found and fixed during this first live deploy** (all now captured in `deployment.md` so the eventual migration doesn't repeat them):
+1. Oracle's stock Ubuntu image's **host iptables only allows SSH (22)** for new connections by default — the OCI Security List permits 80/443, but the host itself still rejected everything else. Fixed with an explicit `iptables -I INPUT` rule + `netfilter-persistent save`.
+2. `client_max_body_size` on the `/pgrst/` Nginx location defaulted to 1MB — the warm Kaggle kernel's PATCH write-back of a finished base64 image (routinely 1-3MB) was silently getting **413**'d, leaving every image-gen job stuck at "running" forever with no visible error. Fixed: `client_max_body_size 20m;`.
+3. `get_session_status()` declared a warm session dead after only **300s (5 min)** in `starting`/`installing`/`loading_model`, even when the Kaggle kernel was still legitimately cold-starting (SDXL deps install + multi-GB weight download/load ran past 8 minutes live). Raised to a named constant `IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS = 900`.
+4. **CSP `img-src` gap**: `default-src 'self'` does not implicitly permit the `data:` scheme, and no `img-src` directive was set — every Image Lab thumbnail/lightbox (`<img src="data:image/...;base64,...">`) was silently blocked by the browser. Fixed in both `SecurityHeadersMiddleware` (backend-proxied routes) and the static frontend's own Nginx `location /` block (which doesn't inherit headers from proxied routes, so needs its own copy of the same policy — also missing the CSP/security headers entirely at first, fixed same pass).
+
+**Also found and fixed:** `scripts/promote-to-main.sh` was silently dying before its final `git commit` on *every* real run (both actual promotions so far needed manual completion) — a `while read` loop reading from a pipe always exits 1 on EOF regardless of what it processed, and under `set -e` with no `|| true` guard that killed the script right after doc-stripping, every time. Fixed and verified against a throwaway clone.
+
+`plan_drive_mandatory.md` Phases 1-4 all done (closed 2026-07-04 — code-reviewer + security-auditor gap closed, 4 WARN fixes applied, 152 tests green). Deployment plan simplified to prod-only (no VM staging; `dev` stays local-only, shares one Google OAuth client with prod, separate DB/secrets per environment). Phase 3 P3-1 encryption FOUNDATION complete but unwired (deferred, see `implemented_phases/phase_8_encryption.md`). A known pre-existing gap (permissive `pawn_anon` RLS on image jobs, not scoped per-user) must close before ever flipping the OAuth consent screen from Testing to public — not urgent while access stays allowlisted.
+**Last completed:** First live production deploy (D.8), verified end-to-end on the temporary bridge instance, 2026-07-04.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
 
@@ -479,13 +491,23 @@ decision and coexistence rules).
   PostgREST anon rendezvous 200 / denied-table 401), `.env.prod.example`/
   `.env.staging.example` (staging example now unused, harmless to keep),
   `.gitignore` for the real env files. Real-VM run behind Nginx/TLS/OAuth
-  still pending D.8.
-- [ ] **D.8 — First live deploy (prod only, no staging) + full verify checklist**
-  (GATED). Order: promote `dev`→`main` via `scripts/promote-to-main.sh` →
-  deploy `main` to `/opt/pawn` on the VM per `deployment.md` → full verify
-  (health, HTTPS/CSP, Google OAuth + Drive-linked happy path — the one thing
-  D.6 couldn't test locally, BYOK LLM round-trip, one Kaggle image-gen job) →
-  confirm Enma untouched.
+  done in D.8 below (4 fixes found live folded back into this file).
+- [x] **D.8 — First live deploy + full verify checklist** — **done 2026-07-04,
+  on a temporary bridge instance.** The intended free-tier Ampere A1 instance
+  hit "out of host capacity" in `ap-mumbai-1` at request time (Enma was
+  successfully resized 4/24 → 3/18 to free the quota, verified healthy —
+  that half of the plan holds); PAWN went live instead on `pawn-temp`
+  (paid `VM.Standard.E5.Flex`, 1 OCPU/6GB, ~$46/mo, bridging until free
+  capacity opens — a retry loop keeps polling). Full verify checklist
+  passed: HTTPS health, no CSP violations, Google OAuth + Drive-linked
+  round-trip, BYOK chat, real Kaggle SDXL generation via `/pgrst/`. Enma
+  reconfirmed healthy throughout. 4 real bugs found+fixed live (host
+  iptables blocking 80/443, `/pgrst/` 413 on image write-back, warm-session
+  startup timeout too short, CSP missing `img-src data:`) — see "Active
+  step" above for details; all 4 now folded into `deployment.md` so the
+  pending migration to the permanent free instance won't repeat them.
+  **Remaining:** migrate off `pawn-temp` once free Ampere capacity succeeds,
+  repoint DuckDNS, re-verify, terminate the paid instance.
 
 ---
 
