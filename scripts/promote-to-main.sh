@@ -53,10 +53,14 @@ git rm -r --cached --ignore-unmatch "${DOC_DIRS[@]}" >/dev/null 2>&1 || true
 rm -rf "${DOC_DIRS[@]}" 2>/dev/null || true
 
 # Strip CLAUDE.md / AGENTS.md at any depth (tracked + any left in the worktree).
+# NOTE: `while read` reading from a pipe always exits 1 on EOF (a classic bash
+# gotcha) regardless of how many lines it processed — under `set -e` that was
+# silently killing the script here on every run, right before the final commit,
+# with no error message. The trailing `|| true` is REQUIRED, not decorative.
 { git ls-files; git ls-files --others --exclude-standard; } | grep -Ei "$DOC_FILE_RE" | sort -u | while read -r f; do
   git rm --cached --ignore-unmatch "$f" >/dev/null 2>&1 || true
   rm -f "$f" 2>/dev/null || true
-done
+done || true
 
 # Bail on any real (non-doc) conflicts.
 if git diff --name-only --diff-filter=U | grep -q .; then
