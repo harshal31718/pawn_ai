@@ -30,7 +30,7 @@ const FEATURES = [
     status: 'live' as const,
   },
   {
-    eyebrow: 'Roadmap',
+    eyebrow: 'Video',
     title: 'Video generation — coming soon.',
     body: "Text-to-video is next on the list, using the same bring-your-own-quota philosophy as everything else in PAWN.",
     icon: (
@@ -61,7 +61,7 @@ export default function LandingPage() {
 
   return (
     <div className="relative min-h-screen w-screen bg-theme-bg text-theme-text font-sans overflow-x-hidden">
-      <InteractiveGridBackground darkMode={isDark} />
+      <InteractiveGridBackground darkMode={isDark} speedMultiplier={3} />
 
       {/* Top bar */}
       <header className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-5 sm:px-8 py-5">
@@ -75,7 +75,7 @@ export default function LandingPage() {
       </header>
 
       {/* Hero */}
-      <section className="relative z-10 min-h-screen flex flex-col items-center justify-center px-6 text-center">
+      <section className="relative z-10 flex flex-col items-center justify-center px-6 pt-32 pb-20 sm:pt-40 sm:pb-28 text-center">
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
           <span className="font-[family-name:var(--font-accent-mono)] text-[10px] uppercase tracking-[0.2em] text-theme-text-muted">
             Personal AI Workspace
@@ -115,7 +115,7 @@ export default function LandingPage() {
       </section>
 
       {/* Feature highlights */}
-      <section className="relative z-10 px-6 pb-24 sm:pb-32">
+      <section className="relative z-10 px-6 pb-16 sm:pb-20">
         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-5">
           {FEATURES.map((f, i) => (
             <div

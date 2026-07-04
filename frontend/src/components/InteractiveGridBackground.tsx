@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react'
 
 interface Props {
   darkMode: boolean
+  /** Scales animation/movement speed. Default 1 (chat page). */
+  speedMultiplier?: number
 }
 
-export default function InteractiveGridBackground({ darkMode }: Props) {
+export default function InteractiveGridBackground({ darkMode, speedMultiplier = 1 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export default function InteractiveGridBackground({ darkMode }: Props) {
     // Mouse state
     const mouse = { x: 0, y: 0, active: false }
     const box = { x: 0, y: 0 }
-    const ghost = { x: 0, y: 0, vx: 1.8, vy: 1.2 }
+    const ghost = { x: 0, y: 0, vx: 1.8 * speedMultiplier, vy: 1.2 * speedMultiplier }
 
     function resize() {
       if (!canvas) return
@@ -73,7 +75,7 @@ export default function InteractiveGridBackground({ darkMode }: Props) {
       if (!canvas || !ctx) return
       ctx.clearRect(0, 0, width, height)
 
-      const time = Date.now() * 0.003
+      const time = Date.now() * 0.003 * speedMultiplier
 
       // Update Ghost position (bouncing around the screen)
       if (!mouse.active) {
@@ -102,7 +104,7 @@ export default function InteractiveGridBackground({ darkMode }: Props) {
       const dy = targetY - box.y
       const distance = Math.sqrt(dx * dx + dy * dy)
       
-      const speedLimit = mouse.active ? 3.5 : 1.5
+      const speedLimit = (mouse.active ? 3.5 : 1.5) * speedMultiplier
 
       if (distance > speedLimit) {
         box.x += (dx / distance) * speedLimit
@@ -173,7 +175,7 @@ export default function InteractiveGridBackground({ darkMode }: Props) {
       document.removeEventListener('mouseenter', handleMouseEnter)
       cancelAnimationFrame(animationFrameId)
     }
-  }, [darkMode])
+  }, [darkMode, speedMultiplier])
 
   return (
     <canvas

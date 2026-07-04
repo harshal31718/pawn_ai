@@ -181,6 +181,25 @@ sudo netfilter-persistent save
 ```
 
 ### 4.7 Nginx server block
+
+First, a shared snippet so the security headers (mirroring
+`backend/app/middleware/security.py`'s `SecurityHeadersMiddleware`, since
+Nginx doesn't inherit headers from proxied routes) don't need copy-pasting
+into every SPA-serving location. `img-src` MUST include `data:` — Image Lab
+renders fetched job results as `<img src="data:image/...;base64,...">`, and
+`default-src 'self'` does NOT implicitly cover the `data:` scheme. Missing
+this silently breaks every thumbnail/lightbox with no visible error beyond a
+broken image icon. Found live on the first real deploy — keep this file and
+`security.py`'s copy in sync if the policy ever changes.
+
+Create `/etc/nginx/snippets/security-headers.conf`:
+```nginx
+add_header X-Frame-Options "DENY" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://pawnai.duckdns.org" always;
+```
+
 Create `/etc/nginx/sites-available/pawn`:
 ```nginx
 server {
@@ -189,7 +208,10 @@ server {
     root /opt/pawn/frontend/dist;
 
     # Backend API (root-level routes; no /api prefix). SSE-friendly.
-    location ~ ^/(health|auth|chat|generate|conversations|registry|keys|upload|crypto) {
+    # NOTE: "chat" is deliberately NOT in this list — see the dedicated
+    # `location = /chat` block below. Every other name here is exclusively a
+    # backend path with no same-named frontend page route, so no collision.
+    location ~ ^/(health|auth|generate|conversations|registry|keys|upload|crypto) {
         proxy_pass http://127.0.0.1:8001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -212,21 +234,40 @@ server {
         proxy_set_header Host $host;
     }
 
-    # SPA fallback. Mirrors backend/app/middleware/security.py's
-    # SecurityHeadersMiddleware so the actual page load (served here as a
-    # static file, never proxied through the backend) gets the same
-    # protections — Nginx does not inherit headers from proxied routes.
-    # img-src MUST include data: — Image Lab renders fetched job results as
-    # <img src="data:image/...;base64,...">, and default-src 'self' does NOT
-    # implicitly cover the data: scheme. Missing this silently breaks every
-    # thumbnail/lightbox with no visible error beyond a broken image icon.
-    # Found live on the first real deploy — keep both copies of this policy
-    # (here and in security.py) in sync if it ever changes.
+    # /chat collides: POST is the real chat-completion API, GET is the
+    # frontend page load for the chat UI. If "chat" were in the regex above,
+    # every hard refresh / bookmarked /chat would 401 (the auth middleware
+    # rejects the unauthenticated GET before FastAPI can even 405 it) instead
+    # of loading the app. Route by method instead of by path alone. Found
+    # live after the landing-page work made direct-URL testing routine.
+    # proxy_set_header/proxy_buffering/etc. must live at the location level,
+    # not inside `if` — Nginx only permits a handful of directives (proxy_pass
+    # among them) inside an `if` block.
+    location = /chat {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        include snippets/security-headers.conf;
+
+        if ($request_method = POST) {
+            proxy_pass http://127.0.0.1:8001;
+        }
+        try_files $uri /index.html;
+    }
+
+    # /chat/:id has no backend route at all — always the SPA.
+    location ~ ^/chat/ {
+        include snippets/security-headers.conf;
+        try_files $uri /index.html;
+    }
+
+    # SPA fallback for everything else (/, /privacy, /imagelab, /settings, ...).
     location / {
-        add_header X-Frame-Options "DENY" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://pawnai.duckdns.org" always;
+        include snippets/security-headers.conf;
         try_files $uri /index.html;
     }
 }
