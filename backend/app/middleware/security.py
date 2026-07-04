@@ -14,6 +14,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
             f"connect-src 'self' {CSP_CONNECT_SRC}"
         )
         return response
