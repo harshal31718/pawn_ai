@@ -14,7 +14,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phases (merged track):** Phase 3 — WebCrypto Encryption (not started) + Phase D — Production Deployment (in progress, only D.8 remains, GATED) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE)
-**Active step:** `plan_drive_mandatory.md` Phases 1-4 all done — Phase 4 (review/docs/commit) closed 2026-07-04: code-reviewer + security-auditor ran on the combined Phase 1-3 diff (a gap the plan called for but had never actually happened), both PASS with 4 WARN fixes applied (stale comment, missing error logging in `drive_factory.py`/`auth.py`, raw exception text leaking to clients in `upload.py`/`chat.py` genericized). 152 backend tests still green. **Deployment plan simplified 2026-07-04: dropped the two-environment staging-first deploy.** `dev` is now local-only, never deployed to the VM; only `main` deploys to prod (`pawnai.duckdns.org`) — D.6b (staging stack) is dropped, D.7/D.8 rewritten prod-only. Rationale: no public user base yet (Google OAuth consent screen is Testing-mode/allowlist-only), so D.6's local pre-deploy gate substitutes for a dedicated staging box. Local dev and prod **share one Google OAuth client** (both redirect URIs registered) and the same Google account for login; database/secrets stay **separate** per environment. Accepted tradeoff: local dev is x86, the VM is ARM64, so first-ever ARM issues surface at the real prod deploy. **Remaining before D.8:** strip the now-stale staging section out of `deployment.md` (currently still two-env text), then execute: promote `dev`→`main` → deploy to `/opt/pawn` → full verify (this is also where the Drive-linked OAuth happy path, untestable locally, finally gets exercised). **Env decisions:** `main`→prod (`pawnai.duckdns.org`), doc-free via promote script; BYOK keys stay in Postgres (not Drive); a known pre-existing gap (permissive `pawn_anon` RLS on image jobs, not scoped per-user) must close before ever flipping the OAuth consent screen from Testing to public. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
+**Active step:** `plan_drive_mandatory.md` Phases 1-4 all done — Phase 4 (review/docs/commit) closed 2026-07-04: code-reviewer + security-auditor ran on the combined Phase 1-3 diff (a gap the plan called for but had never actually happened), both PASS with 4 WARN fixes applied (stale comment, missing error logging in `drive_factory.py`/`auth.py`, raw exception text leaking to clients in `upload.py`/`chat.py` genericized). 152 backend tests still green. **Deployment plan simplified 2026-07-04: dropped the two-environment staging-first deploy.** `dev` is now local-only, never deployed to the VM; only `main` deploys to prod (`pawnai.duckdns.org`) — D.6b (staging stack) is dropped, D.7/D.8 rewritten prod-only. Rationale: no public user base yet (Google OAuth consent screen is Testing-mode/allowlist-only), so D.6's local pre-deploy gate substitutes for a dedicated staging box. Local dev and prod **share one Google OAuth client** (both redirect URIs registered) and the same Google account for login; database/secrets stay **separate** per environment. Accepted tradeoff: local dev is x86, the VM is ARM64, so first-ever ARM issues surface at the real prod deploy. `deployment.md` rewritten prod-only (2026-07-04) — the staging section is fully removed, not just flagged. **Remaining before D.8:** just execute it — promote `dev`→`main` → deploy to `/opt/pawn` → full verify (this is also where the Drive-linked OAuth happy path, untestable locally, finally gets exercised). **Env decisions:** `main`→prod (`pawnai.duckdns.org`), doc-free via promote script; BYOK keys stay in Postgres (not Drive); a known pre-existing gap (permissive `pawn_anon` RLS on image jobs, not scoped per-user) must close before ever flipping the OAuth consent screen from Testing to public. Phase 3 P3-1 encryption FOUNDATION complete (crypto module + backend salt endpoint + vitest) but its passphrase gate was removed from the auth flow (unwired to anything, pure friction — see plan_drive_mandatory.md). Full encrypt/decrypt-on-write wiring still DEFERRED pending a product decision (conflicts with server-side LLM/RAG/summarization — see implemented_phases/phase_8_encryption.md). Mobile readiness pass (all 7 fixes) complete.
 **Last completed:** imageLab merged → dev; dev merged → main (2026-06-30). All Phase W, img2img (Plan 2), and Phase 6 UI work is on main. imageLab branch deleted.
 **Branch:** dev (merges → main)
 **Plans:** `workspace/implemented_phases/phase_8_encryption.md`, `workspace/plan/plan_deployment.md`
@@ -470,9 +470,10 @@ decision and coexistence rules).
   local dev is x86, the VM is ARM64, so ARM-specific issues surface at the
   real prod deploy, not a disposable staging box).
 - [x] **D.7 — `deployment.md` + prod compose** — root `deployment.md`
-  (originally a two-env staging-first runbook; **now simplified to prod-only**
-  per the D.6b decision above — `deployment.md`'s own text still has the old
-  staging section and needs a follow-up strip pass before D.8 is run),
+  **rewritten prod-only 2026-07-04** (originally a two-env staging-first
+  runbook; the staging section is now fully removed, not just marked stale —
+  single-environment, `main`→`/opt/pawn`→`pawnai.duckdns.org` only, shared
+  Google OAuth client with local dev per the D.6b decision above),
   `docker-compose.prod.yml` (parameterized, `config`-validated AND
   live-boot-tested locally: fresh-volume schema init, backend `/health`,
   PostgREST anon rendezvous 200 / denied-table 401), `.env.prod.example`/
@@ -480,11 +481,11 @@ decision and coexistence rules).
   `.gitignore` for the real env files. Real-VM run behind Nginx/TLS/OAuth
   still pending D.8.
 - [ ] **D.8 — First live deploy (prod only, no staging) + full verify checklist**
-  (GATED). Order: strip staging section from `deployment.md` → promote
-  `dev`→`main` via `scripts/promote-to-main.sh` → deploy `main` to
-  `/opt/pawn` on the VM → full verify (health, HTTPS/CSP, Google OAuth +
-  Drive-linked happy path — the one thing D.6 couldn't test locally, BYOK LLM
-  round-trip, one Kaggle image-gen job) → confirm Enma untouched.
+  (GATED). Order: promote `dev`→`main` via `scripts/promote-to-main.sh` →
+  deploy `main` to `/opt/pawn` on the VM per `deployment.md` → full verify
+  (health, HTTPS/CSP, Google OAuth + Drive-linked happy path — the one thing
+  D.6 couldn't test locally, BYOK LLM round-trip, one Kaggle image-gen job) →
+  confirm Enma untouched.
 
 ---
 

@@ -265,16 +265,12 @@ must not touch, edit, or collide with any of it.
   → release/update workflow (`git pull` + rebuild inside `/opt/pawn` only)
   → data safety notes (PAWN's named Postgres volume backup, never `down -v`
   on `/opt/pawn`, and never touch Enma's volumes) → firewall/exposure summary
-  table. `deployment.md` itself still has the original two-environment text —
-  **needs a follow-up edit pass to strip the staging section** before D.8 is
-  executed; tracked as a note on D.8 below rather than reopening D.7.
+  table. **`deployment.md` rewritten prod-only 2026-07-04** (the staging
+  section is fully removed, not just noted as stale — the follow-up edit pass
+  is done).
 
 - [ ] **D.8 — First live deploy + full verify checklist (prod only, no staging)**
   Execute `deployment.md` end to end on the shared VM, single environment:
-  0. **Before starting:** trim the staging/`dev.pawnai` sections out of
-     `deployment.md` (D.7 produced the two-environment version; this project
-     no longer deploys `dev`) so the runbook that's actually followed matches
-     this simplified plan.
   1. **Promote** `dev`→`main` via `scripts/promote-to-main.sh` (first run also
      strips docs off `main`); review, push `main`.
   2. **Prod** (`/opt/pawn`, `main` branch, `pawnai.duckdns.org`) — full verify:
