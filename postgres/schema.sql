@@ -171,18 +171,53 @@ $$;
 grant usage on schema public to pawn_anon;
 grant select, insert, update on image_sessions, image_jobs to pawn_anon;
 
--- RLS + permissive policy for pawn_anon (W.0 single-user-trial fallback; see
--- note above). Same posture as the original Supabase anon-key design: any
--- request authenticated as pawn_anon can touch any row on these two tables
--- only. A scoped per-session-JWT policy remains deferred (documented as
--- mandatory before multi-user).
+-- RLS scoped by the per-session `session_token` (2026-07-04). Previously any
+-- pawn_anon caller could read/write ANY row on these two tables -- since
+-- /pgrst/ is a public, unauthenticated-at-the-network-level endpoint, this
+-- meant anyone on the internet (no PAWN account needed) could read every
+-- user's generated images/prompts or corrupt/hijack any live session or job.
+-- session_token was already generated per session and sent to the Kaggle
+-- kernel (backend/app/core/image_session.py's start_session payload) but was
+-- never actually enforced anywhere until now -- it was inert. The kernel now
+-- sends it back as the `X-Session-Token` header on every PostgREST call
+-- (see kaggle_templates/image_{sdxl,flux}_session/notebook.ipynb), and these
+-- policies require it to match before permitting access to a session's own
+-- rows. PostgREST exposes all incoming request headers as a JSON GUC
+-- (documented, stable since early v9) -- current_setting('request.headers',
+-- true)::json->>'x-session-token'. A full scoped-JWT design remains a
+-- possible future upgrade but is no longer required before real multi-user;
+-- this closes the same gap with much less new surface.
 alter table image_sessions enable row level security;
 alter table image_jobs     enable row level security;
 
 drop policy if exists image_sessions_anon_trial on image_sessions;
 drop policy if exists image_jobs_anon_trial     on image_jobs;
 
-create policy image_sessions_anon_trial on image_sessions
-  for all to pawn_anon using (true) with check (true);
-create policy image_jobs_anon_trial on image_jobs
-  for all to pawn_anon using (true) with check (true);
+create or replace function pawn_current_session_token() returns text
+language sql stable as $$
+  select coalesce(current_setting('request.headers', true)::json->>'x-session-token', '');
+$$;
+
+create policy image_sessions_scoped_select on image_sessions
+  for select to pawn_anon
+  using (session_token = pawn_current_session_token());
+
+create policy image_sessions_scoped_update on image_sessions
+  for update to pawn_anon
+  using (session_token = pawn_current_session_token())
+  with check (session_token = pawn_current_session_token());
+
+create policy image_jobs_scoped_select on image_jobs
+  for select to pawn_anon
+  using (session_id in (
+    select id from image_sessions where session_token = pawn_current_session_token()
+  ));
+
+create policy image_jobs_scoped_update on image_jobs
+  for update to pawn_anon
+  using (session_id in (
+    select id from image_sessions where session_token = pawn_current_session_token()
+  ))
+  with check (session_id in (
+    select id from image_sessions where session_token = pawn_current_session_token()
+  ));
