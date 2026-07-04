@@ -120,7 +120,7 @@ export default function KaggleCredentials({
       {editing && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
-          onClick={() => hasCreds && setEditing(false)}
+          onClick={() => { setEditing(false); setError(null) }}
         >
           <div
             className="bg-theme-surface border border-theme-border/60 rounded-2xl p-5 shadow-2xl max-w-sm w-full space-y-4 relative animate-in fade-in zoom-in-95 duration-150"
@@ -128,17 +128,15 @@ export default function KaggleCredentials({
           >
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-semibold text-theme-text uppercase tracking-wider">Kaggle Credentials</h2>
-              {hasCreds && (
-                <button
-                  type="button"
-                  onClick={() => { setEditing(false); setError(null) }}
-                  className="text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer flex items-center justify-center w-5 h-5 rounded-full hover:bg-theme-bg/50"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
-                    <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
-                  </svg>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => { setEditing(false); setError(null) }}
+                className="text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer flex items-center justify-center w-5 h-5 rounded-full hover:bg-theme-bg/50"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
+                  <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+                </svg>
+              </button>
             </div>
 
             <div className="space-y-2">
