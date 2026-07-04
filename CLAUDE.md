@@ -19,6 +19,10 @@ This is the root-level pointer file for Claude Code. The full configuration live
 | Phase plans | `workspace/plan/` and `workspace/implemented_phases/` |
 | Architecture decisions | `workspace/decisions/` |
 
+## ⚠ Pending background task
+
+A free-tier Ampere instance retry loop may still be running on `pawn-temp` — check `workspace/current_state.md`'s "Known Issues" section (first entry) for the status/completion check command before assuming PAWN's deploy target is final.
+
 ## Before Starting Any Work
 
 1. Read `.claude/CLAUDE.md` — full rules and constraints.

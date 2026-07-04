@@ -227,6 +227,29 @@ Test/build status: **132 backend tests passing**; frontend `npm run build` passe
 
 ## Known Issues / Deferred Items
 
+- **PENDING — free-tier Ampere instance retry loop (started 2026-07-04, not yet succeeded as of last check).**
+  **What:** a background loop on `pawn-temp` repeatedly retries creating the
+  free-tier 1 OCPU/6GB Ampere A1 instance for PAWN (a saved OCI Resource
+  Manager stack), since Oracle's Always-Free Ampere capacity in
+  `ap-mumbai-1` was exhausted at every attempt on 2026-07-04.
+  **Why:** so PAWN can migrate off the temporary paid `pawn-temp` bridge
+  (see next item) onto its intended permanent free-tier home, without
+  needing a human to manually retry.
+  **How it was started** (for reference — do not re-run unless the loop has
+  died; check status first):
+  ```
+  ssh -i C:\Users\harsh\Downloads\ssh-key-2026-07-04.key ubuntu@92.4.84.39 "setsid nohup ~/pawn-ampere-retry.sh > ~/pawn-ampere-retry.log 2>&1 < /dev/null &"
+  ```
+  **How to check if it's running or has completed:**
+  ```
+  ssh -i C:\Users\harsh\Downloads\ssh-key-2026-07-04.key ubuntu@92.4.84.39 "tail -20 ~/pawn-ampere-retry.log"
+  ```
+  Look for a line reading `SUCCESS on attempt N!` — that means the instance
+  was created and it's time to do the migration (repeat `deployment.md` on
+  the new instance, repoint DuckDNS, verify, terminate `pawn-temp`). If it's
+  still printing `Still failing (likely out of capacity). Retrying in 45s...`
+  entries, it's alive and waiting — no action needed. The script itself
+  lives at `~/pawn-ampere-retry.sh` on `pawn-temp`.
 - **`pawn-temp` is a temporary paid bridge instance**, not the permanent deploy target — its billing draws against a Universal Credits balance expiring **2026-07-31**. Migrate to the free-tier Ampere instance (once capacity opens up) and terminate `pawn-temp` well before that date, or accept ~$46/month ongoing if capacity never frees up in time.
 - **Permissive `pawn_anon` RLS** on `image_sessions`/`image_jobs` (not scoped per-user) must close before ever flipping the Google OAuth consent screen from Testing to public — fine while access stays allowlisted.
 - **Manual setup required before live use** (see build_tracker.md):
