@@ -6,6 +6,24 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-04] — Fixed the permissive pawn_anon RLS gap (blocker for going public)
+
+**Built:** `/pgrst/` (PostgREST) is a public HTTPS endpoint with no auth layer of its own — every request runs as the `pawn_anon` Postgres role, which previously had blanket table-level access to `image_sessions`/`image_jobs` with a permissive RLS policy (`using (true) with check (true)`). Anyone on the internet, without a PAWN account, could read every user's generated images/prompts or corrupt/hijack any live session or job. `session_token` already existed on `image_sessions` and was already sent to the Kaggle kernel's startup payload, but nothing ever checked it — it was inert.
+
+Fix: both warm-session Kaggle notebook templates (`backend/app/kaggle_templates/image_{sdxl,flux}_session/notebook.ipynb`) now send `session_token` back as an `X-Session-Token` header on every PostgREST call. New RLS policies in `postgres/schema.sql` (`image_sessions_scoped_select/update`, `image_jobs_scoped_select/update`, backed by a small `pawn_current_session_token()` SQL function reading PostgREST's `request.headers` GUC) require that header to match before permitting SELECT/UPDATE — `image_jobs` has no `session_token` column of its own, so its policies join through `session_id`.
+
+**Investigation detour (self-corrected):** initially believed `kaggle_templates/` wasn't in version control at all (searched the repo root, found nothing, no git history). This was wrong — the real path is `backend/app/kaggle_templates/` (relative to `constants.py`, not the repo root), and it's fully committed. No actual version-control gap existed; wasted a Kaggle-API pull-down before catching the mistake.
+
+**Decisions:** chose "wire up the existing session_token as a header" over a full scoped-JWT redesign — much less new surface, and the token already existed for exactly this purpose. A safety hook correctly blocked an early attempt to verify PostgREST's header-exposure mechanism via a temporary debug SQL function granted to `pawn_anon` (would have ironically expanded exposure on the exact over-permissioned role being locked down) — relied on PostgREST's documented, stable-since-early-v9 behavior instead, and verified via the real application flow.
+
+**Verification:** applied the schema change live to `pawn-temp`'s running Postgres (a one-off migration — `docker-entrypoint-initdb.d` only runs on a fresh volume). `curl` against `/pgrst/image_sessions` with no token or a wrong token → `[]` (nothing leaked); with the correct token → only that session's own row. Promoted `dev`→`main` (using the now-fixed promote script — completed end-to-end on the first try, no manual intervention needed), pulled + rebuilt on `pawn-temp`. User manually confirmed a real session-start + image generation still works end-to-end against the new token-scoped policies.
+
+**Outcome:** this was the explicitly-documented blocker for ever flipping the Google OAuth consent screen from Testing to public. That's now clear.
+
+**Commit:** (pending — committed alongside this doc update)
+
+---
+
 ### [2026-07-04] — D.8: first live production deploy, executed and verified (on a temporary bridge instance)
 
 **Built:** Split Enma's Always-Free Ampere A1 pool (4 OCPU/24GB) into two — resized `enma-production` down to 3 OCPU/18GB (verified healthy via SSH: `free -h`/`nproc` match, all 4 containers "Up (healthy)", app health green) and attempted to launch a new 1 OCPU/6GB Ampere instance for PAWN with the freed quota. Oracle returned `Out of host capacity` on every attempt in `ap-mumbai-1` (a known, common Always-Free constraint — the region has only one availability domain, so there was no alternate AD to fall back to). Rather than block indefinitely, launched PAWN instead on a temporary paid instance (`pawn-temp`, `VM.Standard.E5.Flex`, 1 OCPU/6GB, ~$46/month) funded by an existing Universal Credits balance (SGD 400, expires 2026-07-31), while a retry loop keeps polling for the free slot in the background via a saved OCI Resource Manager stack.
