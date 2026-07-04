@@ -5,6 +5,7 @@ import {
   healthCheck,
   type RegistryModel,
 } from '../api/client'
+import { useThemePreference } from '../hooks/useThemePreference'
 
 /* ─── types ─── */
 type Theme = 'system' | 'light' | 'dark'
@@ -44,18 +45,7 @@ export function useAppContext() {
 
 export function AppContextProvider({ children, userName }: { children: ReactNode; userName?: string }) {
   /* ── Theme ── */
-  const [theme, setTheme] = useState<Theme>(() => {
-    const saved = localStorage.getItem('pawn-theme')
-    if (saved === 'light' || saved === 'dark' || saved === 'system') return saved
-    return 'system'
-  })
-  const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-
-  useEffect(() => {
-    const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    document.documentElement.classList.toggle('dark', dark)
-    localStorage.setItem('pawn-theme', theme)
-  }, [theme])
+  const { theme, setTheme, isDark } = useThemePreference()
 
   /* ── Models & Providers ── */
   const [models, setModels] = useState<RegistryModel[]>([])

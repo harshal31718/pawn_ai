@@ -121,7 +121,12 @@ export default function Sidebar({
           <div className="flex flex-col h-full w-64 shrink-0 overflow-hidden animate-in fade-in duration-200">
             {/* Header */}
             <div className="p-4 flex items-center justify-between shrink-0">
-              <span className="text-base font-semibold text-theme-text font-sans tracking-tight">PAWN</span>
+              <div className="flex items-center gap-2">
+                <span className="text-base font-semibold text-theme-text font-sans tracking-tight">PAWN</span>
+                <span className="text-[9px] uppercase tracking-[0.15em] text-theme-text-muted border border-theme-border rounded-full px-1.5 py-0.5">
+                  Beta
+                </span>
+              </div>
               <button
                 onClick={onClose}
                 className="
