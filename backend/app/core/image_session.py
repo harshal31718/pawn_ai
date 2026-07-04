@@ -39,6 +39,7 @@ from app.constants import (
     COLD_JOB_MAX_WALLCLOCK_SECONDS,
     IMAGE_SESSION_HEARTBEAT_STALE_SECONDS,
     IMAGE_SESSION_MAX_DURATION_MINUTES,
+    IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS,
     KAGGLE_SESSION_POLL_INTERVAL_SECONDS,
 )
 from app.core import generate, kaggle, key_store
@@ -260,7 +261,7 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
                 if age_seconds > 30:
                     is_dead = True
             else:
-                if age_seconds > 300:
+                if age_seconds > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
                     is_dead = True
         if is_dead:
             try:
