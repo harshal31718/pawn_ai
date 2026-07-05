@@ -409,6 +409,87 @@ def test_get_session_status_expired_not_alive():
     assert out["error"] and "time limit" in out["error"].lower()
 
 
+def test_get_session_status_warmup_stale_heartbeat_flips_to_error():
+    """The supervisor heartbeats during warmup, so a stale heartbeat on a
+    still-loading session means the kernel died mid-startup (crash/OOM/killed)."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "loading_model",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now - timedelta(minutes=5)),  # stale during warmup
+        "created_at": _iso(now - timedelta(minutes=6)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "during startup" in out["error"]
+    assert any(kind == "execute" and "status = 'error'" in sql for kind, sql, _ in db.calls)
+
+
+def test_get_session_status_warmup_fresh_heartbeat_stays_loading():
+    """A warming-up session that IS still heartbeating must stay in its phase,
+    not be reaped -- even though it hasn't reached 'ready' yet."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "loading_model",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now - timedelta(seconds=5)),  # fresh
+        "created_at": _iso(now - timedelta(minutes=3)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "loading_model"
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
+
+
+def test_get_session_status_warmup_no_heartbeat_falls_back_to_timeout():
+    """Before the first heartbeat lands (or an old notebook), warmup death is
+    detected via the wall-clock startup timeout, not heartbeat staleness."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "starting",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": None,
+        "created_at": _iso(now - timedelta(minutes=20)),  # past 15min startup timeout
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "starting up" in out["error"]
+
+
+def test_get_session_status_warmup_no_heartbeat_recent_stays_starting():
+    """A just-started session (no heartbeat yet, recent created_at) must not be
+    prematurely killed."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "starting",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": None,
+        "created_at": _iso(now - timedelta(seconds=10)),  # just started
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "starting"
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
+
+
 def test_get_session_status_stopping_within_grace_period_untouched():
     """A Stop just clicked on a long-running session must NOT be immediately
     declared 'ended' -- this was the exact bug: age was measured from the
