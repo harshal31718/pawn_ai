@@ -49,8 +49,13 @@ services:
         condition: service_healthy
     # Uses the image's default CMD (uvicorn, NO --reload). Resource-capped so a
     # runaway PAWN process can never starve Enma's trading engine (hard rule 9).
+    # Per-container `cpus` must fit the host's actual vCPU count: the permanent
+    # target is a free-tier Ampere A1 (1 OCPU = 1 vCPU, no SMT), not the x86
+    # E5.Flex bridge box (1 OCPU = 2 vCPUs via hyperthreading) these were
+    # originally sized for — Docker rejects any single container's `cpus` above
+    # the host's vCPU count. Sized to sum to ~1.0 across all three services.
     mem_limit: 1g
-    cpus: 1.5
+    cpus: 0.6
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -75,7 +80,7 @@ services:
       timeout: 5s
       retries: 10
     mem_limit: 1g
-    cpus: 1.0
+    cpus: 0.3
 
   postgrest:
     image: postgrest/postgrest:v12.2.3
@@ -97,7 +102,7 @@ services:
       postgres:
         condition: service_healthy
     mem_limit: 256m
-    cpus: 0.5
+    cpus: 0.1
 
 volumes:
   postgres_data:
