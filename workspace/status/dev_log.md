@@ -6,6 +6,24 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-05] — Fixed warm-session Stop never actually killing the Kaggle kernel (+ death detection during warmup)
+
+**Reported:** (1) clicking Stop showed "stopping" then reverted to not-running in the UI, but the Kaggle kernel kept running/consuming GPU; (2) stopping the kernel externally on Kaggle didn't update PAWN's UI. User believed it "worked fine 2-3 days ago."
+
+**Git archaeology (user asked to check 2-3 day old commits):** the warm-session notebooks' serve-loop AND model-load cells are **byte-identical across 06-30, 07-03, and today** — the stop logic never changed. What changed 2-3 days ago was infrastructure only (Supabase→PostgREST on 07-03 `9350664`, RLS `session_token` scoping on 07-04 `2e9918f`), not the stop mechanism. So there was **no regression to revert to**; the bug is structural and has existed since the warm-session feature was built (W.1, 06-29).
+
+**Actual root cause:** the stop check lived ONLY in the serve loop (cell 3), which runs *after* the model finishes loading. During the entire warmup window (pip install + model load — up to 10+ min for FLUX) the kernel never reads the stop flag. Worse, cell 2's success path unconditionally patched `status='ready'`, **resurrecting** a session the user had already stopped. Stop only ever worked if clicked while `ready` — which is why SDXL (loads in ~1-2 min) seemed fine and FLUX (slow, and currently OOMing on load) exposed it constantly. Confirmed against the live prod DB: a FLUX session stopped 13s after start (still warming) sat unresponsive.
+
+**Fix — lifelong supervisor daemon thread** (both warm-session notebooks, identical): starts before pip install and runs for the kernel's whole life. Every poll it heartbeats AND checks for stop/expiry; the instant it sees either, it patches `ended` and **`os._exit(0)`** — hard-ending the Kaggle run and freeing the GPU even while the main thread is blocked mid-load. Kaggle exposes no external "cancel kernel" API, so a cooperative self-exit is the only mechanism that exists. Also added a resurrection guard before the ready-patch (belt-and-suspenders for a stop landing in the final seconds of a load). Because the supervisor now heartbeats during warmup, the backend (`get_session_status`) detects a kernel that died mid-startup via stale heartbeat and surfaces it as `error` (previously such a session sat in `loading_model` for up to 15 min); falls back to the wall-clock startup timeout before the first heartbeat / for older kernels.
+
+**Universality (user asked):** applied to BOTH warm-session notebooks (`image_flux_session`, `image_sdxl_session`) — identical supervisor. The cold one-shot notebooks (`image_flux`, `image_sdxl`) run to completion and have no session/stop concept; `session_poc` is unused (not in the model registry). So stop+tracking is now universal across every notebook that has a session.
+
+**Verification:** 164 backend tests green (4 new warmup-death tests). Deployed to prod (backend rebuild; notebooks are read from the backend image at session-start). **Live Kaggle test still pending — not verifiable from the dev environment.** Caveat surfaced to the user: any kernel already running on Kaggle predates this fix and won't self-stop; a fresh session must be started after deploy to pick up the supervisor. This builds directly on the prior 2026-07-05 fix (`472a170`, the `stop_requested_at` / stale-`ready` detection) — that fix made PAWN *honest* about not knowing; this one makes the kernel *actually stop*.
+
+**Commits:** `4c33bf8` (dev) → `b92e883` (main, deployed).
+
+---
+
 ### [2026-07-05] — Migrated prod off the paid bridge onto the permanent free-tier Ampere instance
 
 **Built:** the background retry loop (started 2026-07-04, documented in `current_state.md`'s Known Issues) succeeded on attempt 183 at `2026-07-04T17:54:11Z` — Oracle freed up Always-Free Ampere A1 capacity in `ap-mumbai-1` and the saved Resource Manager stack provisioned a new dedicated instance, `pawn` (`144.24.119.184`, 1 OCPU/6GB, `VM.Standard.A1.Flex`, ARM64). Unlike `deployment.md`'s "second app on Enma's shared box" framing, both `pawn-temp` and the new `pawn` instance turned out to be fully standalone VMs (Enma's Always-Free pool was split across separate instances, not a shared host) — so the shared-box hard rules in `deployment.md` §0 didn't actually apply to this migration; Nginx/firewall were set up fresh with no Enma coexistence concerns.
