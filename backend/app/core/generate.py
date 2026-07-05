@@ -56,7 +56,7 @@ def connect_kaggle(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> None:
         title=_kernel_title(spec),
         source=source,
         enable_gpu=False,
-        enable_internet=True,  # install cell still runs on warmup
+        enable_internet=True,  # harmless if unused; kept for parity across models
         dataset_sources=[],
         accelerator=None,
     )

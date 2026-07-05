@@ -3,6 +3,9 @@ secrets/*
 !secrets/.gitkeep
 !secrets/*.example
 
+# local-only deploy backups (real secrets + DB dumps) — never commit
+backups/
+
 # data — personal conversation and memory files
 data/
 
