@@ -1,7 +1,7 @@
 # PAWN — Current State
 
-Last updated: 2026-07-04
-Active step: **D.8 (first live production deploy) executed and fully verified — on a temporary bridge instance, migration to the permanent free-tier instance pending.** Plan called for a free Ampere A1 instance (1 OCPU/6GB) carved from Enma's Always-Free pool by resizing `enma-production` 4 OCPU/24GB → 3 OCPU/18GB (done, verified healthy via live SSH: `free -h`/`nproc` match, all 4 containers "Up (healthy)", app health `{"status":"ok","mongo":"connected","redis":"connected"}`). Oracle's Ampere A1 capacity in `ap-mumbai-1` was exhausted at request time (`Out of host capacity` on every attempt — a known, common, and usually temporary Always-Free constraint, not a config error), so PAWN went live instead on **`pawn-temp`**, a paid `VM.Standard.E5.Flex` x86 instance (1 OCPU/6GB, ~$46/month against a Universal Credits balance expiring 2026-07-31) as a bridge. A retry loop (`oci resource-manager job create-apply-job` against a saved Resource Manager stack) keeps polling for the free slot; once it succeeds, the plan is to repeat the (now-corrected) `deployment.md` on the new instance, repoint DuckDNS, re-verify, and terminate `pawn-temp`.
+Last updated: 2026-07-05
+Active step: **D.8 fully complete — migrated off the paid bridge onto the permanent free-tier Ampere instance, `pawn-temp` terminated.** The background retry loop succeeded 2026-07-04 (attempt 183) and provisioned `pawn` (`144.24.119.184`, 1 OCPU/6GB Ampere A1, ARM64) as its own dedicated instance (not shared with Enma — Enma's Always-Free pool turned out to be split across separate VMs, not one shared host). Migrated data-preserving: Docker+Node installed fresh, `main` cloned, secrets copied verbatim from `pawn-temp` (same `encryption_secret`/`jwt_secret` so existing encrypted BYOK keys/Drive tokens kept working), `pg_dump`/restore of all 6 tables (verified matching row counts), DuckDNS repointed by the user, fresh Let's Encrypt cert issued via `certbot --nginx`. One real bug found: `docker-compose.prod.yml`'s CPU limits (`1.5/1.0/0.5`) assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded OCPU) and broke outright on Ampere A1's 1 real vCPU (no SMT) — rescaled to `0.6/0.3/0.1`, fixed on `main`. User verified login/chat/load in-browser on the new instance, then explicitly authorized immediately terminating `pawn-temp` (a final local backup was taken first — `backups/pawn-temp-final-2026-07-05/`, gitignored — before running `oci compute instance terminate`). No more paid-instance billing risk.
 
 Full `deployment.md` §7 verification checklist passed live: HTTPS health, no CSP violations, full Google OAuth round-trip (Drive-linked — the one path untestable locally), BYOK chat streaming, and a real Kaggle SDXL image generation through the PostgREST rendezvous.
 
@@ -227,30 +227,7 @@ Test/build status: **132 backend tests passing**; frontend `npm run build` passe
 
 ## Known Issues / Deferred Items
 
-- **PENDING — free-tier Ampere instance retry loop (started 2026-07-04, not yet succeeded as of last check).**
-  **What:** a background loop on `pawn-temp` repeatedly retries creating the
-  free-tier 1 OCPU/6GB Ampere A1 instance for PAWN (a saved OCI Resource
-  Manager stack), since Oracle's Always-Free Ampere capacity in
-  `ap-mumbai-1` was exhausted at every attempt on 2026-07-04.
-  **Why:** so PAWN can migrate off the temporary paid `pawn-temp` bridge
-  (see next item) onto its intended permanent free-tier home, without
-  needing a human to manually retry.
-  **How it was started** (for reference — do not re-run unless the loop has
-  died; check status first):
-  ```
-  ssh -i C:\Users\harsh\Downloads\ssh-key-2026-07-04.key ubuntu@92.4.84.39 "setsid nohup ~/pawn-ampere-retry.sh > ~/pawn-ampere-retry.log 2>&1 < /dev/null &"
-  ```
-  **How to check if it's running or has completed:**
-  ```
-  ssh -i C:\Users\harsh\Downloads\ssh-key-2026-07-04.key ubuntu@92.4.84.39 "tail -20 ~/pawn-ampere-retry.log"
-  ```
-  Look for a line reading `SUCCESS on attempt N!` — that means the instance
-  was created and it's time to do the migration (repeat `deployment.md` on
-  the new instance, repoint DuckDNS, verify, terminate `pawn-temp`). If it's
-  still printing `Still failing (likely out of capacity). Retrying in 45s...`
-  entries, it's alive and waiting — no action needed. The script itself
-  lives at `~/pawn-ampere-retry.sh` on `pawn-temp`.
-- **`pawn-temp` is a temporary paid bridge instance**, not the permanent deploy target — its billing draws against a Universal Credits balance expiring **2026-07-31**. Migrate to the free-tier Ampere instance (once capacity opens up) and terminate `pawn-temp` well before that date, or accept ~$46/month ongoing if capacity never frees up in time.
+- ~~Free-tier Ampere instance retry loop~~ — **RESOLVED 2026-07-04/05.** Succeeded on attempt 183 (`2026-07-04T17:54:11Z`); the new `pawn` instance (`144.24.119.184`) was provisioned and prod fully migrated onto it 2026-07-05. `pawn-temp` (the paid bridge) has been terminated — no more Universal Credits billing risk. See `dev_log.md` 2026-07-05 entry for the full migration record.
 - ~~Permissive `pawn_anon` RLS on `image_sessions`/`image_jobs`~~ — **FIXED 2026-07-04.** `/pgrst/` was a public, unauthenticated endpoint where any caller (no PAWN account needed) could read/write any user's session or job rows. Closed by wiring up the existing (previously inert) `session_token` — the Kaggle kernel now sends it as an `X-Session-Token` header on every PostgREST call, and RLS policies on both tables require it to match before permitting SELECT/UPDATE. Applied to `postgres/schema.sql`, both warm-session notebook templates, and live-migrated onto `pawn-temp`'s running Postgres. Verified: no/wrong token → `[]` (nothing leaked), correct token → only that session's own rows; user manually confirmed a real session-start + generation still works end-to-end. This was the blocker for ever flipping the OAuth consent screen from Testing to public — now clear on that front (see `plan_deployment.md`/`build_tracker.md` for any other pre-public checklist items).
 - **Manual setup required before live use** (see build_tracker.md):
   1. Create Supabase free project; run `supabase/schema.sql`; fill `secrets/supabase_url` + `secrets/supabase_service_key`.
