@@ -362,6 +362,10 @@ def test_get_session_status_fresh_ready_is_alive():
         out = image_session.get_session_status("user-1", "sdxl")
     assert out["alive"] is True
     assert out["images_done"] == 2
+    assert out["status"] == "ready"
+    assert out["error"] is None
+    # A healthy session must never be written back to -- no execute calls at all.
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
 
 
 def test_get_session_status_stale_heartbeat_not_alive():
@@ -378,6 +382,13 @@ def test_get_session_status_stale_heartbeat_not_alive():
     with p1, p2, p3, p4:
         out = image_session.get_session_status("user-1", "sdxl")
     assert out["alive"] is False
+    # A silently-dead kernel must now be persisted as 'error', not left as 'ready'.
+    assert out["status"] == "error"
+    assert out["error"] and "heartbeat" in out["error"].lower()
+    assert any(
+        kind == "execute" and "status = 'error'" in sql and "status = 'ready'" in sql
+        for kind, sql, params in db.calls
+    )
 
 
 def test_get_session_status_expired_not_alive():
@@ -394,6 +405,69 @@ def test_get_session_status_expired_not_alive():
     with p1, p2, p3, p4:
         out = image_session.get_session_status("user-1", "sdxl")
     assert out["alive"] is False
+    assert out["status"] == "error"
+    assert out["error"] and "time limit" in out["error"].lower()
+
+
+def test_get_session_status_stopping_within_grace_period_untouched():
+    """A Stop just clicked on a long-running session must NOT be immediately
+    declared 'ended' -- this was the exact bug: age was measured from the
+    session's original created_at (always old) instead of stop_requested_at."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "stopping",
+        "created_at": _iso(now - timedelta(hours=1)),  # session has run a long time
+        "stop_requested_at": _iso(now - timedelta(seconds=5)),  # stop just clicked
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "sdxl")
+    assert out["status"] == "stopping"
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
+
+
+def test_get_session_status_stopping_past_grace_period_flips_to_error():
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "stopping",
+        "created_at": _iso(now - timedelta(hours=1)),
+        "stop_requested_at": _iso(now - timedelta(seconds=45)),  # past the 30s grace period
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "sdxl")
+    assert out["status"] == "error"
+    assert out["alive"] is False
+    assert out["error"] and "didn't confirm exit" in out["error"]
+    assert any(kind == "execute" and "status = 'error'" in sql for kind, sql, _ in db.calls)
+
+
+def test_get_session_status_stopping_confirmed_ended_untouched():
+    """If the kernel cooperatively patched status to 'ended' before the grace
+    period elapsed, get_session_status must not overwrite it with anything."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "ended",
+        "created_at": _iso(now - timedelta(hours=1)),
+        "stop_requested_at": _iso(now - timedelta(seconds=45)),
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "sdxl")
+    assert out["status"] == "ended"
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
 
 
 def test_stop_session_sets_stopping():
@@ -402,7 +476,8 @@ def test_stop_session_sets_stopping():
     with p1, p2, p3, p4:
         image_session.stop_session("user-1", "s1")
     assert any(
-        kind == "execute" and "'stopping'" in sql and params == ("s1", "user-1")
+        kind == "execute" and "'stopping'" in sql and "stop_requested_at" in sql
+        and params == ("s1", "user-1")
         for kind, sql, params in db.calls
     )
 

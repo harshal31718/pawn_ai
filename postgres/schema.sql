@@ -130,7 +130,10 @@ create table if not exists image_sessions (
   images_done   int not null default 0,
   heartbeat_at  timestamptz,                         -- kernel updates each loop → liveness
   error         text,
-  created_at    timestamptz not null default now()
+  created_at    timestamptz not null default now(),
+  stop_requested_at timestamptz                      -- set when stop_session() is called; the
+                                                       -- basis for the 'stopping' grace-period
+                                                       -- check (NOT created_at -- see image_session.py)
 );
 
 create table if not exists image_jobs (

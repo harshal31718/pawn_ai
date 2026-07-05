@@ -252,27 +252,80 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
 
     # Auto-cleanup dead/stuck sessions
     status = s.get("status")
-    if status in ("starting", "installing", "loading_model", "stopping"):
-        is_dead = False
-        created = _parse_ts(s.get("created_at") or s.get("heartbeat_at"))
-        if created is not None:
-            age_seconds = (_now() - created).total_seconds()
-            if status == "stopping":
-                if age_seconds > 30:
-                    is_dead = True
-            else:
-                if age_seconds > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
-                    is_dead = True
-        if is_dead:
+
+    if status in ("starting", "installing", "loading_model"):
+        # These phases send no heartbeat (the kernel is busy booting), so the
+        # only signal we have is wall-clock age since the session was created.
+        # If it never reached 'ready' in time, it really did die/hang -- no
+        # ambiguity, 'ended' is the correct terminal state.
+        created = _parse_ts(s.get("created_at"))
+        if created is not None and (_now() - created).total_seconds() > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
             try:
                 execute("update image_sessions set status = 'ended' where id = %s", (s["id"],))
             except Exception:
                 pass
             s["status"] = "ended"
 
+    elif status == "stopping":
+        # Cooperative stop only: Kaggle has no "cancel a running kernel" API,
+        # so this flips a DB flag and waits for the kernel to notice on its
+        # own next poll and exit. The age check MUST be measured from when
+        # THIS stop was requested (stop_requested_at) -- using created_at (the
+        # session's original start time) meant any session older than the
+        # grace period got force-declared 'ended' on the very next poll after
+        # Stop was clicked, regardless of whether the kernel had actually
+        # exited (e.g. still mid-generation, or genuinely hung) -- PAWN was
+        # confidently lying about the outcome. If the kernel doesn't confirm
+        # within the grace period, say so honestly instead of guessing.
+        basis = _parse_ts(s.get("stop_requested_at")) or _parse_ts(s.get("created_at"))
+        if basis is not None and (_now() - basis).total_seconds() > 30:
+            reason = (
+                "Stop requested, but the Kaggle kernel didn't confirm exit in "
+                "time -- it may still be running on Kaggle. Check kaggle.com/code "
+                "if you're concerned about GPU usage."
+            )
+            try:
+                execute(
+                    "update image_sessions set status = 'error', error = %s where id = %s",
+                    (reason, s["id"]),
+                )
+            except Exception:
+                pass
+            s["status"] = "error"
+            s["error"] = reason
+
+    elif status == "ready" and not _is_alive(s):
+        # The kernel died/crashed/was killed on its own -- no Stop was ever
+        # clicked. Nothing else in this codebase persists this (_is_alive() is
+        # otherwise only computed fresh per-call, never written back), so the
+        # UI would keep showing "ready" forever. Guard the UPDATE on
+        # status='ready' so this can't race a concurrent graceful stop.
+        stale_heartbeat = False
+        hb = _parse_ts(s.get("heartbeat_at"))
+        if hb is not None and (_now() - hb).total_seconds() > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS:
+            stale_heartbeat = True
+        reason = (
+            "Session heartbeat lost -- the Kaggle kernel likely crashed, hit a "
+            "resource limit, or was killed unexpectedly."
+            if stale_heartbeat else
+            "Session exceeded its time limit without shutting down cleanly -- "
+            "it may have become unresponsive."
+        )
+        try:
+            execute(
+                "update image_sessions set status = 'error', error = %s "
+                "where id = %s and status = 'ready'",
+                (reason, s["id"]),
+            )
+        except Exception:
+            pass
+        s["status"] = "error"
+        s["error"] = reason
+
     return {
         "session_id": str(s["id"]),
         "status": s["status"],
+        "error": s.get("error"),
         "expires_at": s.get("expires_at"),
         "images_done": s.get("images_done", 0),
         "max_images": s.get("max_images"),
@@ -281,9 +334,17 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
 
 
 def stop_session(user_id: str, session_id: str) -> None:
-    """Cooperative stop -- flag the session; the kernel exits on its next poll."""
+    """Cooperative stop -- flag the session; the kernel exits on its next poll.
+
+    Kaggle's API has no "cancel a running kernel" call, so this can only ever
+    be a request the kernel notices and honors on its own -- it cannot force
+    the kernel to actually exit. `stop_requested_at` records when THIS
+    request was made (not when the session originally started) so
+    get_session_status's grace-period check measures the right interval.
+    """
     execute(
-        "update image_sessions set status = 'stopping' where id = %s and user_id = %s",
+        "update image_sessions set status = 'stopping', stop_requested_at = now() "
+        "where id = %s and user_id = %s",
         (session_id, user_id),
     )
 
