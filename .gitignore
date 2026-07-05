@@ -6,6 +6,9 @@ secrets/*
 # local-only deploy backups (real secrets + DB dumps) — never commit
 backups/
 
+# SSH keypairs (Oracle instance access, etc.) — never commit
+keys/
+
 # data — personal conversation and memory files
 data/
 
