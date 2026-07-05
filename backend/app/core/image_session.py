@@ -254,17 +254,35 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
     status = s.get("status")
 
     if status in ("starting", "installing", "loading_model"):
-        # These phases send no heartbeat (the kernel is busy booting), so the
-        # only signal we have is wall-clock age since the session was created.
-        # If it never reached 'ready' in time, it really did die/hang -- no
-        # ambiguity, 'ended' is the correct terminal state.
+        # The notebook's supervisor thread heartbeats during warmup too, so a
+        # stale heartbeat here means the kernel died mid-startup (crash / OOM /
+        # externally killed). Before the first heartbeat lands (the first few
+        # seconds), or for an older notebook that doesn't heartbeat during
+        # warmup, fall back to the wall-clock startup timeout.
+        hb = _parse_ts(s.get("heartbeat_at"))
         created = _parse_ts(s.get("created_at"))
-        if created is not None and (_now() - created).total_seconds() > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
+        dead_reason = None
+        if hb is not None:
+            if (_now() - hb).total_seconds() > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS:
+                dead_reason = (
+                    "Session died during startup -- the Kaggle kernel stopped "
+                    "sending heartbeats (crash, resource limit, or killed)."
+                )
+        elif created is not None and (_now() - created).total_seconds() > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
+            dead_reason = (
+                "Session never finished starting up in time -- the Kaggle kernel "
+                "may have failed to install dependencies or load the model."
+            )
+        if dead_reason is not None:
             try:
-                execute("update image_sessions set status = 'ended' where id = %s", (s["id"],))
+                execute(
+                    "update image_sessions set status = 'error', error = %s where id = %s",
+                    (dead_reason, s["id"]),
+                )
             except Exception:
                 pass
-            s["status"] = "ended"
+            s["status"] = "error"
+            s["error"] = dead_reason
 
     elif status == "stopping":
         # Cooperative stop only: Kaggle has no "cancel a running kernel" API,
