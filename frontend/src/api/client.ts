@@ -181,6 +181,7 @@ export async function runKaggleImage(
 export interface SessionStatus {
   status: string // none | starting | installing | loading_model | ready | stopping | ended | error
   alive: boolean
+  error?: string | null // set when status === 'error': model-load failure, heartbeat lost, or stop unconfirmed
   session_id?: string
   expires_at?: string | null
   images_done?: number

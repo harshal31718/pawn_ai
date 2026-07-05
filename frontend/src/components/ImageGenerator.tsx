@@ -435,6 +435,12 @@ const ImageGenerator = forwardRef<
         </div>
       )}
 
+      {session?.status === 'error' && session.error && (
+        <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 text-xs text-amber-800 dark:text-amber-300 font-medium break-words">
+          ⚠ {session.error}
+        </div>
+      )}
+
       {latestResult && latestResult.status === 'done' && resultIsImage && latestResult.image_b64 && (
         <div className="space-y-1.5">
           <div className="text-[10px] font-medium text-theme-text-muted truncate">
