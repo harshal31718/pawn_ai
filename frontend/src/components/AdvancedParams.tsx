@@ -23,14 +23,24 @@ export interface AdvancedState {
   strength: ParamState<number>
 }
 
-export const INITIAL_ADVANCED: AdvancedState = {
-  aspectRatio: { enabled: false, value: '1:1' },
-  steps: { enabled: false, value: 20 },
-  guidanceScale: { enabled: false, value: 7.5 },
-  negativePrompt: { enabled: false, value: '' },
-  stylePreset: { enabled: false, value: '' },
-  strength: { enabled: false, value: 0.6 },
+// Per-model floor: SDXL wants ~30 steps for good quality (its notebook default);
+// FLUX.1-schnell is distilled for ~4 steps and gains nothing from more. Used so a
+// user who enables the slider without touching it gets a sane value either way,
+// instead of one flat default that undercuts SDXL or overshoots FLUX.
+export const DEFAULT_STEPS: Record<string, number> = { sdxl: 30, flux: 4 }
+
+export function initialAdvanced(modelId: string): AdvancedState {
+  return {
+    aspectRatio: { enabled: false, value: '1:1' },
+    steps: { enabled: false, value: DEFAULT_STEPS[modelId] ?? 20 },
+    guidanceScale: { enabled: false, value: 7.5 },
+    negativePrompt: { enabled: false, value: '' },
+    stylePreset: { enabled: false, value: '' },
+    strength: { enabled: false, value: 0.6 },
+  }
 }
+
+export const INITIAL_ADVANCED: AdvancedState = initialAdvanced('sdxl')
 
 export function deriveParams(s: AdvancedState): ImageParams {
   const p: ImageParams = {}
@@ -64,7 +74,7 @@ export default function AdvancedParams({
   onStrengthEnabledChange?: (enabled: boolean) => void
   open: boolean
 }) {
-  const [s, setS] = useState<AdvancedState>(INITIAL_ADVANCED)
+  const [s, setS] = useState<AdvancedState>(() => initialAdvanced(modelId))
   const isFlux = modelId === 'flux'
 
   function update<K extends keyof AdvancedState>(key: K, patch: Partial<AdvancedState[K]>) {

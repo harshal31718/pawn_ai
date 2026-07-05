@@ -13,8 +13,10 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase D — Production Deployment (D.8 executed and verified on a temporary instance, migration to the permanent free-tier instance PENDING) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + Phase 3 — WebCrypto Encryption (not started)
-**Active step:** **D.8 live deploy done, on a temporary bridge instance (2026-07-04).** Original plan called for a free-tier Ampere A1 (1 OCPU/6GB) instance carved out of Enma's Always-Free pool by resizing `enma-production` down to 3 OCPU/18GB (done, verified healthy) — but Oracle's Ampere A1 capacity in `ap-mumbai-1` was exhausted at request time, so PAWN is live on **`pawn-temp`**, a paid `VM.Standard.E5.Flex` x86 instance (1 OCPU/6GB, ~$46/month against a Universal Credits balance expiring 2026-07-31), as a bridge until free capacity opens up. A retry loop (`oci resource-manager job create-apply-job` against a saved stack) runs detached on `pawn-temp` itself (not locally — survives the operator going offline), polling every 45s. **Check status / see the exact command / what to do once it succeeds:** `workspace/current_state.md`'s "Known Issues" section, first entry. **Once it succeeds:** repeat the now-corrected `deployment.md` on the new instance, repoint `pawnai.duckdns.org` in DuckDNS, re-verify, then terminate `pawn-temp`.
+**Active phases (merged track):** Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **D.8 fully complete (2026-07-05).** The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+
+**Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
 Full `deployment.md` §7 verification checklist passed on `pawn-temp`: HTTPS health, no CSP violations, full Google OAuth round-trip (Drive-linked — the one path untestable locally), BYOK chat streaming, and a real Kaggle SDXL image generation through the PostgREST rendezvous. Enma re-verified healthy throughout (health endpoint + all 4 containers "Up (healthy)" both before and after every VM-side action).
 
@@ -508,8 +510,14 @@ decision and coexistence rules).
   startup timeout too short, CSP missing `img-src data:`) — see "Active
   step" above for details; all 4 now folded into `deployment.md` so the
   pending migration to the permanent free instance won't repeat them.
-  **Remaining:** migrate off `pawn-temp` once free Ampere capacity succeeds,
-  repoint DuckDNS, re-verify, terminate the paid instance.
+- [x] **D.8 migration — moved off `pawn-temp` onto the permanent free-tier
+  instance** — **done 2026-07-05.** Retry loop succeeded (attempt 183);
+  data-preserving migration to `pawn` (`144.24.119.184`) verified end-to-end
+  (matching DB row counts, HTTPS health, login/chat/load confirmed live by
+  the user); DuckDNS repointed; fresh Let's Encrypt cert issued; `pawn-temp`
+  terminated after a final local safety backup. One bug found+fixed:
+  `docker-compose.prod.yml` CPU limits assumed 2 vCPUs, broke on Ampere A1's
+  1 real vCPU — rescaled. See `dev_log.md` 2026-07-05 for the full record.
 
 ---
 
