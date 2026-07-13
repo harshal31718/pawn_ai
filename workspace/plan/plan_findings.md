@@ -26,3 +26,11 @@ git push private main
 Use code with caution.🚀 Step 3: Publishing to the PublicWhen you are ready to share your code changes with the world, run just one command to sync the public repository:bashgit push public main
 Use code with caution.Because you only ever run git push public main, no other branches will ever upload to the public GitHub repository.⚠️ Crucial Rules for Managing This SetupNever use git push --all: This command pushes every single branch to your default remote. Avoid it entirely to prevent accidental leaks.Keep .gitignore identical: Ensure both repositories use the exact same .gitignore file so private API keys or configuration files do not accidentally get pushed to the public repo.Squash commits (Optional but Recommended): If your private commit messages contain sensitive or messy notes, use git merge --squash when merging into main. This combines all your feature history into one clean commit before you push it to the public.To make things even easier, I can give you a GitHub Actions automation script that automatically pushes to the public repo every time you update your private main branch. Would you like to set that up?
 ```
+
+5. question: we say memory-summary indexing is drive-mandatory, but the actual
+   rag-searchable chunks (embeddings) live in postgres/pgvector, not drive -
+   drive can't do vector/FTS search. so is "memory-summary indexing" only
+   ever the raw summary text on drive, with pgvector as a separate additional
+   index? or is the "drive is the only backend" claim in this plan + in
+   project_overview.md's pitch just stale/imprecise now. worth reconciling,
+   not urgent.

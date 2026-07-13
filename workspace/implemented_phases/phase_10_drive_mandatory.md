@@ -175,3 +175,19 @@ Implement phases sequentially; tests pass before moving to the next phase;
 update `workspace/current_state.md` and `workspace/status/build_tracker.md`
 after each phase. Pause for confirmation before D.7/D.8 (the live deploy), per
 `plan_deployment.md`'s existing working agreement — unaffected by this plan.
+
+## Open question raised outside this plan (resume-writing session, 2026-07-06)
+
+"Decisions locked in" item 1 above lists **memory-summary indexing** as part of
+what's Drive-mandatory. But per SM-1/D.3+D.4, the actual RAG-searchable
+representation (embedded chunks inserted via `memory/index.py`'s `add_chunk`)
+lives in the self-hosted Postgres/pgvector table, not Drive — Drive can't run
+vector/FTS queries. So either (a) "memory-summary indexing" here only ever
+meant the raw rolling-summary text file per conversation (Drive-stored), and
+the pgvector chunk index is a separate, intentionally-additional system not
+covered by this plan's "Drive is the only backend" claim — or (b) this plan's
+scope statement is stale/imprecise now that the pgvector index exists.
+`project_overview.md`'s pitch ("the platform stores nothing, all memory lives
+on Drive") has the same gap. Worth reconciling the wording in both docs so the
+Drive-mandatory claim's actual scope is unambiguous — not urgent, not
+blocking, just flagging so it doesn't get treated as a settled non-issue.
