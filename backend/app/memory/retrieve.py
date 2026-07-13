@@ -10,6 +10,14 @@ SQL functions (defined in postgres/schema.sql):
 
 Graceful degradation: if embedding fails, falls back to FTS only. If Postgres is
 unreachable, returns []. Memory is always scoped by user_id.
+
+NOTE (Phase M, M.1): postgres/schema.sql's M.1 migration dropped the two SQL
+functions above in favor of match_scoped_chunks/search_scoped_chunks. This
+module still calls the old names, so every retrieve() call now hits "function
+does not exist," gets swallowed by this module's own fail-soft except blocks,
+and silently returns []. Memory retrieval is fully inert for the M.1->M.3
+window by design (sequenced deferral, not a regression) -- M.4 rewrites this
+module to the new scoped signature.
 """
 
 import asyncio

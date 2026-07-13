@@ -6,6 +6,16 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-13] — Phase M / M.1: memory-scoping schema + migration
+
+Kicked off Phase M (`workspace/plan/plan_memory_scoping.md`, prescriptive, locked 2026-07-13): drops the always-cross-chat memory tier for strict per-chat/per-project isolation. Session scope: M.1 and M.2 only.
+
+**M.1 — Schema + migration file.** `postgres/schema.sql`'s `memory_chunks` redefined (drop+recreate) with `chunk_id`/`scope_type`/`scope_id`/`conv_id`/`kind`/`doc_id`/`msg_index` columns and a `unique(user_id, chunk_id)` constraint (idempotency key for re-indexing). Old `match_memory_chunks`/`search_memory_chunks` (exclude-active-conv semantics) dropped; new `match_scoped_chunks`/`search_scoped_chunks` (strict equality on `scope_type`/`scope_id` — the inverse of the old exclude filter) added. New `postgres/migrations/2026-07_memory_scoping.sql` for already-initialized volumes (schema.sql alone only runs on a fresh volume) — applied to local dev Postgres via `docker compose exec -T postgres psql -U pawn -d pawn < postgres/migrations/2026-07_memory_scoping.sql`, verified live (`\d memory_chunks`, `\df match_scoped_chunks`/`search_scoped_chunks`, `\df match_memory_chunks` → 0 rows). `memory/index.py`'s `add_chunk` signature changed to `(user_id, scope_type, scope_id, conv_id, chunk_id, msg_index, text, embedding)`, upserting via `on conflict (user_id, chunk_id) do update`. `test_rag.py`'s two `add_chunk` tests updated to the new signature + one new upsert-idempotency test. 165 backend tests green.
+
+**Known, accepted transitional gap (by plan design, sequenced M.1→M.2→M.3→M.4):** `memory/retrieve.py` still calls the now-dropped `match_memory_chunks`/`search_memory_chunks` by name — every `retrieve()` call hits "function does not exist," caught by its own fail-soft except blocks, silently returning `[]`. Chat memory retrieval is fully inert until M.4 rewrites `retrieve.py` to the scoped signature. `memory/summarize.py`'s `add_chunk` call site (line 101) still uses the old 4-arg form and will `TypeError` on every summary write, caught by its surrounding `except Exception` (fails soft) — deferred to M.3, which replaces this call path with the new chunker/indexer. Both gaps documented inline (code comments) and here; not regressions, not fixed this step — next steps in the same phase close them.
+
+code-reviewer PASS (0 CRITICAL; 1 WARN — retrieve.py's silent-inert-until-M.4 gap wasn't documented anywhere, fixed with a module docstring note; 2 NOTE — summarize.py's stale call site got an inline TODO comment, migration file got the column-purpose comments mirrored from schema.sql for parity). No security-auditor run (M.1 touches no secrets/config/auth).
+
 ### [2026-07-05] — Fixed warm-session Stop never actually killing the Kaggle kernel (+ death detection during warmup)
 
 **Reported:** (1) clicking Stop showed "stopping" then reverted to not-running in the UI, but the Kaggle kernel kept running/consuming GPU; (2) stopping the kernel externally on Kaggle didn't update PAWN's UI. User believed it "worked fine 2-3 days ago."

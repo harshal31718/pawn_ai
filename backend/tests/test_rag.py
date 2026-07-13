@@ -44,23 +44,41 @@ def _fake_fetchall(vec_rows=None, fts_rows=None):
 
 
 def test_add_chunk_inserts_to_postgres():
-    """add_chunk should insert a row scoped by user_id and return its id."""
+    """add_chunk should insert a row scoped by (user_id, scope_type, scope_id) and return its id."""
     emb = [1.0] + [0.0] * 767
     fake_fetchone = MagicMock(return_value={"id": 42})
 
     with patch("app.memory.index.fetchone", fake_fetchone):
-        rowid = add_chunk("user-1", "conv-A", "Pineapples are tropical.", emb)
+        rowid = add_chunk(
+            "user-1", "chat", "conv-A", "conv-A", "chunk-1", 0, "Pineapples are tropical.", emb
+        )
 
     assert rowid == 42
     sql, params = fake_fetchone.call_args[0]
     assert "insert into memory_chunks" in sql
-    assert params == ("user-1", "conv-A", "Pineapples are tropical.", emb)
+    assert params == ("user-1", "chat", "conv-A", "conv-A", "chunk-1", 0, "Pineapples are tropical.", emb)
 
 
 def test_add_chunk_returns_none_on_failure():
     """If Postgres raises, add_chunk degrades gracefully to None."""
     with patch("app.memory.index.fetchone", side_effect=Exception("down")):
-        assert add_chunk("user-1", "conv-A", "text", [0.0] * 768) is None
+        assert add_chunk("user-1", "chat", "conv-A", "conv-A", "chunk-1", 0, "text", [0.0] * 768) is None
+
+
+def test_add_chunk_upserts_idempotently_on_chunk_id():
+    """Re-indexing the same chunk_id must issue an ON CONFLICT upsert, not a plain insert."""
+    emb = [1.0] + [0.0] * 767
+    fake_fetchone = MagicMock(return_value={"id": 42})
+
+    with patch("app.memory.index.fetchone", fake_fetchone):
+        first = add_chunk("user-1", "chat", "conv-A", "conv-A", "chunk-1", 0, "text v1", emb)
+        second = add_chunk("user-1", "chat", "conv-A", "conv-A", "chunk-1", 0, "text v2", emb)
+
+    assert first == second == 42
+    for call in fake_fetchone.call_args_list:
+        sql = call[0][0]
+        assert "on conflict (user_id, chunk_id)" in sql
+        assert "do update set" in sql
 
 
 def test_retrieve_fuses_vector_and_fts():

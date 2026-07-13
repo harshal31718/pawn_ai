@@ -48,13 +48,16 @@ Drops the always-cross-chat memory tier for strict isolation: standalone chats g
 their own chat-scoped RAG, projects get project-scoped RAG shared across their chats,
 and nothing crosses a scope boundary. Prescriptive plan — implement exactly as written.
 
-- [ ] **M.1 — Schema + migration file**
+- [x] **M.1 — Schema + migration file** ✓ (2026-07-13)
   `postgres/schema.sql` + `postgres/migrations/2026-07_memory_scoping.sql` (drop old
   functions, drop+recreate `memory_chunks` with `scope_type`/`scope_id`/`kind`/`doc_id`,
   new `match_scoped_chunks`/`search_scoped_chunks` functions); applied to local dev
-  Postgres. `memory/index.py` `add_chunk(user_id, scope_type, scope_id, conv_id,
-  chunk_id, msg_index, text, embedding)` upsert on `(user_id, chunk_id)`.
-  Demo: psql shows new table + functions; old functions gone.
+  Postgres, live-verified. `memory/index.py` `add_chunk(user_id, scope_type, scope_id,
+  conv_id, chunk_id, msg_index, text, embedding)` upsert on `(user_id, chunk_id)`.
+  165 backend tests green. code-reviewer PASS (0 CRITICAL). **Known transitional gap
+  (accepted, closes in M.3/M.4):** `retrieve.py`/`summarize.py`'s `add_chunk` call site
+  still reference the pre-M.1 shape, fail soft — see `dev_log.md` 2026-07-13.
+  Demo: psql shows new table + functions; old functions gone. ✓
 
 - [ ] **M.2 — Drive storage layer: new layout + projects**
   `storage/drive.py` gains `move_item`. `storage/conversations_drive.py` retargeted to
