@@ -24,6 +24,7 @@ from app.routes.registry import router as registry_router
 from app.routes.keys import router as keys_router
 from app.routes.generate import router as generate_router
 from app.routes.crypto import router as crypto_router
+from app.routes.projects import router as projects_router
 from app.app_initializer import initialize_managers
 from app.core.llm_core import close_client
 
@@ -75,6 +76,7 @@ app.include_router(registry_router)
 app.include_router(keys_router)
 app.include_router(generate_router)
 app.include_router(crypto_router)
+app.include_router(projects_router)
 
 
 

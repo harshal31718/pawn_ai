@@ -19,6 +19,7 @@ from app.constants import SCOPE_CACHE_TTL_SECONDS
 from app.core.drive_factory import call_drive, require_drive_for_user
 from app.exceptions import NotConfiguredError
 from app.memory.chunker import chunk_turn
+from app.memory.locks import get_conv_lock
 from app.storage import conversations_drive, projects_drive
 from app.storage.drive import DriveStorage
 
@@ -123,45 +124,53 @@ async def index_turn_task(
     semantics. `scope` may be a precomputed (scope_type, scope_id) tuple;
     pass None to resolve it fresh (e.g. from folder placement) inside this
     task, which is always safe since scope can change between scheduling and
-    execution (a move mid-flight)."""
+    execution (a move mid-flight).
+
+    Holds the shared per-(user, conv) lock (memory/locks.py) for the whole
+    operation -- M.5's chat moves acquire the same lock, so a turn being
+    indexed here either finishes under the old scope before a move proceeds,
+    or resolves the new scope after it; the two never interleave."""
     if not user_id or not conv_id or not turn_msgs:
         return
 
-    try:
-        drive = await run_in_threadpool(require_drive_for_user, user_id)
-    except NotConfiguredError:
-        return
-
-    if scope is None:
+    async with get_conv_lock(user_id, conv_id):
         try:
-            scope = await run_in_threadpool(resolve_scope, user_id, conv_id, drive)
+            drive = await run_in_threadpool(require_drive_for_user, user_id)
         except NotConfiguredError:
             return
-    if scope is None:
-        return
-    scope_type, scope_id = scope
 
-    # Accepted race (documented, not fixed here): this re-reads history rather
-    # than taking the message count chat.py already had post-persist, because
-    # the plan locks index_turn_task's signature to exactly (user_id, conv_id,
-    # scope, turn_msgs). Two turns on the same chat indexing concurrently could
-    # each see a snapshot that includes the other's messages, mis-attributing
-    # msg_index on their chunks. Blast radius is provenance/display metadata
-    # only -- it never affects which scope a chunk lands in or retrieval
-    # correctness (see plan_memory_scoping.md M.3; code-reviewer WARN, 2026-07-13).
-    history = await run_in_threadpool(call_drive, conversations_drive.load_messages, drive, conv_id)
-    msg_index_start = max(len(history) - len(turn_msgs), 0)
-    chunks = chunk_turn(turn_msgs, msg_index_start=msg_index_start)
-    if not chunks:
-        return
+        if scope is None:
+            try:
+                scope = await run_in_threadpool(resolve_scope, user_id, conv_id, drive)
+            except NotConfiguredError:
+                return
+        if scope is None:
+            return
+        scope_type, scope_id = scope
 
-    try:
-        await run_in_threadpool(call_drive, _write_chunks_to_drive, drive, conv_id, chunks)
-    except NotConfiguredError as e:
-        print(f"Failed to write rag_chunks for {conv_id}: {e}", file=sys.stderr)
-        return
+        # Accepted race (documented, not fixed here): this re-reads history
+        # rather than taking the message count chat.py already had
+        # post-persist, because the plan locks index_turn_task's signature to
+        # exactly (user_id, conv_id, scope, turn_msgs). Two turns on the same
+        # chat indexing concurrently (both hold the lock sequentially, not at
+        # once) could still each see a snapshot that includes the other's
+        # messages, mis-attributing msg_index on their chunks. Blast radius is
+        # provenance/display metadata only -- it never affects which scope a
+        # chunk lands in or retrieval correctness (see plan_memory_scoping.md
+        # M.3; code-reviewer WARN, 2026-07-13).
+        history = await run_in_threadpool(call_drive, conversations_drive.load_messages, drive, conv_id)
+        msg_index_start = max(len(history) - len(turn_msgs), 0)
+        chunks = chunk_turn(turn_msgs, msg_index_start=msg_index_start)
+        if not chunks:
+            return
 
-    await _embed_and_index(user_id, conv_id, scope_type, scope_id, chunks)
+        try:
+            await run_in_threadpool(call_drive, _write_chunks_to_drive, drive, conv_id, chunks)
+        except NotConfiguredError as e:
+            print(f"Failed to write rag_chunks for {conv_id}: {e}", file=sys.stderr)
+            return
+
+        await _embed_and_index(user_id, conv_id, scope_type, scope_id, chunks)
 
 
 async def rebuild_index(user_id: str, scope_type: str, scope_id: str) -> int:

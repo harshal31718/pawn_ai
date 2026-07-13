@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) (ACTIVE — this session covers M.3-M.5) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase M — M.1 through M.4 done (2026-07-13). M.5 (projects backend API + two-way chat moves) next.** Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) (M.1-M.5 done this session; M.6/M.7 remain, next session) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **Phase M — M.1 through M.5 done (2026-07-13), stopped per session scope. M.6 (frontend: projects UI + move flows) next.** Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -105,11 +105,21 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
   deferred to M.7's live verification checklist since there's no projects HTTP API
   until M.5)
 
-- [ ] **M.5 — Projects backend API + two-way chat moves**
-  New `routes/projects.py` (CRUD + move in/out, cascade delete). Per-`(user, conv)`
-  asyncio lock shared with M.3's indexer.
+- [x] **M.5 — Projects backend API + two-way chat moves** ✓ (2026-07-13)
+  New `routes/projects.py` (CRUD + move in/out, cascade delete). Drive relocate always
+  before the Postgres scope update; scope cache evicted on both moves; both idempotent;
+  409 on moving into a second project while already in one. New `memory/locks.py`
+  (`get_conv_lock`) — per-`(user, conv)` asyncio lock shared by M.3's `index_turn_task`,
+  both move endpoints, and cascade delete (holds every contained chat's lock). 219
+  backend tests green (up from 203). code-reviewer PASS (1 WARN fixed: cascade delete
+  now lock-coordinated, closing an orphan-Postgres-row race). security-auditor PASS
+  (0 findings, run proactively given the destructive cascade-delete + data-relocation
+  surface — see `dev_log.md`).
   Demo: curl move a chat in → chunks retrievable from a sibling; move it out →
-  sibling retrieval no longer surfaces them; delete project → chats + chunks gone.
+  sibling retrieval no longer surfaces them; delete project → chats + chunks gone. ✓
+  (verified via test_projects.py's move-in/move-out/cascade-delete tests against
+  FakeDrive + mocked Postgres; live curl demo against a real stack deferred to M.7's
+  live verification checklist per the plan's own step order)
 
 - [ ] **M.6 — Frontend: projects UI + move flows**
   `types.ts`/`client.ts` additions; `ProjectSection.tsx`/`ProjectRow.tsx`; blocking
