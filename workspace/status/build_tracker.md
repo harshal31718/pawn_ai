@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) — **all coding done (M.1–M.7), 2026-07-13; only M.7's live verification checklist remains, pending with the user** — + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`.** Also closed out this session: swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim), a gap found while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open item — see the M.7 entry below for the exact pending list. **Next up: Phase A — Chat Agent Refinement (`workspace/plan/plan_chat_agent_refinement.md`), pending its own refinement pass** — that plan has `[Phase M]` tags written against the *planned* M design; before any Phase A work starts, those tags need re-verification against the now-real Phase M code (file names, signatures, `resolve_scope`, the `kind` param, the `memory_hit` event payload, `chats/`/`projects/` Drive paths). That re-verification is a separate session with the user. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **started 2026-07-13, A.1/A.2 in progress this session** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **Phase A — Chat Agent Refinement, A.1/A.2 (native tool calling + tool layer).** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started same day. Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -37,6 +37,52 @@ Full `deployment.md` §7 verification checklist passed on `pawn-temp`: HTTPS hea
 
 > All prior phases (MU, W, imageLab A.0/A.1, Phase 6 UI) are merged and live on main.
 > imageLab Milestones A.0/A.1 are tracked in `workspace/implemented_phases/phase_5_kaggle_image.md`.
+
+---
+
+## Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents)
+*Plan reference: `workspace/plan/plan_chat_agent_refinement.md`*
+*Branch: dev*
+
+Replaces the hand-rolled ReAct JSON action protocol with native OpenAI-compatible
+tool/function calling, adds internet access (`web_search`/`fetch_url`), replaces
+whole-doc injection with scoped `doc_search` **[Phase M]**, adds a heuristic-first
+model router with per-role levels, rebuilds the LangGraph orchestrator around a
+plan → tool-loop → final flow with budgets/iteration caps, adds three fixed preset
+subagents (researcher/summarizer/coder, strictly sequential), and persists the full
+agent trace. Prescriptive plan — implement exactly as written; `[Phase M]` tags were
+re-verified against the as-built Phase M code on 2026-07-13.
+
+- [ ] **A.1 — Native tool calling in the provider layer**
+  `llm_core.py` `chat_complete()` (non-streaming, tool_calls); `normalize.py`
+  `chat_complete()` wrapper (resolver/failover/rate-limit, routes/agent import from
+  normalize only); registry `ModelEntry.supports_tools`; resolver `require_tools` filter.
+- [ ] **A.2 — Tool layer**
+  New `agent/tools/` package: `base.py` (`ToolSpec`/`ToolContext`), `registry.py`
+  (`get_tools`), `execute.py` (`run_tool`, `TOOL_TIMEOUT_SECONDS=20`, errors/timeouts →
+  `TOOL_ERROR: ...` observations, never raise). `calculator` (safe AST evaluator, never
+  `eval()`) and `get_datetime` tools.
+- [ ] **A.3 — Internet access: `web_search` + `fetch_url`**
+  BYOK Tavily/Brave search keys; `tools/web_search.py`, `tools/fetch_url.py` (SSRF guard,
+  `trafilatura` extraction); citation events + source chips.
+- [ ] **A.4 — `doc_search` (replaces whole-doc injection) [Phase M]**
+  Upload path chunks + indexes into scoped RAG with `kind='document'`; `chat.py`'s
+  whole-doc injection deleted; `tools/doc_search.py` / `tools/search_memory.py`.
+- [ ] **A.5 — Model router**
+  New `core/router.py`: heuristic-first `classify()`, LLM fallback tier, `ROLE_LEVELS`,
+  user model-pick override for the final answer.
+- [ ] **A.6 — Orchestrator: graph v2**
+  `agent/graph.py` rebuilt: `classify` → `direct_answer` | `plan` → `execute` (tool
+  loop, budgeted) → `final`. Old ReAct nodes/parser deleted.
+- [ ] **A.7 — Preset subagents**
+  `agent/subagents.py`: `researcher`/`summarizer`/`coder`, sequential delegation via
+  `delegate_<name>` tools, shared token budget, no nested delegation.
+- [ ] **A.8 — Trace persistence + frontend**
+  `trace` field on persisted assistant messages **[Phase M layout]**; `TraceView.tsx`;
+  streaming activity block + auto-collapse summary row; citation chips.
+- [ ] **A.9 — Tests, review, live verify**
+  Full backend suite + frontend build gates; code-reviewer + mandatory security-auditor
+  (SSRF guard, search-key handling); live verification checklist (plan §A.9).
 
 ---
 
