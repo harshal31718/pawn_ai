@@ -296,9 +296,15 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                 import sys
                 print(f"Failed to read agent state for trace persistence on {req.conversation_id}: {exc}", file=sys.stderr)
                 state_values = {}
-            trace = _build_trace(state_values.get("tool_log", []), state_values.get("citations", []))
+            citations = state_values.get("citations", [])
+            trace = _build_trace(state_values.get("tool_log", []), citations)
             if trace:
                 assistant_msg_dict["trace"] = trace
+            # citations is also persisted as its own top-level field (not just
+            # folded into `trace`) -- the frontend's Citation chips read
+            # message.citations directly, never derived from trace entries.
+            if citations:
+                assistant_msg_dict["citations"] = citations
             try:
                 meta = await run_in_threadpool(
                     call_drive,

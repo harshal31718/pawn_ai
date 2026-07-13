@@ -333,3 +333,44 @@ def test_chat_agent_path_persists_tool_trace(drive_client, fake_drive):
     assert tool_entries[0]["observation"] == "4"
     assert tool_entries[0]["agent"] == "main"
     assert "elapsed_ms" in tool_entries[0]
+
+
+def test_chat_agent_path_persists_top_level_citations(drive_client, fake_drive):
+    """Regression: the persisted assistant record must carry a top-level
+    `citations` field, not just citation entries folded into `trace` — the
+    frontend's CitationChips read message.citations directly and never derive
+    it from trace, so without this a real reload (not the live SSE session)
+    silently loses source chips even though the trace still has them."""
+    conv_id = "conv-agent-citations-1"
+    call_count = {"n": 0}
+
+    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto"):
+        call_count["n"] += 1
+        if tool_choice == "none":
+            return {"role": "assistant", "content": "1. Fetch the page", "usage": {"total_tokens": 5}}
+        if call_count["n"] <= 2:
+            return {
+                "role": "assistant", "content": "", "usage": {"total_tokens": 5},
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "fetch_url", "arguments": '{"url": "https://example.com/article"}'}}],
+            }
+        return {"role": "assistant", "content": "summarized", "tool_calls": None, "usage": {"total_tokens": 5}}
+
+    async def fake_stream(*args, **kwargs):
+        yield "summarized"
+
+    with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "heavy", "needs_agent": True})):
+        with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+            with patch("app.core.normalize.chat_stream", side_effect=fake_stream):
+                with patch("app.agent.graph.run_tool", new=AsyncMock(return_value="fetched page text")):
+                    with drive_client.stream(
+                        "POST", "/chat",
+                        json={"messages": [{"role": "user", "content": "summarize this article deeply"}], "conversation_id": conv_id},
+                    ) as resp:
+                        assert resp.status_code == 200
+                        resp.read()
+
+    messages = conversations_drive.load_messages(fake_drive, conv_id)
+    assistant_msg = next(m for m in messages if m["role"] == "assistant")
+    assert assistant_msg.get("citations") == [{"url": "https://example.com/article", "title": "https://example.com/article"}]
+    citation_trace_entries = [t for t in assistant_msg["trace"] if t["kind"] == "citation"]
+    assert citation_trace_entries == [{"kind": "citation", "agent": "main", "url": "https://example.com/article", "title": "https://example.com/article"}]
