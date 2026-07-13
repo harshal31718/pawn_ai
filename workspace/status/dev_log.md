@@ -6,6 +6,167 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-13] — Docs: rewrote deployment.md for the real dedicated-VM topology
+
+User asked to check `deployment.md` and either update or delete it. On
+inspection, its entire framing — a second app sharing Enma's existing VM,
+with hard rules about never touching `/opt/enma`, Enma health re-checks
+before/after every action, port 5000 reserved for Enma — never actually held.
+`dev_log.md`'s own 2026-07-05 migration entry already says so explicitly:
+Oracle's Always-Free pool turned out to be split across separate instances,
+not one shared host, so both `pawn-temp` (the temporary bridge used for the
+first live deploy) and the permanent `pawn` instance (`144.24.119.184`) were
+always fully standalone VMs. Keeping the file as-is would mislead anyone
+using it as the runbook for a future update; deleting it outright would lose
+the release/rollback workflow, verification checklist, and Nginx SPA-routing
+config (with two real bugs found live: the `/chat` GET-vs-POST collision,
+and the CSP `img-src` `data:` gap) — none of which live anywhere else.
+
+Rewrote in place: dropped §0's Enma hard rules, §1/§2's Enma-coexistence
+prerequisites and pre-flight check, and §8's Enma safety re-check entirely;
+dropped §4.3's now-dead step generating 6 shared provider-key secret files
+(same vestige as the cleanup above). Kept and renumbered everything still
+needed for a real redeploy: prerequisites, local-verify + promote workflow,
+the full deploy sequence (clone/env/secrets/frontend build/compose up/
+firewall/Nginx/TLS), release/update workflow, verification checklist, data
+safety + rollback, and known deferrals. `docker-compose.prod.yml`'s header
+comment had the same stale "second isolated app on the shared Enma VM"
+framing — corrected alongside.
+
+### [2026-07-13] — Cleanup: removed dead pre-BYOK shared-secret path
+
+User asked why `secrets/` has files for individual LLM provider API keys
+(`gemini_api_key`, etc.) when the app is BYOK-only. Traced the path:
+`config.py` read each into a module constant, `app_initializer.py` bundled
+them into a `secrets` dict passed to `Resolver(registry, rate_limiter,
+secrets)`, and `resolver.py` stored it as `self._secrets` in `__init__` —
+never read again anywhere. All real key resolution goes through
+`_resolve_key()` -> `key_store.get_key(user_id, ep.provider)`, whose own
+docstring already said "no shared Docker-secret fallback." This was a
+pre-BYOK design (shared server-side keys) whose file-reading/threading code
+was never deleted after BYOK replaced it.
+
+Removed: the 6 `config.py` constants (`GEMINI_API_KEY`/`CEREBRAS_API_KEY`/
+`GROQ_API_KEY`/`HUGGINGFACE_API_KEY`/`GITHUB_API_KEY`/`OPENROUTER_API_KEY`);
+the `secrets` dict + `Resolver.__init__`'s `secrets` param; the matching 6
+entries from both `docker-compose.yml`'s and `docker-compose.prod.yml`'s
+`secrets:` blocks (both the backend service's list and the top-level file
+definitions); the 6 real + 6 `.example` files from `secrets/`. Updated 8 test
+files that constructed `Resolver(..., secrets={...})` to drop the now-removed
+param; rewrote `test_keys.py`'s two resolver tests, which had explicitly
+asserted "BYOK wins over the shared secret" — that comparison is meaningless
+once the shared secret doesn't exist, so reworded to assert BYOK resolution
+directly. 369 backend tests green (same count, no tests added/removed — only
+rewritten); `docker compose config` validates for both compose files;
+`docker compose up` verified the backend starts cleanly with the trimmed
+secret list.
+
+**Found, not removed this pass:** `registry/schemas.py`'s `EndpointEntry.secret`
+field (populated for every endpoint in `registry/seed.py`) is the same
+vestige one layer deeper — defined, populated, never read by any code
+(`grep` for `.secret` across `backend/app` turns up only the schema
+definition). Left alone since it also touches the live
+`data/registry/endpoints.json` data file, not just code — a decision for the
+user before touching production registry data.
+
+### [2026-07-13] — Bugfix: duplicate "PAWN" root folders in Drive (concurrent cache-miss race)
+
+User reported two identically-named "PAWN" folders at Drive root, same owner,
+same modified timestamp, each holding a different subset of the real
+conversations/projects tree — a live-data symptom, not something the A.9/M.7
+live-verification checklists had covered.
+
+Root cause: `core/drive_factory.get_drive_for_user`'s per-user cache used a
+check-then-act pattern — on a miss it released `_CACHE_LOCK`, called the
+blocking `_build_drive_for_user` (Postgres token fetch + `DriveStorage`
+construction), then re-acquired the lock only to write the result. Several
+requests missing the cache at the same moment (e.g. the frontend firing
+multiple API calls right after Drive linking, exactly when `evict_user` had
+just cleared the entry) each built their own separate `DriveStorage` instance.
+Each instance's `get_or_create_root()` runs its own independent Drive `list`
+query for a folder named "PAWN"; if none exists yet, both instances see an
+empty result and both create one — two root folders, each subsequently
+written to depending on which instance a given concurrent request happened to
+hold.
+
+Fix: `drive_factory.py` now serializes the build per user via a
+`threading.Lock` keyed by `user_id` (`_BUILD_LOCKS`), with a double-checked
+cache read so a thread that waited for the lock reuses whatever the winner
+already built/cached instead of building again. Different users' builds don't
+block each other. New `backend/tests/test_drive_factory.py` (4 tests):
+concurrent cache-miss builds exactly once and all callers get the same
+instance back (the regression case), per-user locks don't serialize across
+users, cache-hit skips the build, `evict_user` forces a rebuild. 368 backend
+tests green (up from 364).
+
+**Not addressed by this fix — needs the user, live:** the two duplicate
+folders already sitting in Drive from before the fix aren't cleaned up
+automatically (no Drive delete/move tool was exercised on real user data
+without confirmation). The user needs to manually inspect both "PAWN"
+folders, merge any content only present in one into the other, and delete the
+now-empty duplicate.
+
+### [2026-07-13] — Code+test audit of A.9/M.7 live-verification checklists + bugfix: citations never persisted top-level
+
+User asked to verify each shipped feature is "what it was intended to be."
+Scoped to the two pending live-verification checklists already written
+(Phase A's A.9, 8 items; Phase M's M.7, 7 items) and to a code+test audit
+(no live browser pass). Ran 10 parallel read-only audits, one per
+item/item-group, each checking whether the checklist's claim is actually
+proven by an end-to-end test versus only unit-tested pieces versus a real
+gap. Summary (full detail in the session transcript; nothing here is
+speculative — every verdict cites exact test names):
+
+- **PROVEN**: A.9-1 ("hello" fast path, node-level only — see PARTIALLY
+  PROVEN note), M.7-1 (legacy Drive migration), M.7-2 (standalone chat
+  isolation), M.7-5 (move in/out scope transition + cache eviction), A.9-6
+  (tool failure can't crash the loop — structural guarantee).
+- **PARTIALLY PROVEN**: A.9-1/8 (routing + model-pin — real but only
+  node-level unit tests, no full-graph run), A.9-3 (no-search-key path —
+  mechanism-level only), A.9-4 (doc_search — no multi-chunk document test, no
+  token-count assertion despite the checklist explicitly calling for one),
+  A.9-5 (subagent delegation mechanics proven; "no interleaving" asserted
+  only by code shape, not a test; whether the LLM chooses to delegate at all
+  is inherently unverifiable outside a live run), M.7-3 (long-chat self-recall
+  — write path and read path each solidly tested but never chained together,
+  and no test uses a 40+ message conversation), M.7-4 (project bidirectional
+  sharing — pieced together from fragments, no single test proves both
+  directions plus a third outside chat seeing nothing), M.7-6 (cascade delete
+  — SQL calls asserted, but Postgres is fully mocked so nothing proves rows
+  are actually gone; the M.5 per-conv lock is wired but never exercised
+  concurrently), M.7-7 (rebuild-from-Drive — solid unit coverage, but this
+  item is explicitly scoped in the plan as a live-only check, so the gap here
+  is by design).
+- **GAP (real bug, not just a test gap)**: A.9-2 — `routes/chat.py`'s persist
+  block only ever wrote a `trace` field on the persisted assistant message;
+  it never wrote a top-level `citations` field, even though the frontend
+  (`client.ts`'s `fetchConversation`, `useConversationStore.ts`) reads
+  `message.citations` directly and never derives it from `trace`'s
+  `kind:"citation"` entries. Citation source chips only survived within the
+  same live SSE session (populated client-side by `onCitation` during
+  streaming) — a genuine page reload silently dropped them, even though the
+  citation data was still sitting in the persisted `trace`. The checklist's
+  claim "citations persist after reload" was false as shipped.
+  - **Fixed**: `routes/chat.py` now also sets `assistant_msg_dict["citations"]
+    = citations` (mirroring the existing "absent, not empty" rule already
+    used for `trace`) whenever the graph's final state has any. New test
+    `test_chat_agent_path_persists_top_level_citations` (`test_chat.py`)
+    forces a `fetch_url` tool call through a real `/chat` request and asserts
+    the persisted record's top-level `citations` field matches the
+    citation-kind entries in `trace`. 369 backend tests green (up from 368);
+    `tsc --noEmit` clean (frontend already expected this field, unchanged).
+- **A.9-7 — GAP, real limitation, not just untested**: `normalize.chat_complete`
+  (used by `execute_node`'s tool loop) has no `on_provider_switch` callback
+  parameter at all, unlike `chat_stream` — so even a fully successful
+  in-loop endpoint failover cannot ever emit a `provider_switch` event today.
+  This is a missing feature, not a missing test; not fixed this session
+  (out of scope for a verification pass — flagging for a future step).
+
+None of the audit findings besides the citations bug required a code change;
+the rest are documented gaps in test coverage (or, for A.9-5's "no
+interleaving" claim and M.7-6's untested lock, real regression risk that a
+future refactor could silently break without the suite catching it).
+
 ### [2026-07-13] — Phase A / A.8 + A.9: trace persistence + TraceView, full review pass (Phase A code-complete)
 
 **A.8 — trace persistence + frontend.** `constants.py` gains
@@ -1593,3 +1754,67 @@ Full deploy from scratch on `pawn-temp`: Docker Engine + Compose plugin, a fresh
 **Decisions:** Reaping running session jobs is now gated by `_is_alive()` (90 s heartbeat-stale threshold), which provides enough buffer for warm-session FLUX inference (typically seconds, not minutes).
 **Tests:** 136 backend passing (updated `test_reap_stale_jobs_reaps_jobs_of_dead_sessions` to assert both the queued and running reap updates); `npm run build` clean.
 **Commit:** (this commit)
+
+## 2026-07-13 — Full implementation verification of Phase M + Phase A (Cowork session) + sidebar UI fixes
+
+**Verification (code-reading audit, both phases, against their prescriptive plans):**
+- Phase M (M.1–M.7): all invariants confirmed — strict scope-equality SQL functions
+  (+ kind param), add_chunk upsert on (user_id, chunk_id), Drive-first indexer with
+  shared per-(user,conv) lock, scoped retrieve (kind='message'), load_context no
+  longer auto-retrieves, additive memory_hit payload, conversation-delete PG cleanup,
+  on-access legacy Drive migration, idempotent two-way moves + 409 cross-project
+  guard, cascade delete holding all contained chats' locks, embedding =
+  gemini-embedding-2 @ 768 (post-fix), projects UI (ProjectSection/ProjectRow/
+  ProjectPage/dialogs matching plan wording), syncQueue op kinds exactly as planned.
+- Phase A (A.1–A.9): all invariants confirmed — chat_complete in llm_core+normalize
+  only, supports_tools in schema+seed, agent/tools package complete, constants all
+  present (TOOL_TIMEOUT 20 / WEB_SEARCH 5 / FETCH 8000 / ROUTER 1500/200 / AGENT 8 /
+  24000 / SUBAGENT 5 / TRACE 50), SSRF guard incl. IPv4-mapped-IPv6 handling (beyond
+  plan), router ROLE_LEVELS + resolve_final_model, graph v2 (classify →
+  direct_answer | plan → execute → final; budget-exhaustion nudge; digest-not-raw
+  final context), subagents strictly sequential + depth-1 structural, trace
+  persistence (_build_trace + TRACE_MAX_ENTRIES + aget_state), citation_event.
+- No implementation defects found this pass. (Earlier same-day: embedding-swap gap
+  found+fixed; elapsed_ms/elapsedMs CRITICAL found+fixed by code review.)
+
+**UI fixes implemented this session (UNCOMMITTED — commit with next batch):**
+1. KebabMenu.tsx: submenus converted from absolute side-flyouts (clipped by the
+   sidebar's overflow-hidden/auto ancestors; overflowed viewport on the left edge)
+   to inline accordions expanding below the parent item.
+2. ProjectRow/ProjectSection/Sidebar: clicking a project row now navigates to
+   /project/:projectId (ProjectPage in the main content area); the chevron alone
+   toggles sidebar expansion (stopPropagation); active project row highlighted via
+   URL match (useLocation) with the same brand style as the active chat.
+   New props threaded: onOpenProject, activeProjectId.
+   Gate note: verify with `npm run build` on the host (sandbox tsc gave false
+   negatives from a stale file-mount cache; host files verified complete by review).
+
+**Plans relocated** (both phases implemented): `workspace/plan/plan_memory_scoping.md`
+→ `workspace/implemented_phases/phase_11_memory_scoping.md`;
+`workspace/plan/plan_chat_agent_refinement.md` →
+`workspace/implemented_phases/phase_12_chat_agent_refinement.md`. Older tracker/state
+entries still reference the workspace/plan/ paths — historical, per repo precedent.
+Outstanding (unchanged): M.7 + A.9 live verification checklists with the user.
+
+## 2026-07-13 — Test-suite burden investigation + markdown rendering fix (Cowork session)
+
+- **Verdict: the suite is not slow and nothing gets deleted.** A full run of all 364
+  tests completed in ~35s wall-clock in a Linux sandbox (partially degraded env, so
+  treat as approximate — confirm locally with one timed `docker compose exec backend
+  pytest -n auto` run). The felt burden came from running the FULL suite on every
+  edit; the Gate Scoping rule in .claude/rules/testing.md (added earlier today) is
+  the fix: affected files during iteration, full suite once per step.
+- Added `pytest-xdist` to backend/requirements.txt + a rules line: full-suite runs
+  use `pytest -n auto`.
+- **Flagged risk (not fixed): backend/requirements.txt is unpinned.** A fresh
+  Docker rebuild today pulls fastapi 0.139 / langgraph 1.2.9 / pydantic 2.13 —
+  potentially breaking major versions vs. what the running containers were built
+  with. Before the next prod rebuild, pin versions from the known-good container:
+  `docker compose exec backend pip freeze > backend/requirements.lock` and either
+  install from the lock in the Dockerfile or copy the pins into requirements.txt.
+- **Markdown rendering fix (uncommitted):** assistant replies rendered tables as raw
+  pipe text — react-markdown lacks GFM support without the remark-gfm plugin.
+  Added `remark-gfm` to frontend/package.json + `remarkPlugins={[remarkGfm]}` and
+  styled table/thead/th/td/tr/blockquote/hr components in Message.tsx (scrollable
+  bordered tables, striped rows). Requires `docker compose exec frontend npm
+  install` (frontend runs in Docker).
