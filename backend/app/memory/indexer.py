@@ -173,14 +173,94 @@ async def index_turn_task(
         await _embed_and_index(user_id, conv_id, scope_type, scope_id, chunks)
 
 
+async def index_document_task(
+    user_id: Optional[str],
+    conv_id: Optional[str],
+    scope: Optional[Scope],
+    doc_id: str,
+    doc_text: str,
+    filename: str = "",
+) -> None:
+    """Background task scheduled from upload.py after extracting a document's
+    text. Chunks the document (reusing chunk_turn -- it's text-agnostic) and
+    writes rows directly into Postgres with kind='document'/doc_id=doc_id.
+
+    Unlike message turns, document chunks are NOT appended to the chat's
+    rag_chunks.jsonl -- PAWN/uploads/<doc_id>.txt is itself the rebuild
+    source of truth (rebuild_index re-reads and re-chunks it fresh). The
+    chat's meta.json records the attachment (conversations_drive.
+    add_attached_doc) so rebuild_index can rediscover this doc_id even after
+    a full Postgres wipe.
+
+    Holds the same per-(user, conv) lock as index_turn_task so a document
+    upload can't interleave with a concurrent chat move."""
+    if not user_id or not conv_id or not doc_text:
+        return
+
+    async with get_conv_lock(user_id, conv_id):
+        try:
+            drive = await run_in_threadpool(require_drive_for_user, user_id)
+        except NotConfiguredError:
+            return
+
+        if scope is None:
+            try:
+                scope = await run_in_threadpool(resolve_scope, user_id, conv_id, drive)
+            except NotConfiguredError:
+                return
+        if scope is None:
+            return
+        scope_type, scope_id = scope
+
+        try:
+            await run_in_threadpool(
+                call_drive, conversations_drive.add_attached_doc, drive, conv_id, doc_id, filename
+            )
+        except NotConfiguredError as e:
+            print(f"Failed to record doc attachment for {conv_id}/{doc_id}: {e}", file=sys.stderr)
+            return
+
+        chunks = chunk_turn([{"content": doc_text}], msg_index_start=0)
+        if not chunks:
+            return
+
+        from app.memory.embed import embed
+        from app.memory.index import add_chunk
+
+        for chunk in chunks:
+            try:
+                embedding = await embed(chunk["text"], user_id=user_id)
+            except Exception as e:
+                print(
+                    f"Failed to embed doc chunk {chunk.get('chunk_id')} for doc {doc_id}: {e}",
+                    file=sys.stderr,
+                )
+                continue
+            await run_in_threadpool(
+                add_chunk,
+                user_id,
+                scope_type,
+                scope_id,
+                conv_id,
+                chunk["chunk_id"],
+                chunk.get("msg_index"),
+                chunk["text"],
+                embedding,
+                kind="document",
+                doc_id=doc_id,
+            )
+
+
 async def rebuild_index(user_id: str, scope_type: str, scope_id: str) -> int:
     """Delete this scope's Postgres rows, then re-read + re-embed every
-    relevant chat's rag_chunks.jsonl from Drive and re-insert. Drive layout is
-    always authoritative; Postgres is always regenerable from it. Returns the
-    number of chunks re-indexed."""
+    relevant chat's rag_chunks.jsonl from Drive (message chunks) AND every
+    attached document from PAWN/uploads/ (document chunks, Phase A / A.4),
+    re-inserting both. Drive layout is always authoritative; Postgres is
+    always regenerable from it. Returns the number of chunks re-indexed."""
     from app.db.postgres_client import execute
     from app.memory.embed import embed
     from app.memory.index import add_chunk
+    from app.storage import documents_drive
 
     drive = await run_in_threadpool(require_drive_for_user, user_id)
 
@@ -222,4 +302,42 @@ async def rebuild_index(user_id: str, scope_type: str, scope_id: str) -> int:
                 embedding,
             )
             total += 1
+
+    # Re-derive document chunks: each chat in scope records its attached
+    # doc_ids in meta.json (add_attached_doc), which survives the Postgres
+    # delete above even on a full manual truncate -- the whole point of this
+    # being the rebuild path.
+    for conv_id in conv_ids:
+        attached = await run_in_threadpool(call_drive, conversations_drive.get_attached_docs, drive, conv_id)
+        for record in attached:
+            doc_id = record.get("doc_id") if isinstance(record, dict) else record
+            if not doc_id:
+                continue
+            doc_text = await run_in_threadpool(call_drive, documents_drive.load_doc, doc_id, drive)
+            if not doc_text:
+                continue
+            doc_chunks = chunk_turn([{"content": doc_text}], msg_index_start=0)
+            for chunk in doc_chunks:
+                try:
+                    embedding = await embed(chunk["text"], user_id=user_id)
+                except Exception as e:
+                    print(
+                        f"Failed to re-embed doc chunk {chunk.get('chunk_id')} for doc {doc_id}: {e}",
+                        file=sys.stderr,
+                    )
+                    continue
+                await run_in_threadpool(
+                    add_chunk,
+                    user_id,
+                    scope_type,
+                    scope_id,
+                    conv_id,
+                    chunk["chunk_id"],
+                    chunk.get("msg_index"),
+                    chunk["text"],
+                    embedding,
+                    kind="document",
+                    doc_id=doc_id,
+                )
+                total += 1
     return total

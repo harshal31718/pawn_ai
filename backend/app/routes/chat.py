@@ -11,7 +11,6 @@ from app.exceptions import NotConfiguredError, ProviderError
 from app import events
 from app.core import key_store
 from app.core.drive_factory import call_drive, require_drive_for_user
-from app.storage import documents_drive
 from app.storage import conversations_drive
 from app.memory.summarize import summarize_conversation_task
 from app.memory.indexer import index_turn_task, resolve_scope
@@ -50,7 +49,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     model_id: str | None = None        # Canonical model ID (e.g. "gemini-2.5-flash", "llama-3.3-70b")
     provider: str | None = None        # Backward compatibility for provider selection
-    doc_id: str | None = None          # optional uploaded document ID
+    doc_id: str | None = None          # deprecated/unused — doc content now reaches the model only via the doc_search tool (Phase A / A.4); kept for frontend backward-compat, ignored here
     conversation_id: str | None = None  # optional conversation ID for persistence
 
 async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None) -> str:
@@ -97,10 +96,12 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
     resolver = request.app.state.resolver
     rate_limiter = request.app.state.rate_limiter
     # Blocking I/O (Postgres/Drive) is run off the event loop so a slow backend
-    # can't stall every other in-flight request. Drive is only required when this
-    # request actually touches storage (persistence or an uploaded doc) — a
-    # stateless one-off message needs neither.
-    needs_drive = bool(req.conversation_id) or bool(req.doc_id)
+    # can't stall every other in-flight request. Drive is only required for
+    # persistence — a stateless one-off message needs neither. `doc_id` no
+    # longer triggers a Drive load here: a document's content is indexed once
+    # at upload time (routes/upload.py) and reached only via the doc_search
+    # tool, never injected into this request's context.
+    needs_drive = bool(req.conversation_id)
     drive = await run_in_threadpool(require_drive_for_user, user_id) if needs_drive else None
     # Warm the per-user BYOK key cache once so the resolver's in-graph get_key()
     # calls are cache hits instead of blocking Supabase round-trips on the loop.
@@ -162,23 +163,9 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         if messages_to_send:
             user_msg_dict = messages_to_send[-1]
 
-    # 2. Inject document context if doc_id provided
-    if req.doc_id:
-        doc_text = await run_in_threadpool(call_drive, documents_drive.load_doc, req.doc_id, drive)
-        if doc_text is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document with ID {req.doc_id} not found."
-            )
-        
-        system_content = (
-            f"Context from uploaded document:\n"
-            f"====================\n"
-            f"{doc_text}\n"
-            f"====================\n"
-            f"Answer the user's questions using only the above context."
-        )
-        messages_to_send = [{"role": "system", "content": system_content}] + messages_to_send
+    # 2. doc_id (if present) only records that a document is attached to this
+    # chat's scope — its content reaches the model exclusively via the
+    # doc_search tool (Phase A / A.4), never injected into context here.
 
     # 3. Resolve this chat's current scope (Phase M) once per request, so the
     # agent's search_memory action queries the right RAG scope. Stateless

@@ -331,7 +331,15 @@ export default function ChatPage() {
   async function handleUpload(file: File) {
     setIsUploading(true)
     try {
-      const docId = await uploadDoc(file)
+      // Draft-chat edge (locked rule): promote the draft first, exactly as
+      // sending a first message does, so the upload always has a chat to
+      // scope its RAG indexing into — no unscoped document rows can exist.
+      const convId = activeConvId ?? createConversation()
+      promoteDraft(convId)
+      if (!activeConvId) {
+        navigate(`/chat/${convId}`, { replace: true })
+      }
+      const docId = await uploadDoc(file, convId)
       setAttachedDoc({ id: docId, name: file.name })
     } catch (err: any) {
       alert(`Upload failed: ${err.message}`)

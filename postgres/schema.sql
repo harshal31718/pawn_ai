@@ -79,8 +79,11 @@ create index if not exists memory_chunks_scope_idx
 -- Vector similarity search (pgvector cosine), scoped strictly to one
 -- (user, scope_type, scope_id) — the inverse of the old exclude-based
 -- semantics. No query can ever reach another scope. Returns cosine
--- similarity as `score` (1 = identical).
-create or replace function match_scoped_chunks(
+-- similarity as `score` (1 = identical). `doc_id`/`kind` returned so callers
+-- (Phase A / A.4's doc_search) can label document hits by their source
+-- upload — null/`'message'` for chat-turn chunks.
+drop function if exists match_scoped_chunks(vector, text, text, text, text, int);
+create function match_scoped_chunks(
   query_embedding vector(768),
   match_user_id   text,
   match_scope_type text,
@@ -88,14 +91,16 @@ create or replace function match_scoped_chunks(
   match_kind      text,
   match_count     int
 )
-returns table (id bigint, conv_id text, text text, score float)
+returns table (id bigint, conv_id text, text text, score float, kind text, doc_id text)
 language sql stable
 as $$
   select
     mc.id,
     mc.conv_id,
     mc.text,
-    1 - (mc.embedding <=> query_embedding) as score
+    1 - (mc.embedding <=> query_embedding) as score,
+    mc.kind,
+    mc.doc_id
   from memory_chunks mc
   where mc.user_id = match_user_id
     and mc.scope_type = match_scope_type
@@ -108,7 +113,8 @@ $$;
 
 -- Full-text keyword search (Postgres FTS), scoped strictly to one
 -- (user, scope_type, scope_id).
-create or replace function search_scoped_chunks(
+drop function if exists search_scoped_chunks(text, text, text, text, text, int);
+create function search_scoped_chunks(
   query_text      text,
   match_user_id   text,
   match_scope_type text,
@@ -116,13 +122,15 @@ create or replace function search_scoped_chunks(
   match_kind      text,
   match_count     int
 )
-returns table (id bigint, conv_id text, text text)
+returns table (id bigint, conv_id text, text text, kind text, doc_id text)
 language sql stable
 as $$
   select
     mc.id,
     mc.conv_id,
-    mc.text
+    mc.text,
+    mc.kind,
+    mc.doc_id
   from memory_chunks mc
   where mc.user_id = match_user_id
     and mc.scope_type = match_scope_type

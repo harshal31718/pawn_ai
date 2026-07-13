@@ -217,6 +217,123 @@ def test_rebuild_index_deletes_then_reinserts_from_drive(fake_drive):
     assert fake_add_chunk.call_count == 2
 
 
+# ─── index_document_task (Phase A / A.4) ─────────────────────────────────────
+
+
+def test_index_document_task_writes_postgres_only_not_rag_chunks(fake_drive):
+    """Document chunks go straight to Postgres (kind='document') -- unlike
+    message turns, they are NOT appended to rag_chunks.jsonl; PAWN/uploads/
+    is itself the rebuild source of truth for documents."""
+    conversations_drive.create_conversation(fake_drive, user_id="u1", conv_id="conv-1")
+
+    fake_add_chunk = MagicMock(return_value=1)
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with patch("app.memory.embed.embed", side_effect=_mock_embed):
+            with patch("app.memory.index.add_chunk", fake_add_chunk):
+                asyncio.run(
+                    indexer.index_document_task(
+                        "u1", "conv-1", None, "doc-1", "some document text", "notes.txt"
+                    )
+                )
+
+    assert conversations_drive.load_rag_chunks(fake_drive, "conv-1") == []
+    assert fake_add_chunk.call_count >= 1
+    for call in fake_add_chunk.call_args_list:
+        assert call.kwargs["kind"] == "document"
+        assert call.kwargs["doc_id"] == "doc-1"
+        assert call[0][:4] == ("u1", "chat", "conv-1", "conv-1")
+
+    attached = conversations_drive.get_attached_docs(fake_drive, "conv-1")
+    assert attached == [{"doc_id": "doc-1", "filename": "notes.txt"}]
+
+
+def test_index_document_task_project_scope(fake_drive):
+    conversations_drive.create_conversation(fake_drive, user_id="u1", conv_id="conv-1")
+    projects_drive.create_project(fake_drive, project_id="proj-1", name="Proj")
+    chats_folder = conversations_drive._chats_folder(fake_drive)
+    project_folder = projects_drive._project_folder(fake_drive, "proj-1")
+    projects_drive.move_chat(fake_drive, "conv-1", chats_folder, project_folder)
+
+    fake_add_chunk = MagicMock(return_value=1)
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with patch("app.memory.embed.embed", side_effect=_mock_embed):
+            with patch("app.memory.index.add_chunk", fake_add_chunk):
+                asyncio.run(indexer.index_document_task("u1", "conv-1", None, "doc-1", "text"))
+
+    call = fake_add_chunk.call_args_list[0]
+    assert (call[0][1], call[0][2]) == ("project", "proj-1")
+
+
+def test_index_document_task_stateless_never_indexed(fake_drive):
+    fake_add_chunk = MagicMock()
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with patch("app.memory.index.add_chunk", fake_add_chunk):
+            asyncio.run(indexer.index_document_task("u1", None, None, "doc-1", "text"))
+    fake_add_chunk.assert_not_called()
+
+
+def test_index_document_task_idempotent_attachment(fake_drive):
+    """Re-indexing the same doc_id twice doesn't duplicate the attachment
+    record (add_attached_doc is a no-op on a repeat doc_id)."""
+    conversations_drive.create_conversation(fake_drive, user_id="u1", conv_id="conv-1")
+    fake_add_chunk = MagicMock(return_value=1)
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with patch("app.memory.embed.embed", side_effect=_mock_embed):
+            with patch("app.memory.index.add_chunk", fake_add_chunk):
+                asyncio.run(indexer.index_document_task("u1", "conv-1", None, "doc-1", "v1", "a.txt"))
+                asyncio.run(indexer.index_document_task("u1", "conv-1", None, "doc-1", "v2", "a.txt"))
+
+    attached = conversations_drive.get_attached_docs(fake_drive, "conv-1")
+    assert len(attached) == 1
+
+
+# ─── rebuild_index: documents (Phase A / A.4) ────────────────────────────────
+
+
+def test_rebuild_index_re_chunks_attached_documents(fake_drive):
+    from app.storage import documents_drive
+
+    conversations_drive.create_conversation(fake_drive, user_id="u1", conv_id="conv-1")
+    documents_drive.store_doc("doc-1", "some document body text", fake_drive)
+    conversations_drive.add_attached_doc(fake_drive, "conv-1", "doc-1", "report.pdf")
+
+    fake_execute = MagicMock()
+    fake_add_chunk = MagicMock(return_value=1)
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with patch("app.db.postgres_client.execute", fake_execute):
+            with patch("app.memory.embed.embed", side_effect=_mock_embed):
+                with patch("app.memory.index.add_chunk", fake_add_chunk):
+                    total = asyncio.run(indexer.rebuild_index("u1", "chat", "conv-1"))
+
+    assert total >= 1
+    doc_calls = [c for c in fake_add_chunk.call_args_list if c.kwargs.get("kind") == "document"]
+    assert len(doc_calls) >= 1
+    assert all(c.kwargs["doc_id"] == "doc-1" for c in doc_calls)
+
+
+def test_rebuild_index_survives_postgres_wipe_via_drive_attachment_record(fake_drive):
+    """The whole point of persisting attached_docs on Drive (not just
+    Postgres): even if Postgres rows are already gone (manual truncate, or
+    just this test never wrote any), rebuild still rediscovers the doc_id
+    from meta.json and re-chunks PAWN/uploads/<doc_id>.txt."""
+    from app.storage import documents_drive
+
+    conversations_drive.create_conversation(fake_drive, user_id="u1", conv_id="conv-1")
+    documents_drive.store_doc("doc-1", "recoverable content", fake_drive)
+    conversations_drive.add_attached_doc(fake_drive, "conv-1", "doc-1")
+    # No Postgres rows were ever written for this doc_id — simulates a wipe.
+
+    fake_add_chunk = MagicMock(return_value=1)
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with patch("app.db.postgres_client.execute", MagicMock()):
+            with patch("app.memory.embed.embed", side_effect=_mock_embed):
+                with patch("app.memory.index.add_chunk", fake_add_chunk):
+                    total = asyncio.run(indexer.rebuild_index("u1", "chat", "conv-1"))
+
+    assert total >= 1
+    assert any(c.kwargs.get("doc_id") == "doc-1" for c in fake_add_chunk.call_args_list)
+
+
 def test_rebuild_index_project_scope_covers_all_member_chats(fake_drive):
     projects_drive.create_project(fake_drive, project_id="proj-1", name="Proj")
     project_folder = projects_drive._project_folder(fake_drive, "proj-1")

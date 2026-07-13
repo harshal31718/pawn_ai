@@ -228,6 +228,7 @@ async def search_memory_node(state: AgentState) -> dict:
             user_id=state.get("user_id"),
             scope_type=scope_type,
             scope_id=scope_id,
+            match_kind="message",
         )
 
     for hit in hits:

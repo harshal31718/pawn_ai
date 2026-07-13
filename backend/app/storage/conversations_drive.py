@@ -218,6 +218,41 @@ def get_conversation_meta(drive: DriveStorage, conv_id: str) -> Optional[Dict[st
         return None
 
 
+def add_attached_doc(drive: DriveStorage, conv_id: str, doc_id: str, filename: str = "") -> None:
+    """Record that a document was uploaded/indexed into this chat's scope, in
+    meta.json's `attached_docs` list (`{"doc_id", "filename"}` records).
+    Persisted on Drive (not just Postgres) so rebuild_index can rediscover a
+    scope's documents even after a full Postgres wipe — Drive layout is
+    always the source of truth (Phase A / A.4, mirrors Phase M's Drive-first
+    design). `filename` lets doc_search label results by their source file."""
+    conv_folder_id = _locate_conv_folder(drive, conv_id)
+    if not conv_folder_id:
+        return
+    meta_id = drive.find_file("meta.json", conv_folder_id)
+    if not meta_id:
+        return
+    try:
+        meta = json.loads(drive.download_text(meta_id))
+    except (json.JSONDecodeError, Exception):
+        return
+    attached = meta.get("attached_docs", [])
+    if any(d.get("doc_id") == doc_id for d in attached if isinstance(d, dict)):
+        return
+    attached.append({"doc_id": doc_id, "filename": filename})
+    meta["attached_docs"] = attached
+    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+    drive.upload_text("meta.json", json.dumps(meta, indent=2), conv_folder_id)
+
+
+def get_attached_docs(drive: DriveStorage, conv_id: str) -> List[Dict[str, str]]:
+    """Return the `{"doc_id", "filename"}` records attached to this chat (via
+    add_attached_doc), or [] if none / the chat doesn't exist."""
+    meta = get_conversation_meta(drive, conv_id)
+    if not meta:
+        return []
+    return meta.get("attached_docs", [])
+
+
 def load_messages(drive: DriveStorage, conv_id: str) -> List[Dict[str, Any]]:
     conv_folder_id = _locate_conv_folder(drive, conv_id)
     if not conv_folder_id:

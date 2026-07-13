@@ -184,6 +184,127 @@ Next: A.4 (`doc_search` replaces whole-doc injection) **[Phase M]**.
 
 ---
 
+### [2026-07-13] — Phase A / A.4: doc_search replaces whole-doc injection
+
+Deletes the last remnant of the old "inject the entire uploaded document into
+every chat message" design — content now reaches the model exclusively via a
+scoped `doc_search` tool, same retrieval machinery Phase M already built for
+chat history, filtered by a new `kind` column.
+
+**Upload path (`routes/upload.py`).** Previously had no concept of which
+chat a document belonged to at all — `PAWN/uploads/{doc_id}.txt` was pure
+global blob storage, no scope, nothing indexed. Now accepts an optional
+`conversation_id` form field; if present, lazy-creates the conversation
+first (small `_ensure_conversation` helper mirroring `chat.py`'s
+`_create_with_id` — not literally shared/imported since that helper isn't
+exported, judged an acceptable small duplication rather than a cross-module
+coupling for 5 lines), resolves scope, and schedules the new
+`memory/indexer.py::index_document_task` as a background task. No
+`conversation_id` → the doc is stored but never indexed (there's no scope to
+index into — matches the plan's "no unscoped document rows can exist"
+guarantee, since the alternative would be indexing to nowhere).
+
+**Where document chunks live is different from message chunks, on purpose.**
+`index_document_task` reuses `chunk_turn` as-is (it was already text-agnostic
+— just needed `[{"content": doc_text}]`) but writes straight to Postgres,
+never to the chat's `rag_chunks.jsonl`. Per the plan: `PAWN/uploads/<doc_id>.txt`
+is itself the rebuild source of truth for documents — re-chunking it fresh on
+`rebuild_index` is simpler and avoids duplicating the same text in two
+places on Drive. The one thing that DOES need to persist on Drive (not just
+Postgres) is *which* doc_ids are attached to which chat, since that's not
+derivable from the doc text alone — new `conversations_drive.add_attached_doc`/
+`get_attached_docs` store `{doc_id, filename}` records in each chat's
+`meta.json`. This is what makes `rebuild_index`'s new document loop survive
+a full manual Postgres truncate (§M.7 item 7's exact disaster-recovery
+scenario) — without it, a wiped `memory_chunks` table would have no way to
+even discover which documents used to belong to a scope. Added a dedicated
+test proving this (`test_rebuild_index_survives_postgres_wipe_via_drive_attachment_record`
+— attaches a doc via Drive only, zero prior Postgres rows, confirms rebuild
+still recovers it).
+
+**Schema change required a DROP, not just CREATE OR REPLACE.**
+`match_scoped_chunks`/`search_scoped_chunks` (Phase M) returned
+`(id, conv_id, text[, score])` — no `kind`/`doc_id`, fine while every row was
+`kind='message'`. `doc_search` needs to know which chunk came from which
+upload, so both functions now also return `kind`/`doc_id`. Postgres won't let
+`CREATE OR REPLACE FUNCTION` change a `RETURNS TABLE` shape — needed an
+explicit `DROP FUNCTION` first, both in `schema.sql` (for a future fresh
+volume) and in a new migration file (`2026-07_doc_search_kind_return.sql`,
+same pattern as Phase M's own migration) applied live to the local dev
+Postgres this session (`docker compose exec postgres psql ... < migration.sql`
+— confirmed clean `DROP FUNCTION`/`CREATE FUNCTION` output).
+
+**`retrieve()`'s `match_kind` used to be a hardcoded literal.** Both SQL calls
+passed the string `"message"` inline — Phase M's own comment already flagged
+this as inert scaffolding for this exact follow-on plan. Now a real parameter,
+defaulting to `None` (search both kinds) so existing callers don't silently
+change behavior unless they opt in. One real behavior-preservation catch: the
+OLD ReAct graph node (`agent/graph.py::search_memory_node`, not yet deleted —
+that's A.6) called `retrieve()` without `match_kind` at all, which used to
+implicitly mean "message" via the old hardcoded literal. Left as `None` it
+would now silently start blending document chunks into the old ReAct
+protocol's memory search results — not wrong exactly, but a scope creep this
+step shouldn't introduce. Fixed by making that call site pass
+`match_kind="message"` explicitly, one line, preserves exact pre-A.4 behavior
+until A.6 replaces the whole node with the new `search_memory` tool.
+
+**`chat.py`'s whole-doc injection deleted outright** (not stubbed, not
+feature-flagged) — the `if req.doc_id: doc_text = ...; system_content = ...`
+block that used to prepend the entire document as a system message on every
+turn. `doc_id` stays on `ChatRequest` for frontend backward-compat but is
+now genuinely inert in `/chat`; `needs_drive` simplified since doc_id no
+longer triggers a Drive load there. Removed the now-unused `documents_drive`
+import.
+
+**New tools** (`agent/tools/doc_search.py`, `search_memory.py`) are thin
+`retrieve(..., match_kind=...)` wrappers, added to the toolset only when
+`ctx.scope_type is not None` (stateless chats get neither — same pattern as
+A.3's key-gated `web_search`). `doc_search` does a best-effort
+`doc_id -> filename` lookup via the hit's originating chat's
+`get_attached_docs` so observations read `[report.pdf] ...text...` instead of
+a bare UUID — falls back to the doc_id if Drive/meta lookup fails, never
+blocks the observation on that.
+
+**Frontend draft-chat edge, implemented exactly as locked.** `handleUpload`
+in `ChatPage.tsx` now promotes the draft conversation first — the identical
+`activeConvId ?? createConversation()` / `promoteDraft` / `navigate` sequence
+`handleSend` already used for the first message — before calling `uploadDoc`,
+so uploading into a brand-new empty chat always has a real conversation_id to
+scope against.
+
+**build-validator caught a real gap on its first pass:** the plan's test list
+explicitly calls for a "cross-scope doc isolation" test, and while message-kind
+isolation was already proven by a Phase M test, nothing specifically indexed a
+`kind='document'` chunk under one scope and confirmed a different scope's
+`doc_search` call couldn't see it. Added
+`test_retrieve_cross_scope_document_isolation_guarantee` (mirrors the existing
+message-kind isolation test, `match_kind='document'`) before re-validating.
+Also caught two Phase M tests that would've silently broken from this step's
+signature changes (`add_chunk`'s new `kind`/`doc_id` columns changing its
+positional-params assertion; `retrieve()`'s default no longer implicitly
+meaning "message") — both fixed in the same pass, not deferred.
+
+304 backend tests green (up from 286); `tsc --noEmit` + `npm run build` clean.
+code-reviewer PASS (0 CRITICAL/WARN — verified the Drive-then-Postgres write
+ordering in `index_document_task` matches `index_turn_task`'s established
+invariant, confirmed no lock-race/deadlock between concurrent doc-indexing
+and turn-indexing on the same chat since both serialize on the same
+`get_conv_lock` key, confirmed the SQL migration's `DROP`+`CREATE` is correct
+and the returned columns are accessed by name not position so ordering
+doesn't matter). No security-auditor run — no new outbound HTTP/secrets/auth
+surface, this step is pure Postgres/Drive plumbing reusing Phase M's existing
+security posture.
+
+**Aside:** hit one flaky native-extension crash (`exit 135`, a `httpx2`
+client teardown inside `test_summarize.py`) mid-full-suite-run — reproduced
+clean in isolation and on a full re-run immediately after, confirmed
+transient/environmental, not a real regression from this diff.
+
+Next: A.5 (model router — `core/router.py`, heuristic + LLM-fallback
+classifier, `ROLE_LEVELS`).
+
+---
+
 ### [2026-07-13] — Phase M complete: embedding fix + M.6 (projects UI) + M.7 (automatable parts)
 
 Closing out Phase M (`plan_memory_scoping.md`) this session. Picked up mid-M.6 after

@@ -152,9 +152,65 @@ re-verified against the as-built Phase M code on 2026-07-13.
   services. One NOTE (no raw-response byte cap before `trafilatura.extract`, only
   post-extraction truncation — future hardening, non-blocking). build-validator PASS
   (all plan criteria verified against the diff + live `pytest`/`tsc`/`vite build` runs).
-- [ ] **A.4 — `doc_search` (replaces whole-doc injection) [Phase M]**
-  Upload path chunks + indexes into scoped RAG with `kind='document'`; `chat.py`'s
-  whole-doc injection deleted; `tools/doc_search.py` / `tools/search_memory.py`.
+- [x] **A.4 — `doc_search` (replaces whole-doc injection) [Phase M]** ✓ (2026-07-13)
+  `routes/upload.py`: accepts optional `conversation_id` (Form field); lazy-creates
+  the conversation if missing (`_ensure_conversation`, mirrors `chat.py`'s
+  `_create_with_id`) so the draft-chat edge always has a scope before indexing;
+  resolves scope and schedules `index_document_task` via `BackgroundTasks`. No
+  `conversation_id` → doc stored but never indexed (no scope to index into).
+  `memory/indexer.py` gains `index_document_task(user_id, conv_id, scope, doc_id,
+  doc_text, filename="")` — reuses `chunk_turn` as-is (text-agnostic), writes
+  directly to Postgres only (`kind='document'`, `doc_id=doc_id`) — deliberately NOT
+  appended to `rag_chunks.jsonl`, since `PAWN/uploads/<doc_id>.txt` is itself the
+  rebuild source of truth for documents. New `conversations_drive.add_attached_doc`/
+  `get_attached_docs` persist `{doc_id, filename}` records in each chat's `meta.json`
+  (Drive, not just Postgres) so `rebuild_index` can rediscover a scope's documents
+  even after a full manual Postgres truncate — `rebuild_index` extended to re-chunk
+  every attached doc per scope after re-deriving message chunks as before.
+  `memory/index.py`'s `add_chunk` gains `kind`/`doc_id` params (defaults preserve
+  Phase M's message-only behavior). `memory/retrieve.py`'s `retrieve()` gains
+  `match_kind` (was hardcoded `"message"`); the old ReAct `search_memory_node` in
+  `agent/graph.py` now passes `match_kind="message"` explicitly to keep its
+  pre-A.4 behavior. `postgres/schema.sql` + new migration
+  `2026-07_doc_search_kind_return.sql`: `match_scoped_chunks`/`search_scoped_chunks`
+  now also return `kind`/`doc_id` (required `DROP FUNCTION` before `CREATE FUNCTION`
+  — Postgres can't change a `RETURNS TABLE` shape via `CREATE OR REPLACE`); applied
+  live to the local dev Postgres. `routes/chat.py`: whole-doc system-message
+  injection block deleted entirely; `doc_id` stays on `ChatRequest` but is now
+  inert (comment documents this); `needs_drive` simplified since doc_id no longer
+  triggers a Drive load in `/chat`; unused `documents_drive` import removed.
+  New `agent/tools/doc_search.py` (`match_kind='document'`, best-effort
+  `doc_id -> filename` prefix resolution via the hit's originating chat's
+  `get_attached_docs`, falls back to the bare doc_id) and `agent/tools/
+  search_memory.py` (`match_kind='message'`, replaces the graph-internal retrieve
+  call as the tool-layer wrapper). `registry.py`: both added to the toolset only
+  when `ctx.scope_type is not None` — stateless chats get no memory tools.
+  Frontend: `client.ts`'s `uploadDoc(file, conversationId?)` sends
+  `conversation_id`; `ChatPage.tsx`'s `handleUpload` promotes the draft first
+  (mirrors `handleSend`'s exact `createConversation`/`promoteDraft`/`navigate`
+  pattern) before uploading, per the plan's locked draft-chat rule.
+  New/updated tests: `test_upload.py` (2 obsolete whole-doc-injection tests
+  replaced/updated), `test_indexer.py` (+6: doc write-path incl. Postgres-only/
+  no-rag-jsonl, project scope, stateless no-op, idempotent attachment; rebuild
+  re-chunks attached docs; rebuild survives a full Postgres wipe via the
+  Drive-persisted attachment record), `test_rag.py` (2 Phase M tests updated for
+  the new `kind`/`doc_id` columns + explicit `match_kind`; **+1 new cross-scope
+  document isolation test**, added after build-validator flagged its absence
+  against the plan's explicit test list), `test_agent.py` (1 assertion updated),
+  new `test_agent_tools_docs.py` (11 tests: registry scope-gating,
+  doc_search/search_memory handlers incl. filename-prefix resolution, no-scope
+  TOOL_ERROR). 304 backend tests green (up from 286); `tsc --noEmit` +
+  `npm run build` clean. code-reviewer PASS (0 CRITICAL/WARN; verified Drive-
+  then-Postgres write ordering, the `get_conv_lock` race between doc-indexing and
+  turn-indexing serializes safely with no deadlock, the SQL migration is correct
+  and column-name-safe, `upload.py`'s small `_ensure_conversation` duplication
+  vs `chat.py`'s helper is an accepted, documented tradeoff). build-validator:
+  1st pass FAIL (missing the plan's explicitly-listed cross-scope document
+  isolation test, `current_state.md`/`dev_log.md` not yet updated at that
+  pre-docs-update stage) — test added, docs being updated as part of closing this
+  step. No security-auditor run (no new outbound HTTP/secrets/auth surface; this
+  step is pure Postgres/Drive plumbing reusing Phase M's existing security
+  posture).
 - [ ] **A.5 — Model router**
   New `core/router.py`: heuristic-first `classify()`, LLM fallback tier, `ROLE_LEVELS`,
   user model-pick override for the final answer.

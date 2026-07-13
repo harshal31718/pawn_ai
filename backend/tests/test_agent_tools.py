@@ -37,12 +37,13 @@ def test_get_tools_always_includes_calculator_and_datetime():
 
 def test_get_tools_stateless_and_scoped_both_get_the_always_on_tools():
     """calculator/get_datetime don't depend on scope — present either way.
-    (search_memory/doc_search scope-gating lands in A.4; web_search's own
-    key-gating is covered separately in test_agent_tools_search.py.)"""
+    (search_memory/doc_search ARE scope-gated as of A.4 — covered in
+    test_agent_tools_docs.py; web_search's own key-gating is covered
+    separately in test_agent_tools_search.py.)"""
     stateless = {t.name for t in get_tools(_ctx(scope_type=None, scope_id=None))}
     scoped = {t.name for t in get_tools(_ctx(scope_type="chat", scope_id="c1"))}
-    assert stateless == scoped
     assert {"calculator", "get_datetime"} <= stateless
+    assert {"calculator", "get_datetime"} <= scoped
 
 
 # ── execute.run_tool ─────────────────────────────────────────────────────────

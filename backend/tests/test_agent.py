@@ -132,7 +132,9 @@ async def test_search_memory_node(mock_dispatch, mock_retrieve):
     assert res["scratchpad"][0]["action"] == "search_memory"
     assert res["scratchpad"][0]["result"] == "found fact"
     assert res["next_action"] is None
-    mock_retrieve.assert_called_once_with("lookup", user_id=None, scope_type="chat", scope_id="c1")
+    mock_retrieve.assert_called_once_with(
+        "lookup", user_id=None, scope_type="chat", scope_id="c1", match_kind="message"
+    )
     mock_dispatch.assert_any_call(
         "memory_hit", {"summary": "found fact", "scope": "chat", "source_conv_id": "c1"}
     )

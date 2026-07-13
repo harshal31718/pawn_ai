@@ -29,29 +29,38 @@ def add_chunk(
     msg_index: Optional[int],
     text: str,
     embedding: List[float],
+    kind: str = "message",
+    doc_id: Optional[str] = None,
 ) -> Optional[int]:
     """
     Insert (or idempotently re-index) a memory chunk for a user into
     Postgres. Upserts on the (user_id, chunk_id) unique constraint so a
     rebuild/re-index never creates duplicate rows for the same source chunk.
     Returns the row id, or None if the write failed / Postgres unavailable.
+
+    `kind` is 'message' (default, chat-turn chunks) or 'document' (Phase A
+    doc_search chunks, `doc_id` set to the source upload's id). `conv_id` is
+    always the chat the chunk is attributed to, for both kinds — for a
+    document that's the chat it was uploaded into.
     """
     try:
         row = fetchone(
             """
             insert into memory_chunks
-                (user_id, scope_type, scope_id, conv_id, chunk_id, msg_index, text, embedding)
-            values (%s, %s, %s, %s, %s, %s, %s, %s)
+                (user_id, scope_type, scope_id, conv_id, chunk_id, msg_index, text, embedding, kind, doc_id)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (user_id, chunk_id) do update set
                 scope_type = excluded.scope_type,
                 scope_id   = excluded.scope_id,
                 conv_id    = excluded.conv_id,
                 msg_index  = excluded.msg_index,
                 text       = excluded.text,
-                embedding  = excluded.embedding
+                embedding  = excluded.embedding,
+                kind       = excluded.kind,
+                doc_id     = excluded.doc_id
             returning id
             """,
-            (user_id, scope_type, scope_id, conv_id, chunk_id, msg_index, text, embedding),
+            (user_id, scope_type, scope_id, conv_id, chunk_id, msg_index, text, embedding, kind, doc_id),
         )
         return row.get("id") if row else None
     except Exception as e:

@@ -31,12 +31,15 @@ async def retrieve(
     scope_type: str,
     scope_id: str,
     top_k: int = MEMORY_TOP_K,
+    match_kind: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve the top_k most relevant memory chunks within exactly one scope
-    using hybrid search (pgvector + Postgres FTS) fused with RRF. Phase M
-    always queries `kind='message'` (the `kind`/`doc_id` machinery is inert
-    until the follow-on plan_chat_agent_refinement.md adds document indexing).
+    using hybrid search (pgvector + Postgres FTS) fused with RRF.
+
+    `match_kind` filters by chunk kind ('message' or 'document', per Phase A's
+    `kind`/`doc_id` columns): pass 'message' for chat-history recall,
+    'document' for doc_search, or leave None to search both kinds at once.
     """
     try:
         query_vector = await embed(query, user_id=user_id)
@@ -56,11 +59,11 @@ async def retrieve(
                 # plain array parameter to match the function's vector(768)
                 # argument, so an untyped call fails to resolve the overload.
                 "select * from match_scoped_chunks(%s::vector, %s, %s, %s, %s, %s::int)",
-                (query_vector, user_id, scope_type, scope_id, "message", candidate_k),
+                (query_vector, user_id, scope_type, scope_id, match_kind, candidate_k),
             )
             for r in rows:
                 vec_results.append(
-                    {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}
+                    {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"], "doc_id": r.get("doc_id")}
                 )
         except Exception:
             pass
@@ -70,11 +73,11 @@ async def retrieve(
         rows = await asyncio.to_thread(
             fetchall,
             "select * from search_scoped_chunks(%s, %s, %s, %s, %s, %s::int)",
-            (query, user_id, scope_type, scope_id, "message", candidate_k),
+            (query, user_id, scope_type, scope_id, match_kind, candidate_k),
         )
         for r in rows:
             fts_results.append(
-                {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}
+                {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"], "doc_id": r.get("doc_id")}
             )
     except Exception:
         pass

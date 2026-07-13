@@ -78,7 +78,8 @@ def test_add_chunk_inserts_to_postgres():
     assert rowid == 42
     sql, params = fake_fetchone.call_args[0]
     assert "insert into memory_chunks" in sql
-    assert params == ("user-1", "chat", "conv-A", "conv-A", "chunk-1", 0, "Pineapples are tropical.", emb)
+    # kind defaults to 'message', doc_id to None, when not passed (Phase A / A.4).
+    assert params == ("user-1", "chat", "conv-A", "conv-A", "chunk-1", 0, "Pineapples are tropical.", emb, "message", None)
 
 
 def test_add_chunk_returns_none_on_failure():
@@ -116,7 +117,10 @@ def test_retrieve_fuses_vector_and_fts():
     with patch("app.memory.retrieve.fetchall", fake_fetchall):
         with patch("app.memory.retrieve.embed", side_effect=mock_embed):
             hits = asyncio.run(
-                retrieve("something tropical", user_id="user-1", scope_type="chat", scope_id="conv-X")
+                retrieve(
+                    "something tropical", user_id="user-1", scope_type="chat", scope_id="conv-X",
+                    match_kind="message",
+                )
             )
 
     texts = {h["text"] for h in hits}
@@ -194,6 +198,47 @@ def test_retrieve_cross_scope_miss_isolation_guarantee():
     assert len(hits_a) == 1
     assert "Nightingale" in hits_a[0]["text"]
     assert hits_b == []
+
+
+def test_retrieve_cross_scope_document_isolation_guarantee():
+    """Phase A / A.4: a document chunk (kind='document') indexed under one
+    chat's scope must never surface via doc_search (match_kind='document')
+    when a different chat scope queries it — the same isolation guarantee
+    Phase M proved for message chunks, now exercised for documents."""
+    emb = [1.0] + [0.0] * 767
+    chunks = [
+        {
+            "id": 1,
+            "user_id": "user-1",
+            "scope_type": "chat",
+            "scope_id": "chat-A",
+            "conv_id": "chat-A",
+            "text": "Quarterly revenue figures from the uploaded PDF.",
+        },
+    ]
+    fake_fetchall = MagicMock(side_effect=_fake_scoped_fetchall(chunks))
+
+    async def mock_embed(text, *args, **kwargs):
+        return emb
+
+    with patch("app.memory.retrieve.fetchall", fake_fetchall):
+        with patch("app.memory.retrieve.embed", side_effect=mock_embed):
+            hits_a = asyncio.run(
+                retrieve(
+                    "revenue", user_id="user-1", scope_type="chat", scope_id="chat-A",
+                    match_kind="document",
+                )
+            )
+            hits_b = asyncio.run(
+                retrieve(
+                    "revenue", user_id="user-1", scope_type="chat", scope_id="chat-B",
+                    match_kind="document",
+                )
+            )
+
+    assert len(hits_a) == 1
+    assert "revenue" in hits_a[0]["text"].lower()
+    assert hits_b == []  # different chat scope — the document is invisible
 
 
 def test_retrieve_project_scope_shared_across_member_chats():

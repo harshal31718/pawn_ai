@@ -433,9 +433,10 @@ export async function streamChat(
   onDone('')
 }
 
-export async function uploadDoc(file: File): Promise<string> {
+export async function uploadDoc(file: File, conversationId?: string): Promise<string> {
   const formData = new FormData()
   formData.append('file', file)
+  if (conversationId) formData.append('conversation_id', conversationId)
 
   const res = await fetch(`${BASE_URL}/upload`, {
     method: 'POST',
