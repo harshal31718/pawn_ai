@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) (M.1-M.5 done this session; M.6/M.7 remain, next session) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase M — M.1 through M.5 done (2026-07-13), stopped per session scope. M.6 (frontend: projects UI + move flows) next.** Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) — **all coding done (M.1–M.7), 2026-07-13; only M.7's live verification checklist remains, pending with the user** — + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`.** Also closed out this session: swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim), a gap found while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open item — see the M.7 entry below for the exact pending list. **Next up: Phase A — Chat Agent Refinement (`workspace/plan/plan_chat_agent_refinement.md`), pending its own refinement pass** — that plan has `[Phase M]` tags written against the *planned* M design; before any Phase A work starts, those tags need re-verification against the now-real Phase M code (file names, signatures, `resolve_scope`, the `kind` param, the `memory_hit` event payload, `chats/`/`projects/` Drive paths). That re-verification is a separate session with the user. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -121,19 +121,73 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
   FakeDrive + mocked Postgres; live curl demo against a real stack deferred to M.7's
   live verification checklist per the plan's own step order)
 
-- [ ] **M.6 — Frontend: projects UI + move flows**
-  `types.ts`/`client.ts` additions; `ProjectSection.tsx`/`ProjectRow.tsx`; blocking
-  confirm dialogs (add-to-project, remove-from-project, delete-project); new routes
-  `/project/:projectId` + `/project/:projectId/chat/:id`; `routes/memory.py`
-  (rebuild/clear) surfaced via kebab menus.
-  Demo: create project in sidebar → two chats inside share retrieval (memory_hit badge
-  shows source chat) → add/remove a standalone chat → siblings gain/lose access →
-  delete project (dialog lists chats) → everything gone.
+- [x] **M.6 — Frontend: projects UI + move flows** ✓ (2026-07-13)
+  `types.ts`/`client.ts` additions (`Project`, `ConversationMeta.project_id`,
+  `getProjects`/`createProject`/`renameProject`/`deleteProject`/`moveChatToProject`/
+  `removeChatFromProject`/`rebuildMemory`/`clearMemory`); `useConversationStore`
+  gains `projects` + the four move/CRUD mutators, `syncQueue`'s op union extended
+  with `createProject`/`renameProject`/`deleteProject`/`moveChat` exactly as named
+  in the plan; `ProjectSection.tsx`/`ProjectRow.tsx` (split out of `Sidebar.tsx`
+  per frontend.md's 150-line rule) + `KebabMenu.tsx` (shared one-level submenu
+  component) + `ConfirmDialog.tsx` (shared blocking dialog); all three required
+  confirm dialogs (add-to-project, remove-from-project, delete-project listing
+  contained chats) plus a fourth for the destructive "Clear memory" action (added
+  during review — the plan's M.6 text specifies "confirm dialog" for clear but the
+  first pass wired it directly to the kebab click); new routes `/project/:projectId`
+  + `/project/:projectId/chat/:id`; new `routes/memory.py` (`POST /memory/rebuild`,
+  `POST /memory/clear`, both user+scope-checked, 404 on unknown scope) surfaced via
+  "Memory ▸" submenus on both chat and project kebabs (not Settings, per plan).
+  New-chat-in-project: no dedicated backend "create inside project" endpoint exists
+  (M.5 only has move in/out on an existing chat) — implemented as lazy-create +
+  immediate `moveChat` op instead, documented inline in `useConversationStore.ts`.
+  Gate: `tsc --noEmit` zero errors, `npm run build` clean, 227 backend tests green
+  (via `docker compose exec backend pytest`).
+  code-reviewer (build-step skill): 1 CRITICAL fixed — `syncQueue.ts`'s `moveChat`
+  coalescing recomputed `fromProjectId` from the (already self-mutated) store ref on
+  every re-enqueue instead of only the first time, so a rapid double
+  remove-from-project could silently drop the backend call entirely (UI shows
+  removed, project chunks never actually get unscoped — an isolation leak). Fixed:
+  `fromProjectId` now resolved once per queue entry, preserved across coalesces.
+  1 WARN fixed (the missing Clear-memory confirm dialog, above). 2 NOTEs deferred
+  (pre-existing bare `except Exception` swallowing in `conversations_drive.py`'s
+  Drive-folder lookups, relied on by `memory.py` for 404 resolution; `memory.py`'s
+  Postgres delete has no try/except unlike `conversations.py`'s sibling
+  `_delete_chunks` pattern — low severity, it's a derived/rebuildable index).
+  No security-auditor run (no secrets/config/auth touched, same call as M.4).
+  Demo: create project in sidebar → two chats inside share retrieval (memory_hit
+  badge shows source chat) → add/remove a standalone chat → siblings gain/lose
+  access → delete project (dialog lists chats) → everything gone. Not yet run
+  against a real stack — deferred to M.7's live checklist per the plan's own step
+  order (same pattern as M.4/M.5's demo notes).
 
-- [ ] **M.7 — Tests, review, live verify**
-  Full backend suite green; code-reviewer + security-auditor via build-step skill; live
-  verification checklist (7 items in plan §5 M.7); update `current_state.md` +
-  `dev_log.md`.
+- [~] **M.7 — Tests, review, live verify** (automatable parts done 2026-07-13;
+  live checklist NOT yet run — needs the user + a real Drive-linked stack)
+  Done: full backend suite green (227 tests via `docker compose exec backend
+  pytest`); frontend `tsc`/`npm run build` clean; code-reviewer run via build-step
+  skill on M.6 (see above); no security-auditor needed (M.4/M.5/M.6 touch no
+  secrets/config/auth). `current_state.md` + `dev_log.md` updated.
+  **Still pending — live verification checklist (needs the user, a real Drive
+  account, and the docker compose stack up), plan §M.7 items 1–7 plus the
+  embedding-swap re-embed check from the M.1 gap fix:**
+  1. Legacy Drive tree migrates cleanly; old chats load from `chats/`.
+  2. Standalone chat A content NOT retrievable in chat B (the isolation guarantee).
+  3. Long standalone chat (40+ msgs) recalls an early detail via its own RAG when
+     the agent decides to search.
+  4. Two chats in one project share retrieval both directions; a chat outside sees
+     none.
+  5. Add standalone chat to project → siblings retrieve its history; its new turns
+     index into project scope. Remove it → siblings lose access; its new turns
+     index into chat scope again.
+  6. Delete chat → its PG chunks gone. Delete project → all chats, Drive folders,
+     and PG rows gone.
+  7. Truncate PG `memory_chunks` manually → `POST /memory/rebuild` restores
+     retrieval from Drive files alone.
+  8. (Embedding-fix gap, not in the original plan) Any real chats indexed while
+     `text-embedding-004` was dead have chunk rows with no/broken embeddings —
+     `POST /memory/rebuild` per affected scope re-embeds them via
+     `gemini-embedding-2` from the Drive `rag_chunks.jsonl` source of truth. Not
+     run against real Drive data yet.
+  M.7 gets marked `[x]` only after the user confirms these live.
 
 ---
 

@@ -6,6 +6,95 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-13] — Phase M complete: embedding fix + M.6 (projects UI) + M.7 (automatable parts)
+
+Closing out Phase M (`plan_memory_scoping.md`) this session. Picked up mid-M.6 after
+an interruption; reconciled the in-progress diff against the plan by hand (read every
+new/changed file, compared against §M.6's exact spec) rather than restarting, per the
+user's instruction — the interrupted work was in good shape and needed only the fixes
+below.
+
+**Embedding-model gap, fixed first.** The prior session's registry-refresh had already
+identified that `text-embedding-004` was shut down 2026-01-14 and the correct
+replacement is `gemini-embedding-2` (not `gemini-embedding-001`, which shuts down
+2026-07-14), but the actual code swap hadn't landed yet — `memory/embed.py` was still
+calling the dead model on every embed request. Fixed: `_gemini_embed` now calls
+`gemini-embedding-2` with `outputDimensionality: 768` (auto-normalized Matryoshka
+truncation, no manual normalization needed). Registry: `text-embedding-004` +
+its endpoint deactivated (kept for history), `gemini-embedding-2` + its endpoint
+added and active. `postgres/schema.sql`'s `vector(768)` column comment updated —
+**no schema/migration change**, the dimension was already correct. `test_registry.py`
+updated for two internal embedding entries. Verified via `docker compose exec backend
+pytest` (not a bare local `python -m pytest` — a stale `/app/data` artifact on this
+Windows dev machine from a much earlier local run, predating this whole registry
+refresh, was silently shadowing the real repo registry files when run outside Docker;
+caught by comparing local-vs-container results, not by trusting the first green run).
+Committed standalone: `fix: swap dead text-embedding-004 -> gemini-embedding-2
+(768-dim), M.1 gap`.
+**Known follow-up (real chats only, not this dev machine):** any chat indexed while
+the model was dead has chunks with missing/broken embeddings — needs a
+`POST /memory/rebuild` per affected scope once there's a real Drive-linked stack to
+run it against. Folded into M.7's live checklist rather than run now.
+
+**M.6 — frontend projects UI + move flows.** Reconciled the interrupted diff against
+plan §M.6 file-by-file: `types.ts`/`client.ts` additions, `useConversationStore`'s
+`projects` list + move mutators, `syncQueue`'s four new op kinds
+(`createProject`/`renameProject`/`deleteProject`/`moveChat`, exactly as named in the
+plan), `ProjectSection.tsx`/`ProjectRow.tsx` (split out of `Sidebar.tsx` per
+frontend.md's 150-line rule), shared `KebabMenu.tsx`/`ConfirmDialog.tsx`, three of the
+plan's four confirm dialogs, `/project/:projectId` + `/project/:projectId/chat/:id`
+routing, and backend `routes/memory.py` (rebuild/clear, both scope-checked + 404'd)
+surfaced via kebab "Memory ▸" submenus — all present and correct against the spec.
+Added one gap of my own: a test for `GET /conversations` now tagging project-scoped
+chats with their `project_id` (the endpoint's list logic changed to
+`list_all_conversations` but had no test coverage for the new behavior).
+Ran the build-step skill's test-runner + code-reviewer over the diff (implementation
+already written, so skipped straight to verification): 227 backend tests green,
+`tsc --noEmit`/`npm run build` clean.
+**code-reviewer found 1 CRITICAL, fixed:** `syncQueue.ts`'s `moveChat` op coalescing
+recomputed `fromProjectId` (the source project a move-out needs to call
+`DELETE /projects/{id}/chats/{conv_id}` against) from the store's live ref on every
+re-enqueue, not just the first. Since the ref reflects the op's own already-applied
+optimistic update, a second rapid remove-from-project (double-click, or any re-render
+landing between two clicks) would read the project as already-cleared and silently
+overwrite the correct captured source with `null` — the queued op would then no-op at
+drain time with no error, so the UI showed "removed" while the backend never got the
+call: a real memory-isolation leak (the project's other chats would keep retrieving
+from a chat the UI claimed was no longer shared). Fixed: `fromProjectId` is now
+captured once, only when a queue entry is first created.
+**1 WARN found, fixed:** the plan's M.6 text says "Clear memory" gets a confirm
+dialog like the other three flows; the first pass wired it straight to the kebab
+click with no gate. Added the fourth `ConfirmDialog` (destructive-styled).
+**2 NOTEs deferred** (pre-existing bare-except pattern in `conversations_drive.py`;
+`memory.py`'s Postgres delete has no try/except unlike its sibling
+`_delete_chunks` — both low-severity, rebuildable-index concerns, out of this step's
+scope). No security-auditor run (same call as M.4/M.5 — no secrets/config/auth
+touched). Committed: `feat: Phase M / M.6 - projects UI + move flows`.
+
+**M.7 — automatable parts only.** Full backend suite green, frontend gates clean,
+code-reviewer run (above). **The live verification checklist (plan §M.7 items 1-7,
+plus the embedding re-index check) was not run** — it needs a real Drive-linked
+account and the docker compose stack up, with the user driving the browser/curl
+steps. Listed as an explicit numbered pending list in `build_tracker.md`'s M.7 entry
+rather than silently folded into a green checkmark. M.7 is marked `[~]` (in
+progress), not `[x]`, until those are confirmed.
+
+**Phase M is now code-complete on `dev`** — schema+scoped SQL (M.1), Drive
+chats/projects layout with legacy migration (M.2), chunker/indexer write path (M.3),
+scoped retrieval + agent wiring (M.4), projects API + two-way moves (M.5), full
+projects UI (M.6), plus the embedding-model fix. Docs (`build_tracker.md`,
+`current_state.md`, this entry) updated to reflect that only the live-verification
+checklist remains before M.7 (and the phase) can be marked fully done.
+
+**Next phase note (not started, out of this session):** `plan_chat_agent_refinement.md`
+has `[Phase M]` tags written against the *planned* M design from before this
+implementation existed. Those need a re-verification pass against the real code
+(file/function names, `resolve_scope`, the `kind` param, `memory_hit` payload shape,
+`chats/`/`projects/` Drive paths) before any Phase A work starts — a separate session
+with the user, per explicit instruction this session.
+
+---
+
 ### [2026-07-13] — Registry refresh (registry-refresh skill, applied via Cowork session)
 
 Sources verified directly (not just the CLI agent's report): GitHub changelog
