@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) (ACTIVE — this session covers M.1-M.2) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase M — M.1 and M.2 done (2026-07-13), stopped per session scope. M.3 (chunker + write path) next.** Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) (ACTIVE — this session covers M.3-M.5) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **Phase M — M.1, M.2, and M.3 done (2026-07-13). M.4 (retrieval rewrite + agent wiring) next.** Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -73,11 +73,19 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
   appear under `chats/`. ✓ (verified directly against storage layer + FakeDrive; curl-level
   demo deferred to M.5 once routes/projects.py exists)
 
-- [ ] **M.3 — Chunker + write path (indexing every turn)**
-  `memory/chunker.py`, `memory/indexer.py` (`index_turn_task`), `resolve_scope`
-  (in-process cache, `SCOPE_CACHE_TTL_SECONDS`), `rebuild_index`. Conversation delete
-  also deletes that chat's PG rows.
-  Demo: send messages → chat's `rag_chunks.jsonl` grows; PG rows carry correct scope.
+- [x] **M.3 — Chunker + write path (indexing every turn)** ✓ (2026-07-13)
+  `memory/chunker.py` (`chunk_turn`, fixed-size overlap chunks). `memory/indexer.py`:
+  `resolve_scope` (in-process cache, `SCOPE_CACHE_TTL_SECONDS`, Drive-folder-derived),
+  `index_turn_task` (Drive write first, Postgres second — Drive failure aborts with
+  zero PG writes), `rebuild_index`. `chat.py` schedules `index_turn_task` from the
+  existing persist-turn block; stateless chats never indexed. Conversation delete
+  also deletes that chat's PG rows. `summarize.py`'s stale `add_chunk` call now routes
+  through `index_turn_task`, closing the last M.1/M.2 transitional gap. 19 new/changed
+  tests; 199 backend tests green (up from 180). code-reviewer PASS (0 CRITICAL; 2 WARN
+  addressed with clarifying comments — see `dev_log.md`). One real bug (project scope
+  id-vs-name confusion) caught by tests before review, fixed. No security-auditor run
+  (touches no secrets/config/auth).
+  Demo: send messages → chat's `rag_chunks.jsonl` grows; PG rows carry correct scope. ✓
 
 - [ ] **M.4 — Retrieval rewrite + agent wiring**
   `memory/retrieve.py` scoped signature (`MEMORY_TOP_K`). `agent/graph.py`:

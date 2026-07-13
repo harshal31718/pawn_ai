@@ -54,3 +54,11 @@ IMAGE_JOB_POLL_INTERVAL_SECONDS = 3
 # restart) — reaped to 'error' so the monitor panel never hangs on a ghost.
 COLD_JOB_MAX_WALLCLOCK_SECONDS = 1200
 
+# --- Memory scoping (Phase M) -------------------------------------------------
+# Chunk size for RAG indexing, approximated as len(text) // 4 (no tokenizer dep).
+MEMORY_CHUNK_TOKENS = 400
+MEMORY_CHUNK_OVERLAP_TOKENS = 50
+# How long an in-process resolve_scope() result is trusted before re-walking
+# Drive folder placement (explicitly evicted on a chat move — see M.5).
+SCOPE_CACHE_TTL_SECONDS = 300
+

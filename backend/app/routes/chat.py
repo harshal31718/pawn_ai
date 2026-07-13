@@ -14,6 +14,7 @@ from app.core.drive_factory import call_drive, require_drive_for_user
 from app.storage import documents_drive
 from app.storage import conversations_drive
 from app.memory.summarize import summarize_conversation_task
+from app.memory.indexer import index_turn_task
 
 router = APIRouter()
 
@@ -257,6 +258,13 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                 print(f"Failed to persist chat turn for {req.conversation_id}: {exc}", file=sys.stderr)
                 meta = None
             if meta:
+                background_tasks.add_task(
+                    index_turn_task,
+                    user_id,
+                    req.conversation_id,
+                    None,
+                    [user_msg_dict, assistant_msg_dict],
+                )
                 msg_count = meta.get("message_count", 0)
                 if meta.get("title") == "New Chat" and msg_count == 2:
                     background_tasks.add_task(

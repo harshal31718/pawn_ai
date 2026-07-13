@@ -110,6 +110,26 @@ def _locate_conv_folder(drive: DriveStorage, conv_id: str) -> Optional[str]:
     return None
 
 
+def resolve_conv_scope(drive: DriveStorage, conv_id: str) -> Optional[tuple]:
+    """Return ('chat', conv_id) or ('project', project_id) based on where the
+    chat's folder currently lives — folder placement is the sole source of
+    scope truth (no membership table), same walk as _locate_conv_folder but
+    returning the scope tuple instead of the folder id. Returns None if the
+    chat doesn't exist anywhere (e.g. raced with a delete). Used by
+    memory/indexer.py's resolve_scope (Phase M, M.3)."""
+    chats_folder = _chats_folder(drive)
+    if drive.find_file(conv_id, chats_folder):
+        return ("chat", conv_id)
+    projects_folder = _projects_folder(drive)
+    for project in drive.list_subfolders(projects_folder):
+        # project["id"] is Drive's internal folder id (needed to query its
+        # contents below); project["name"] is the project_id itself, since
+        # project folders are named `<id>` only (see module docstring).
+        if drive.find_file(conv_id, project["id"]):
+            return ("project", project["name"])
+    return None
+
+
 def _conv_folder_for_write(drive: DriveStorage, conv_id: str) -> str:
     """Locate a chat's current folder for writes (append/rename/summary);
     falls back to creating it fresh under chats/ only if it genuinely doesn't

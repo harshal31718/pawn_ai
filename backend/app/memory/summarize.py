@@ -94,17 +94,20 @@ async def summarize_conversation_task(
 
         if user_id:
             try:
-                from app.memory.embed import embed
-                from app.memory.index import add_chunk
+                from app.memory.indexer import index_turn_task
 
-                embedding = await embed(summary, user_id=user_id)
-                # TODO(M.3): stale add_chunk call -- index.py's signature changed
-                # (Phase M, M.1) to (user_id, scope_type, scope_id, conv_id,
-                # chunk_id, msg_index, text, embedding). This 4-arg call now
-                # TypeErrors every time, caught by the except below (fails soft,
-                # documented/accepted gap). M.3's indexer.py replaces this whole
-                # call path with proper chunking + scope resolution.
-                await run_in_threadpool(add_chunk, user_id, conv_id, summary, embedding)
+                # Route the rolling summary through the same chunk/scope/write
+                # path as a real turn (Phase M, M.3) -- chunked, appended to
+                # this chat's own rag_chunks.jsonl, embedded, and written into
+                # Postgres under the chat's current scope.
+                await index_turn_task(
+                    user_id, conv_id, None, [{"role": "assistant", "content": summary}]
+                )
             except Exception as e:
+                # Deliberately broad: this is a best-effort background task with
+                # no HTTP response to attach an error to (index_turn_task already
+                # handles its own expected failure modes internally, e.g.
+                # NotConfiguredError -> silent return); this is a last-resort
+                # safety net, not routes-layer error handling.
                 import sys
                 print(f"Failed to index summary for RAG: {e}", file=sys.stderr)

@@ -1,6 +1,6 @@
 import json
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from starlette.testclient import TestClient
 
 from app.main import app
@@ -70,6 +70,23 @@ def test_crud_endpoints(client):
     # 8. Fetch returns 404
     resp = client.get(f"/conversations/{conv_id}")
     assert resp.status_code == 404
+
+
+def test_delete_conversation_also_deletes_its_memory_chunks(client, fake_drive):
+    """Phase M, M.3: DELETE /conversations/{id} must delete that chat's
+    Postgres memory_chunks rows too (a pre-existing gap Phase M closes)."""
+    meta = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="Doomed Chat")
+    conv_id = meta["id"]
+
+    fake_execute = MagicMock()
+    with patch("app.db.postgres_client.execute", fake_execute):
+        resp = client.delete(f"/conversations/{conv_id}")
+    assert resp.status_code == 200
+
+    fake_execute.assert_called_once()
+    sql, params = fake_execute.call_args[0]
+    assert "delete from memory_chunks" in sql
+    assert params == (TEST_USER_ID, conv_id)
 
 
 def test_conversations_require_drive_when_unavailable():
