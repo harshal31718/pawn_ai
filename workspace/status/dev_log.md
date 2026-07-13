@@ -6,6 +6,114 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-13] — Phase A / A.8 + A.9: trace persistence + TraceView, full review pass (Phase A code-complete)
+
+**A.8 — trace persistence + frontend.** `constants.py` gains
+`TRACE_MAX_ENTRIES = 50`. `routes/chat.py` gains `_build_trace(tool_log,
+citations)`: after the SSE stream finishes, fetches the graph's final
+checkpointed state via `await graph.aget_state(config)` (the compiled graph
+already carries an `AsyncSqliteSaver` checkpointer from Phase 1.5) and flattens
+`AgentState.tool_log`/`citations` into `{kind: "tool"|"citation", agent,
+...payload}` entries, newest-`TRACE_MAX_ENTRIES`-survive (oldest dropped).
+Attached to the persisted assistant record only when non-empty — the
+direct-answer fast path never gets a `trace` key at all, matching the plan's
+"absent field = no trace" rule. `append_messages`/`load_messages`/`GET
+/conversations/{id}` needed zero changes (generic JSON passthrough, exactly as
+A.4's `doc_id`/`kind` additions worked before it).
+
+Frontend: `types.ts` gains a `TraceEntry` union (`kind`: step/tool/citation/
+model_call/memory_hit/provider_switch) used for both the persisted (reload)
+trace and the richer live-only kinds streamed via SSE — one shape, one render
+path. `client.ts`'s `StreamChatCallbacks.onStep` now also carries `agent`
+(previously dropped even though the SSE payload had it since A.6); new
+`onToolCall(name, agent)` fires alongside `onStep` whenever a step's label is
+shaped like `"Calling X"`/`"Delegating to X"`, extracting a clean tool/subagent
+name so the UI doesn't parse human-readable labels itself.
+
+New `components/TraceView.tsx` (extracted from `Message.tsx`, which would
+otherwise blow past frontend.md's ~150-line component rule): renders the
+"Claude-app style" activity block locked with the user this session — muted
+lines above the darker reply while streaming, present-tense tool labels via a
+friendly name lookup ("Searching the web…", "Reading page…", "Delegating to
+researcher…") that flip to past-tense + elapsed seconds once "settled",
+subagent entries visually grouped/indented under their agent name, auto-
+collapse to a "N steps · M tool calls · K sources · Xs" summary row the moment
+streaming ends (collapsed by default for historical/reloaded messages too,
+chevron re-expands). `ChatPage.tsx`'s SSE handlers build this up live: a
+tool-shaped step starts `status: "running"` with a `startedAt` timestamp and
+gets settled (`status: "done"`, `elapsedMs` computed) by a new
+`settleRunningTrace` helper the instant the next trace-worthy event arrives —
+correct under the strictly-sequential agent loop (A.7's locked decision #6)
+where at most one entry is ever running. Citation chips split into their own
+`components/CitationChips.tsx` (kept outside/independent of the collapsible
+trace block, per plan). `useConversationStore.ts`'s `toPersisted`/
+`fromPersisted` now carry `trace`/`citations` through the localStorage cache
+round-trip too — previously dropped there (a known pre-A.8 issue the plan
+called out explicitly), so a reload before the server refetch lands no longer
+shows a bare reply with no trace.
+
+New tests in `test_chat.py` (5): `_build_trace`'s kind-mapping and
+newest-survive capping, the direct-answer path persisting no `trace` key at
+all, and a full `/chat` → Drive-persisted-message round trip through a forced
+heavy/tool-call path confirming the persisted trace's shape end to end. 364
+backend tests green (up from 359). `tsc --noEmit` + `npm run build` clean.
+
+**A.9 — tests, review, live verify.** Full backend suite (364) + frontend
+gates green. **security-auditor (mandatory per plan, SSRF + search-key
+surface) ran against the full A.1–A.8 stack, not just this session's diff —
+PASS.** Confirmed: the SSRF guard and its IPv4-mapped-IPv6 handling are
+unchanged and still correct; BYOK search keys never leak through any
+exception path; the tool-call dispatch can't escape the per-request registry;
+the subagent depth guard holds both structurally and at runtime; no tool
+argument or observation can carry a decrypted secret into the newly-persisted
+`trace` field; `TraceView`/`CitationChips` render all trace text as plain JSX
+(no `dangerouslySetInnerHTML`) and citation hrefs stay scheme-filtered. One
+non-blocking WARN — `execute.py`'s catch-all `TOOL_ERROR: {e}` now feeds
+persisted, API-served data, not just a transient stream, so a future tool
+whose exception text could embed sensitive data would leak silently — fixed
+by adding an explicit comment at that catch site flagging the concern for
+whoever writes the next tool handler. The A.3 DNS-rebinding TOCTOU residual
+remains accepted, unchanged.
+
+**code-reviewer FAIL on the first pass — 1 CRITICAL, fixed:** the backend
+persists tool entries with `elapsed_ms` (snake_case, matching
+`AgentState.tool_log`'s own field name), but `types.ts`'s `TraceEntry` declares
+`elapsedMs` (camelCase) and neither `fromPersisted` nor `backgroundLoadDetail`
+mapped between them — every reloaded historical message with tool use silently
+lost its elapsed-time display (`TraceView`'s per-entry "· X.Xs" badge and the
+summary row's total-seconds suffix both stayed hidden), and `tsc` couldn't
+catch it since `fetchConversation`'s return type is asserted, not runtime-
+validated. Fixed in `client.ts`: `fetchConversation` now normalizes each
+`WireTraceEntry`'s `elapsed_ms` → `elapsedMs` at the API boundary, the one
+place server JSON enters the app — the same place `source_conv_id`/
+`from_provider` etc. already get mapped to camelCase for the live SSE path, so
+this closes the one place that convention had been missed. 2 WARNs fixed:
+`client.ts`'s `onToolCall` regex (`/^Calling (.+)$/`) only matched tool calls,
+never `"Delegating to X"`, even though `ChatPage.tsx`'s own step-detection
+regex treats both as tool-shaped — live delegation entries never got a
+resolved `name`; unified both regexes and cross-referenced them by comment so
+they can't drift again. A live-only cosmetic WARN (a "Delegating to X" entry
+gets settled early — as soon as the subagent's *own* first nested step
+arrives, understating the outer delegation's displayed elapsed time for that
+turn) was assessed and left as a documented, accepted limitation: the
+persisted trace is unaffected (the backend times the whole delegate call
+server-side via `time.monotonic()`, so a reload always shows the correct
+duration), and a proper fix needs per-agent-group running-state tracking
+rather than "settle the last entry," which is a bigger change than this
+cosmetic, self-correcting gap warrants right now. Re-verified: 364 backend
+tests + `tsc`/`build` still clean after all fixes.
+
+**Phase A is now code-complete (A.1–A.9).** What's NOT done: A.9's live
+verification checklist (plan §A.9, 8 items) needs the user's own BYOK
+provider/search keys and a browser — every item in some form depends on a
+real upstream model call or visual confirmation the automated suite can only
+prove at the code-path level (which it does, exhaustively, across A.1-A.8's
+existing unit/integration tests). Handed to the user as a numbered manual
+checklist; A.9 does not get marked `[x]` until they confirm it live. Not
+marking stable, not promoting to main — both explicitly the user's call.
+
+---
+
 ### [2026-07-13] — Sidebar polish: prominent project creation + Projects/Chats separation
 
 Small UI-only follow-up to Phase M (no plan change). Two problems: creating a

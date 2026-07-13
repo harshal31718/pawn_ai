@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **started 2026-07-13, A.1–A.7 done this session, A.8 next** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase A — Chat Agent Refinement, A.7 done (preset subagents), A.8 (trace persistence + frontend) next.** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started same day. A.1-A.7 all done and committed this session — see the A.6/A.7 entries below for the graph v2 rewrite and subagent delegation details. Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **A.1–A.9 all code-complete 2026-07-13; only A.9's live verification checklist remains, pending with the user** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **Phase A — Chat Agent Refinement is code-complete (A.1–A.9), 2026-07-13.** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started and finished same day across two sessions. A.8 (trace persistence + `TraceView.tsx`) and A.9 (full test/review pass) done this session — see the A.8/A.9 entries below for the persisted-trace shape, the mandatory security-auditor PASS on the full A.1-A.8 stack, and the code-reviewer CRITICAL (elapsed_ms/elapsedMs mismatch) that was found and fixed. **A.9's live verification checklist (plan §A.9, 8 items — needs the user's own BYOK/search keys and a browser) is the only open Phase A item; it is NOT marked `[x]` until the user confirms it live.** Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -322,12 +322,81 @@ re-verified against the as-built Phase M code on 2026-07-13.
   concludes with a sourced digest → main composes the final answer from it,
   with zero interleaving (strictly sequential, one subagent call completes
   fully before main's loop continues). ✓
-- [ ] **A.8 — Trace persistence + frontend**
-  `trace` field on persisted assistant messages **[Phase M layout]**; `TraceView.tsx`;
-  streaming activity block + auto-collapse summary row; citation chips.
-- [ ] **A.9 — Tests, review, live verify**
-  Full backend suite + frontend build gates; code-reviewer + mandatory security-auditor
-  (SSRF guard, search-key handling); live verification checklist (plan §A.9).
+- [x] **A.8 — Trace persistence + frontend** ✓ (2026-07-13)
+  `constants.py` gains `TRACE_MAX_ENTRIES=50`. New `routes/chat.py::_build_trace
+  (tool_log, citations)` — after the SSE stream finishes, fetches the graph's
+  final checkpointed state via `await graph.aget_state(config)` and flattens
+  `AgentState.tool_log`/`citations` into `{kind: "tool"|"citation", agent,
+  ...payload}` entries, newest-`TRACE_MAX_ENTRIES`-survive. Attached to the
+  persisted assistant record only when non-empty — the direct-answer fast path
+  never gets a `trace` key at all. `append_messages`/`load_messages`/`GET
+  /conversations/{id}` needed zero changes (generic JSON passthrough).
+  Frontend: `types.ts` gains a `TraceEntry` union (step/tool/citation/
+  model_call/memory_hit/provider_switch) used for both the persisted and live
+  SSE-driven trace; `client.ts`'s `onStep` now carries `agent`, new
+  `onToolCall(name, agent)` resolves a clean tool/subagent name from
+  `"Calling X"`/`"Delegating to X"` labels. New `components/TraceView.tsx`
+  (extracted from `Message.tsx` per frontend.md's 150-line rule) — the
+  "Claude-app style" presentation locked with the user this session: muted
+  activity lines above the darker reply while streaming, present-tense tool
+  labels via a friendly name lookup that flip to past-tense + elapsed seconds
+  once "settled" (a new `settleRunningTrace` helper in `ChatPage.tsx`, correct
+  under the strictly-sequential agent loop), nested/indented subagent
+  grouping, auto-collapse to a "N steps · M tool calls · K sources · Xs"
+  summary row on completion (collapsed by default for history), chevron
+  re-expand. Citation chips split into `components/CitationChips.tsx`, kept
+  outside the collapsible block. `useConversationStore.ts`'s
+  `toPersisted`/`fromPersisted` now carry `trace`/`citations` through the
+  localStorage cache round-trip (previously dropped there — closes a known
+  pre-A.8 gap). New tests in `test_chat.py` (5): `_build_trace` kind-mapping +
+  capping, direct-answer-persists-no-trace, and a full `/chat` → Drive-persisted
+  round trip via a forced tool-call path. 364 backend tests green (up from
+  359); `tsc --noEmit` + `npm run build` clean.
+  Demo (mocked): a forced heavy/tool-call `/chat` request persists an assistant
+  record whose `trace` field's first entry is `{"kind": "tool", "agent":
+  "main", "name": "calculator", "observation": "4", "elapsed_ms": ...}`; a
+  light "hello" message persists no `trace` key at all. ✓
+- [~] **A.9 — Tests, review, live verify** (code/automated parts done
+  2026-07-13; live checklist NOT yet run — needs the user + their own BYOK/
+  search keys + a browser)
+  Full backend suite (364) + frontend `tsc`/`build` gates green.
+  **security-auditor (mandatory per plan) ran against the FULL A.1-A.8 stack
+  end to end, not just this session's diff — PASS.** SSRF guard/IPv4-mapped-
+  IPv6 handling unchanged and correct; BYOK search keys never leak through any
+  exception path; tool dispatch can't escape the per-request registry; the
+  subagent depth guard holds structurally and at runtime; no tool arg/
+  observation can carry a decrypted secret into the newly-persisted `trace`;
+  `TraceView`/`CitationChips` render all trace text as plain JSX (no
+  `dangerouslySetInnerHTML`), citation hrefs stay scheme-filtered. One
+  non-blocking WARN fixed (execute.py's `TOOL_ERROR: {e}` catch-all now feeds
+  persisted, API-served data — added a comment flagging this for future tool
+  authors). A.3's DNS-rebinding TOCTOU residual remains accepted, unchanged.
+  **code-reviewer: 1st pass FAIL — 1 CRITICAL, fixed:** backend persists
+  `elapsed_ms` (snake_case) but `types.ts` declared `elapsedMs` (camelCase)
+  with no mapping on the reload path (`fromPersisted`/`backgroundLoadDetail`)
+  — every reloaded historical tool-use message silently lost its elapsed-time
+  display; `tsc` couldn't catch it since `fetchConversation`'s return type is
+  asserted, not runtime-validated. Fixed: `client.ts`'s `fetchConversation`
+  now normalizes `elapsed_ms` → `elapsedMs` at the API boundary (the one place
+  server JSON enters the app, same place other snake_case SSE fields already
+  get mapped). 2 WARNs fixed: `onToolCall`'s regex only matched `"Calling X"`,
+  never `"Delegating to X"`, despite `ChatPage.tsx` treating both as
+  tool-shaped — unified the two regexes and cross-referenced them by comment.
+  A live-only cosmetic WARN (a "Delegating to X" entry settles early, as soon
+  as the subagent's own first nested step arrives, understating its live
+  elapsed time for that turn) was assessed and left as a documented, accepted
+  limitation — the persisted trace is unaffected (backend times the whole
+  delegate call server-side via `time.monotonic()`), and a proper fix needs
+  per-agent-group running-state tracking, a bigger change than this
+  self-correcting gap warrants right now. Re-verified: 364 backend tests +
+  `tsc`/`build` clean after all fixes.
+  **Live verification checklist (plan §A.9, 8 items) handed to the user as a
+  numbered manual list — every item depends on a real upstream model/search
+  call or a browser, which this session cannot exercise; the automated suite
+  proves each item's underlying code path exhaustively (see dev_log.md for the
+  full item→test mapping), but not the live end-to-end behavior itself.**
+  `current_state.md`/`dev_log.md` updated. **A.9 stays `[~]`, not `[x]`, until
+  the user confirms the live checklist.**
 
 ---
 

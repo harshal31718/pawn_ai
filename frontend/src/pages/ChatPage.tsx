@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useOutletContext, useNavigate } from 'react-router-dom'
-import type { Message } from '../types'
+import type { Message, TraceEntry } from '../types'
 import ChatWindow from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
 import InteractiveGridBackground from '../components/InteractiveGridBackground'
@@ -11,6 +11,36 @@ import {
 } from '../api/client'
 import { mid } from '../store/ids'
 import type { LayoutContext } from './Layout'
+
+// Phase A / A.8 — a "step" event whose label announces an outbound action
+// (a tool call or a subagent delegation) becomes a "running" trace entry that
+// later flips to "done" + elapsed ms once the next trace-worthy event lands.
+// Must stay in lockstep with client.ts's _TOOL_CALL_LABEL_RE (same two
+// prefixes) so onToolCall can resolve a `name` for both tool calls and
+// delegations -- a code-reviewer WARN from the A.9 pass caught these drifting.
+//
+// Known limitation (accepted, live-only, self-corrects on reload): settling
+// only the LAST entry assumes at most one is ever "running" at a time. That
+// holds for the main agent's own loop, but a "Delegating to X" entry stays
+// "running" only until the subagent's own first nested step arrives (tagged
+// with the subagent's name, not "main") -- that nested step's settle call
+// closes the *outer* delegation entry early, understating its live elapsed
+// time for the rest of that turn. The persisted trace is unaffected: the
+// backend times the whole delegate_<name> call server-side via
+// time.monotonic(), so a reload shows the correct duration.
+const TOOL_STEP_RE = /^(Calling|Delegating to) /
+
+function settleRunningTrace(trace: TraceEntry[]): TraceEntry[] {
+  if (trace.length === 0) return trace
+  const last = trace[trace.length - 1]
+  if (last.kind !== 'tool' || last.status !== 'running') return trace
+  const elapsedMs = last.startedAt ? Date.now() - last.startedAt : undefined
+  return [...trace.slice(0, -1), { ...last, status: 'done', elapsedMs }]
+}
+
+function appendTraceEntry(trace: TraceEntry[] | undefined, entry: TraceEntry): TraceEntry[] {
+  return [...settleRunningTrace(trace || []), entry]
+}
 
 export default function ChatPage() {
   const { id: urlConvId, projectId: urlProjectId } = useParams<{ id: string; projectId?: string }>()
@@ -201,7 +231,9 @@ export default function ChatPage() {
         onDone: (viaProvider) => {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, viaProvider } : m,
+              m.id === assistantId
+                ? { ...m, viaProvider, trace: settleRunningTrace(m.trace || []) }
+                : m,
             ),
           )
           setStreaming(convId, false)
@@ -213,31 +245,35 @@ export default function ChatPage() {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? { ...m, content: `Error: ${err}` }
+                ? { ...m, content: `Error: ${err}`, trace: settleRunningTrace(m.trace || []) }
                 : m,
             ),
           )
           setStreaming(convId, false)
           streamsRef.current.delete(convId)
         },
-        onStep: (label, detail) => {
+        onStep: (label, detail, agent) => {
           setMessagesFor(convId, (prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                  ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'step',
-                      label,
-                      detail,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
-                }
-                : m,
-            ),
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = TOOL_STEP_RE.test(label)
+                ? { kind: 'tool', agent, label, detail, status: 'running', startedAt: Date.now() }
+                : { kind: 'step', agent, label, detail }
+              return { ...m, trace: appendTraceEntry(m.trace, entry) }
+            }),
+          )
+        },
+        onToolCall: (name, agent) => {
+          // Enriches the tool entry onStep just pushed with its resolved
+          // tool/subagent name (client.ts fires this right after onStep for
+          // the same event) -- TraceView otherwise falls back to the raw label.
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId || !m.trace || m.trace.length === 0) return m
+              const last = m.trace[m.trace.length - 1]
+              if (last.kind !== 'tool' || last.status !== 'running' || last.agent !== agent) return m
+              return { ...m, trace: [...m.trace.slice(0, -1), { ...last, name }] }
+            }),
           )
         },
         onMemoryHit: (summary, scope, sourceConvId) => {
@@ -246,16 +282,13 @@ export default function ChatPage() {
               m.id === assistantId
                 ? {
                   ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'memory_hit',
-                      summary,
-                      scope: scope as 'chat' | 'project' | undefined,
-                      sourceConvId,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
+                  trace: appendTraceEntry(m.trace, {
+                    kind: 'memory_hit',
+                    agent: 'main',
+                    summary,
+                    scope: scope === 'project' ? 'project' : scope === 'chat' ? 'chat' : undefined,
+                    sourceConvId,
+                  }),
                 }
                 : m,
             ),
@@ -265,18 +298,7 @@ export default function ChatPage() {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? {
-                  ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'model_call',
-                      model,
-                      purpose,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
-                }
+                ? { ...m, trace: appendTraceEntry(m.trace, { kind: 'model_call', agent: 'main', model, purpose }) }
                 : m,
             ),
           )
@@ -287,7 +309,11 @@ export default function ChatPage() {
               if (m.id !== assistantId) return m
               const existing = m.citations || []
               if (existing.some((c) => c.url === url)) return m // de-dup by URL
-              return { ...m, citations: [...existing, { url, title }] }
+              return {
+                ...m,
+                citations: [...existing, { url, title }],
+                trace: appendTraceEntry(m.trace, { kind: 'citation', agent: 'main', url, title }),
+              }
             }),
           )
         },
@@ -304,18 +330,7 @@ export default function ChatPage() {
               : [...prev, noticeMsg]
             return withNotice.map((m) =>
               m.id === assistantId
-                ? {
-                  ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'provider_switch',
-                      from,
-                      to,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
-                }
+                ? { ...m, trace: appendTraceEntry(m.trace, { kind: 'provider_switch', agent: 'main', from, to }) }
                 : m,
             )
           })

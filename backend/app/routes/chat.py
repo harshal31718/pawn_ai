@@ -9,6 +9,7 @@ from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import NotConfiguredError, ProviderError
 from app import events
+from app.constants import TRACE_MAX_ENTRIES
 from app.core import key_store
 from app.core.drive_factory import call_drive, require_drive_for_user
 from app.storage import conversations_drive
@@ -33,6 +34,37 @@ def _persist_turn(drive, conv_id: str, user_id: str | None, turns: list[dict]):
     """Blocking: append the user+assistant turns and return the refreshed meta."""
     conversations_drive.append_messages(drive, conv_id, turns)
     return conversations_drive.get_conversation_meta(drive, conv_id)
+
+
+def _build_trace(tool_log: list[dict], citations: list[dict]) -> list[dict]:
+    """Phase A / A.8: flattens AgentState.tool_log/citations (as left in the
+    graph's final checkpointed state) into the persisted `trace` shape --
+    `{kind, agent, ...payload}` -- capped to TRACE_MAX_ENTRIES (oldest first
+    dropped). Tool entries (including nested subagent ones, already tagged
+    `agent` by execute_node/run_subagent) come first in execution order, then
+    citations -- citations are always treated as "newer" than tool entries by
+    the cap regardless of when each was actually found mid-run (a citation
+    discovered by the very first tool call still survives a truncation that
+    drops early tool entries); this loses cross-kind chronological ordering
+    once the cap kicks in, accepted as a minor, documented tradeoff. Empty
+    input -> empty trace, so the direct-answer fast path (tool_log/citations
+    never populated) attaches no trace field at all."""
+    trace = [
+        {
+            "kind": "tool",
+            "agent": entry.get("agent", "main"),
+            "name": entry.get("name", ""),
+            "args": entry.get("args", {}),
+            "observation": entry.get("observation", ""),
+            "elapsed_ms": entry.get("elapsed_ms", 0),
+        }
+        for entry in tool_log
+    ]
+    trace.extend(
+        {"kind": "citation", "agent": "main", "url": c.get("url", ""), "title": c.get("title", "")}
+        for c in citations
+    )
+    return trace[-TRACE_MAX_ENTRIES:]
 
 
 def _create_with_id(drive, conv_id: str, user_id: str | None, model_id: str):
@@ -254,6 +286,19 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         # seen the reply, so a Drive failure here is logged, not surfaced.
         if req.conversation_id and success and user_msg_dict and assistant_text:
             assistant_msg_dict = {"role": "assistant", "content": assistant_text}
+            # Phase A / A.8: pull the graph's final checkpointed tool_log/citations
+            # for this run and attach them as `trace` -- absent (not just empty)
+            # when there's nothing to show, e.g. the direct-answer fast path.
+            try:
+                snapshot = await graph.aget_state(config)
+                state_values = snapshot.values if snapshot else {}
+            except Exception as exc:
+                import sys
+                print(f"Failed to read agent state for trace persistence on {req.conversation_id}: {exc}", file=sys.stderr)
+                state_values = {}
+            trace = _build_trace(state_values.get("tool_log", []), state_values.get("citations", []))
+            if trace:
+                assistant_msg_dict["trace"] = trace
             try:
                 meta = await run_in_threadpool(
                     call_drive,

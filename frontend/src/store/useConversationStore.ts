@@ -28,11 +28,23 @@ function toPersisted(msgs: Message[]): PersistedMsg[] {
     role: m.role,
     content: m.content,
     ...(m.viaProvider ? { viaProvider: m.viaProvider } : {}),
+    // Phase A / A.8: traces/citations now survive the cache round-trip too
+    // (previously dropped here — a reload before the server refetch landed
+    // would show a bare reply with no trace).
+    ...(m.trace && m.trace.length > 0 ? { trace: m.trace } : {}),
+    ...(m.citations && m.citations.length > 0 ? { citations: m.citations } : {}),
   }))
 }
 
 function fromPersisted(msgs: PersistedMsg[]): Message[] {
-  return msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, viaProvider: m.viaProvider }))
+  return msgs.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    viaProvider: m.viaProvider,
+    trace: m.trace,
+    citations: m.citations,
+  }))
 }
 
 function countTurns(msgs: Message[] | undefined): number {
@@ -164,7 +176,13 @@ export function useConversationStore(
       if (seq !== fetchSeqRef.current) return // user switched away — ignore stale result
       const msgs = detail.messages
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ id: mid(), role: m.role as 'user' | 'assistant', content: m.content }))
+        .map((m) => ({
+          id: mid(),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          trace: m.trace,
+          citations: m.citations,
+        }))
       setMessagesByConv((prev) => ({ ...prev, [id]: msgs }))
       setConversations((prev) => mergeServerMeta(prev, [detail.meta]))
     } catch {

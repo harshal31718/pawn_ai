@@ -1,15 +1,45 @@
-export interface TraceEvent {
-  type: 'step' | 'memory_hit' | 'model_call' | 'provider_switch'
+/** Phase A / A.8 — one entry in an assistant message's agent trace. A superset
+ *  shape covering both what the backend persists (`kind: 'tool' | 'citation'`,
+ *  built from AgentState.tool_log/citations — see routes/chat.py's
+ *  `_build_trace`) and the extra live-only kinds (`step`, `memory_hit`,
+ *  `provider_switch`, `model_call`) streamed via SSE while the agent is
+ *  running, so TraceView can render both a live stream and a reloaded
+ *  historical trace through one component. `agent` is `"main"` for the
+ *  orchestrator or a subagent name (researcher/summarizer/coder) for nested
+ *  steps. `status`/`startedAt` are live-only bookkeeping (never persisted) --
+ *  used to flip a running tool step to "done" + elapsed once the next trace
+ *  entry arrives. */
+export type TraceEntryKind = 'step' | 'tool' | 'citation' | 'model_call' | 'memory_hit' | 'provider_switch'
+
+export interface TraceEntry {
+  kind: TraceEntryKind
+  agent: string
+  // step (live only)
   label?: string
   detail?: string
+  // tool (persisted + live, once resolved via onToolCall)
+  name?: string
+  args?: Record<string, unknown>
+  observation?: string
+  elapsedMs?: number
+  // citation
+  url?: string
+  title?: string
+  // model_call (currently unused by the backend, kept for forward-compat)
+  model?: string
+  purpose?: string
+  // memory_hit (live only) [Phase M]
   summary?: string
   scope?: 'chat' | 'project'
   sourceConvId?: string
-  model?: string
-  purpose?: string
+  // provider_switch (live only)
   from?: string
   to?: string
-  timestamp: string
+  // live-only bookkeeping, stripped before persistence never applies here --
+  // this field simply isn't sent to the backend (only `content` is persisted
+  // client-side; the server builds its own trace independently)
+  status?: 'running' | 'done'
+  startedAt?: number
 }
 
 export interface Citation {
@@ -21,7 +51,7 @@ export interface Message {
   id: string
   role: 'user' | 'assistant' | 'notice'
   content: string
-  trace?: TraceEvent[]
+  trace?: TraceEntry[]
   citations?: Citation[]
   viaProvider?: string
 }
@@ -52,12 +82,17 @@ export interface CachedProject extends Project {
   _localUpdatedAt: number
 }
 
-/** Message shape persisted to localStorage (final text only — no reasoning trace). */
+/** Message shape persisted to localStorage. Gained `trace`/`citations` in
+ *  Phase A / A.8 — previously dropped on cache write (known issue), so a
+ *  reload used to lose the agent trace until the server round-trip refetched
+ *  it. Now both the cache and the server carry the same shape. */
 export interface PersistedMsg {
   id: string
   role: 'user' | 'assistant' | 'notice'
   content: string
   viaProvider?: string
+  trace?: TraceEntry[]
+  citations?: Citation[]
 }
 
 /** A pending backend mutation. The UI updates optimistically; these drain in the

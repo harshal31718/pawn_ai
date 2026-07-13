@@ -4,6 +4,12 @@ from unittest.mock import patch, AsyncMock
 from starlette.testclient import TestClient
 
 from app.main import app
+from app.routes.chat import _build_trace
+from app.storage import conversations_drive
+from tests.fake_drive import FakeDriveStorage
+
+# Must match conftest.TEST_USER_ID
+TEST_USER_ID = "test-user-id"
 
 
 async def mock_stream(*args, **kwargs):
@@ -15,6 +21,18 @@ async def mock_stream(*args, **kwargs):
 def client():
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture()
+def fake_drive():
+    return FakeDriveStorage()
+
+
+@pytest.fixture()
+def drive_client(fake_drive):
+    with patch("app.core.drive_factory.get_drive_for_user", return_value=fake_drive):
+        with TestClient(app) as c:
+            yield c
 
 
 def _parse_sse_events(body: str) -> list[dict]:
@@ -218,3 +236,100 @@ def test_chat_done_event_carries_provider_name(client):
     events = _parse_sse_events(body)
     done = next(e for e in events if e.get("type") == "done")
     assert done["via_provider"] == "groq"
+
+
+# ─── Phase A / A.8: trace persistence ────────────────────────────────────────
+
+def test_build_trace_maps_tool_log_and_citations():
+    tool_log = [
+        {"name": "web_search", "args": {"query": "x"}, "observation": "results", "elapsed_ms": 120, "agent": "main"},
+        {"name": "fetch_url", "args": {"url": "https://a.com"}, "observation": "page text", "elapsed_ms": 300, "agent": "researcher"},
+    ]
+    citations = [{"url": "https://a.com", "title": "A"}]
+
+    trace = _build_trace(tool_log, citations)
+
+    assert trace[0] == {
+        "kind": "tool", "agent": "main", "name": "web_search",
+        "args": {"query": "x"}, "observation": "results", "elapsed_ms": 120,
+    }
+    assert trace[1]["agent"] == "researcher"
+    assert trace[2] == {"kind": "citation", "agent": "main", "url": "https://a.com", "title": "A"}
+
+
+def test_build_trace_empty_input_yields_empty_trace():
+    assert _build_trace([], []) == []
+
+
+def test_build_trace_caps_at_trace_max_entries():
+    from app.constants import TRACE_MAX_ENTRIES
+
+    tool_log = [
+        {"name": "get_datetime", "args": {}, "observation": str(i), "elapsed_ms": 1, "agent": "main"}
+        for i in range(TRACE_MAX_ENTRIES + 10)
+    ]
+    trace = _build_trace(tool_log, [])
+    assert len(trace) == TRACE_MAX_ENTRIES
+    # Oldest dropped -- the surviving entries are the most recent ones.
+    assert trace[0]["observation"] == "10"
+    assert trace[-1]["observation"] == str(TRACE_MAX_ENTRIES + 9)
+
+
+def test_chat_direct_answer_path_persists_no_trace_field(drive_client, fake_drive):
+    """A light 'hello'-shaped message takes the direct-answer fast path --
+    tool_log/citations never populate, so no `trace` key should be persisted
+    at all (absent field = no trace, not an empty list)."""
+    conv_id = "conv-direct-1"
+
+    with patch("app.core.normalize.stream_llm", side_effect=mock_stream):
+        with drive_client.stream(
+            "POST", "/chat",
+            json={"messages": [{"role": "user", "content": "hi"}], "conversation_id": conv_id},
+        ) as resp:
+            assert resp.status_code == 200
+            resp.read()
+
+    messages = conversations_drive.load_messages(fake_drive, conv_id)
+    assistant_msg = next(m for m in messages if m["role"] == "assistant")
+    assert "trace" not in assistant_msg
+
+
+def test_chat_agent_path_persists_tool_trace(drive_client, fake_drive):
+    """Force the heavy/agent path via a tool call and confirm the persisted
+    assistant record's `trace` field reflects the graph's final tool_log."""
+    conv_id = "conv-agent-1"
+    call_count = {"n": 0}
+
+    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto"):
+        call_count["n"] += 1
+        if tool_choice == "none":
+            return {"role": "assistant", "content": "1. Use the calculator", "usage": {"total_tokens": 5}}
+        if call_count["n"] <= 2:
+            return {
+                "role": "assistant", "content": "", "usage": {"total_tokens": 5},
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": '{"expression": "2+2"}'}}],
+            }
+        return {"role": "assistant", "content": "the answer is 4", "tool_calls": None, "usage": {"total_tokens": 5}}
+
+    async def fake_stream(*args, **kwargs):
+        yield "the answer is 4"
+
+    with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "heavy", "needs_agent": True})):
+        with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+            with patch("app.core.normalize.chat_stream", side_effect=fake_stream):
+                with drive_client.stream(
+                    "POST", "/chat",
+                    json={"messages": [{"role": "user", "content": "please analyze this deeply"}], "conversation_id": conv_id},
+                ) as resp:
+                    assert resp.status_code == 200
+                    resp.read()
+
+    messages = conversations_drive.load_messages(fake_drive, conv_id)
+    assistant_msg = next(m for m in messages if m["role"] == "assistant")
+    assert "trace" in assistant_msg
+    tool_entries = [t for t in assistant_msg["trace"] if t["kind"] == "tool"]
+    assert len(tool_entries) >= 1
+    assert tool_entries[0]["name"] == "calculator"
+    assert tool_entries[0]["observation"] == "4"
+    assert tool_entries[0]["agent"] == "main"
+    assert "elapsed_ms" in tool_entries[0]

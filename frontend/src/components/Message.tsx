@@ -1,6 +1,8 @@
 import { useState, useRef, useLayoutEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Message } from '../types'
+import TraceView from './TraceView'
+import CitationChips from './CitationChips'
 
 interface Props {
   message: Message
@@ -19,7 +21,6 @@ export default function MessageBubble({ message, isStreaming }: Props) {
   const isUser = message.role === 'user'
   const [isExpanded, setIsExpanded] = useState(false)
   const [isLong, setIsLong] = useState(false)
-  const [isTraceOpen, setIsTraceOpen] = useState(true)
   const contentRef = useRef<HTMLDivElement>(null)
 
   // useLayoutEffect fires before paint — gives reliable scrollHeight; also resets when content shrinks
@@ -127,140 +128,21 @@ export default function MessageBubble({ message, isStreaming }: Props) {
           )}
         </div>
 
-        {/* Source chips (citations) — stay visible regardless of trace collapse state */}
         {!isUser && message.citations && message.citations.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1.5 px-2">
-            {message.citations
-              .filter((c) => /^https?:\/\//i.test(c.url)) // reject javascript:/data: etc. — citations
-              // ultimately carry attacker-influenced (fetched web page) content
-              .map((c, idx) => (
-                <a
-                  key={idx}
-                  href={c.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={c.url}
-                  className="inline-flex items-center px-2 py-0.5 rounded-full bg-theme-surface
-                             border border-theme-border/40 text-[10px] text-theme-text-muted
-                             font-medium leading-none hover:text-theme-text hover:border-theme-border
-                             transition-colors max-w-[220px] truncate"
-                >
-                  {c.title || c.url}
-                </a>
-              ))}
-          </div>
+          <CitationChips citations={message.citations} />
         )}
 
-        {/* Metadata + Agent Trace Panel */}
+        {/* Metadata row + agent trace (Phase A / A.8 — extracted to TraceView) */}
         {!isUser && (message.viaProvider || (message.trace && message.trace.length > 0)) && (
           <div className="mt-1.5 flex flex-col w-full px-2 relative z-10">
-            {/* Metadata Row */}
-            <div className="flex flex-wrap items-center justify-between gap-y-1 text-[10px] text-theme-text-muted font-medium select-none">
-              {/* Left: Provider badge */}
-              <div>
-                {message.viaProvider && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full
-                                   bg-theme-surface border border-theme-border/40
-                                   text-[10px] text-theme-text-muted font-medium leading-none">
-                    via {formatProviderName(message.viaProvider)}
-                  </span>
-                )}
-              </div>
-
-              {/* Right: Agent trace toggle */}
-              {message.trace && message.trace.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setIsTraceOpen(!isTraceOpen)}
-                  className="flex items-center gap-1 hover:text-theme-text transition-colors focus:outline-none cursor-pointer font-semibold"
-                >
-                  <span>Agent Execution ({message.trace.length} step{message.trace.length > 1 ? 's' : ''})</span>
-                  <svg
-                    className={`w-3 h-3 transform transition-transform ${isTraceOpen ? 'rotate-180' : ''}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-              )}
-            </div>
-
-            {/* Trace panel: smooth height collapse via grid-rows (no JS measurement needed) */}
-            {message.trace && message.trace.length > 0 && (
-              <div className={`mt-1.5 overflow-hidden transition-all duration-200 grid ${
-                isTraceOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-              }`}>
-                <div className="min-h-0">
-                  <div className="p-3 rounded-xl border border-theme-border/40 bg-theme-bg text-xs text-theme-text shadow-sm divide-y divide-theme-border/10 max-h-60 overflow-y-auto">
-                    {message.trace.map((event, idx) => {
-                      if (event.type === 'step') {
-                        return (
-                          <div key={idx} className="flex items-start gap-2 pt-2 first:pt-0">
-                            <span className="text-emerald-500 font-semibold mt-0.5 select-none">●</span>
-                            <div className="flex-1">
-                              <span className="font-semibold text-theme-text">{event.label}</span>
-                              {event.detail && (
-                                <span className="text-theme-text-muted block mt-0.5 bg-theme-surface/60 p-1.5 rounded font-mono text-[10px] whitespace-pre-wrap border border-theme-border/30">
-                                  {event.detail}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      }
-
-                      if (event.type === 'memory_hit') {
-                        return (
-                          <div key={idx} className="flex items-start gap-2 pt-2 italic">
-                            <span className="text-amber-500 font-bold mt-0.5 select-none">↩</span>
-                            <div className="flex-1 text-[11px] leading-relaxed text-theme-text-muted">
-                              <span className="font-medium text-theme-text not-italic">Memory Hit:</span> {event.summary}
-                              {event.scope === 'project' && (
-                                <span className="ml-1.5 not-italic rounded-full border border-theme-border px-1.5 py-0.5 text-[10px] font-medium text-theme-text-muted align-middle">
-                                  project{event.sourceConvId ? ` · from ${event.sourceConvId.slice(0, 8)}` : ''}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      }
-
-                      if (event.type === 'model_call') {
-                        return (
-                          <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text-muted">
-                            <span className="text-theme-text select-none">⚡</span>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-medium text-theme-text">Model Call:</span>
-                              <span className="px-1.5 py-0.5 rounded bg-theme-surface border border-theme-border/50 text-theme-text font-mono text-[10px]">
-                                {event.model}
-                              </span>
-                              <span className="text-[10px] text-theme-text-muted capitalize">({event.purpose})</span>
-                            </div>
-                          </div>
-                        )
-                      }
-
-                      if (event.type === 'provider_switch') {
-                        return (
-                          <div key={idx} className="flex items-center gap-2 pt-2 text-theme-text bg-theme-surface/40 p-1.5 rounded border border-theme-border/30">
-                            <span className="select-none text-theme-text-muted">⇄</span>
-                            <div>
-                              <span className="font-semibold">Provider Switch:</span>
-                              <span className="ml-1 font-mono text-[10px] text-theme-text-muted">
-                                {event.from} → {event.to}
-                              </span>
-                            </div>
-                          </div>
-                        )
-                      }
-                      return null
-                    })}
-                  </div>
-                </div>
-              </div>
+            {message.viaProvider && (
+              <span className="inline-flex items-center self-start px-1.5 py-0.5 rounded-full
+                               bg-theme-surface border border-theme-border/40
+                               text-[10px] text-theme-text-muted font-medium leading-none select-none">
+                via {formatProviderName(message.viaProvider)}
+              </span>
             )}
+            <TraceView trace={message.trace ?? []} isStreaming={isStreaming} />
           </div>
         )}
       </div>

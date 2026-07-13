@@ -108,3 +108,8 @@ AGENT_MAX_TOKENS = 24000
 # loop, sharing the parent's AGENT_MAX_TOKENS counter (one budget per request).
 SUBAGENT_MAX_ITERATIONS = 5
 
+# Trace persistence (A.8): cap on the number of trace entries kept on a
+# persisted assistant message (oldest dropped first) — bounds messages.jsonl
+# growth for a chat with a very long tool-log.
+TRACE_MAX_ENTRIES = 50
+
