@@ -112,9 +112,46 @@ re-verified against the as-built Phase M code on 2026-07-13.
   build-validator PASS (all plan criteria verified against the diff + a live
   `docker compose exec backend pytest` run; the A.3/A.4 tool-gating scope cut and the
   get_datetime user-local gap both explicitly called out as accepted, not silent).
-- [ ] **A.3 — Internet access: `web_search` + `fetch_url`**
-  BYOK Tavily/Brave search keys; `tools/web_search.py`, `tools/fetch_url.py` (SSRF guard,
-  `trafilatura` extraction); citation events + source chips.
+- [x] **A.3 — Internet access: `web_search` + `fetch_url`** ✓ (2026-07-13)
+  `key_store.VALID_PROVIDERS` gains `tavily`/`brave` (same AES-GCM BYOK storage as LLM
+  keys); `ApiKeysSection.tsx` gains a "Search (optional)" group with both rows.
+  `agent/tools/web_search.py`: Tavily `POST` (preferred) / Brave `GET` fallback,
+  `WEB_SEARCH_MAX_RESULTS=5`, numbered `title — url — snippet` observations.
+  `agent/tools/fetch_url.py`: `httpx` GET + `trafilatura` extraction, truncated to
+  `FETCH_MAX_CHARS=8000`. SSRF guard (`guard_url`): scheme allowlist (http/https),
+  hostname resolved via `asyncio` loop.getaddrinfo, rejects private/loopback/
+  link-local/reserved/multicast/unspecified ranges (`ipaddress` stdlib) — including an
+  IPv4-mapped-IPv6 unmap-and-recheck step (`::ffff:127.0.0.1`-style bypass, found by
+  code-reviewer's first pass and fixed) — BEFORE every request; redirects followed
+  manually (`follow_redirects=False`) with the guard re-applied on every hop, bounded
+  at `max_redirects=3`. `registry.py`: `fetch_url` always-on (safety is the guard, not
+  a key); `web_search` added only when a Tavily or Brave key is configured.
+  `events.py` gains `citation_event(url, title)` (not yet called — the execute loop
+  that would emit it is A.6, correctly out of scope this session). Frontend:
+  `client.ts` `onCitation` callback + dispatch; `ChatPage.tsx` appends de-duped
+  citations onto the assistant message; `Message.tsx` renders source chips
+  (favicon-less, `title` text, opens in new tab, filtered to `http(s)://` hrefs only —
+  a proactive fix for a citation-XSS-adjacent finding even though citations aren't
+  live yet). New `tests/test_agent_tools_search.py` (21 tests: provider-mocked
+  Tavily/Brave + preference order, key-missing → `TOOL_ERROR`/tool-absent, and a full
+  SSRF matrix — scheme, loopback literal, localhost hostname, `10.x`, `169.254.169.254`
+  metadata IP, DNS-failure, IPv4-mapped-IPv6 ×2, redirect-to-private, max-redirects).
+  One now-stale A.2 registry test loosened (hardcoded exact toolset → subset check,
+  since A.3 legitimately adds `fetch_url`/conditionally `web_search`). 286 backend
+  tests green (up from 265); `tsc --noEmit` + `npm run build` clean.
+  code-reviewer: PASS with 2 WARN fixed (IPv4-mapped-IPv6 SSRF bypass; citation `href`
+  scheme filter added proactively) + 2 NOTE deferred (synchronous `trafilatura.extract`
+  not offloaded to a thread — low priority until large pages are common; hardcoded
+  Tavily/Brave URLs — consistent with how provider URLs are handled elsewhere, not a
+  `data/registry` violation). **security-auditor (mandatory per plan) PASS** — 0
+  CRITICAL; explicit verdict on the DNS-rebinding TOCTOU (guard re-resolves the
+  hostname, httpx independently re-resolves it again at connect time — the plan
+  specifies hostname re-checking, not IP-pinning): accepted as a documented,
+  non-blocking residual given this is a personal BYOK tool, not multi-tenant infra —
+  revisit with IP-pinning if ever deployed against a network with sensitive internal
+  services. One NOTE (no raw-response byte cap before `trafilatura.extract`, only
+  post-extraction truncation — future hardening, non-blocking). build-validator PASS
+  (all plan criteria verified against the diff + live `pytest`/`tsc`/`vite build` runs).
 - [ ] **A.4 — `doc_search` (replaces whole-doc injection) [Phase M]**
   Upload path chunks + indexes into scoped RAG with `kind='document'`; `chat.py`'s
   whole-doc injection deleted; `tools/doc_search.py` / `tools/search_memory.py`.

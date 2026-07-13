@@ -68,4 +68,8 @@ MEMORY_TOP_K = 4
 # Per-tool-call wall-clock budget. A tool that exceeds this (or raises) never
 # crashes the graph — run_tool() converts it into a "TOOL_ERROR: ..." observation.
 TOOL_TIMEOUT_SECONDS = 20
+# web_search: cap on results returned to the model (keeps the observation small).
+WEB_SEARCH_MAX_RESULTS = 5
+# fetch_url: extracted page text is truncated to this many characters.
+FETCH_MAX_CHARS = 8000
 

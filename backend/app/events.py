@@ -57,3 +57,10 @@ def memory_hit_event(summary: str, scope: str = "", source_conv_id: str = "") ->
 def model_call_event(model: str, purpose: str) -> str:
     """An internal model call within the agent (draft, critique, etc.)."""
     return f"data: {json.dumps({'type': 'model_call', 'model': model, 'purpose': purpose})}\n\n"
+
+
+def citation_event(url: str, title: str) -> str:
+    """A source the agent actually used (web_search/fetch_url result, or a URL
+    present in the final answer). One per distinct URL — emitted by the
+    execute loop (A.6)."""
+    return f"data: {json.dumps({'type': 'citation', 'url': url, 'title': title})}\n\n"

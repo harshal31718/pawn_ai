@@ -20,6 +20,14 @@ const PROVIDERS: { id: string; label: string; hint: string }[] = [
   { id: 'openrouter',  label: 'OpenRouter',      hint: 'openrouter.ai/keys' },
 ]
 
+// Web search providers (agent's web_search tool, Phase A / A.3). Optional —
+// without either, web_search is simply absent from the agent's toolset.
+// Preference order when both are configured: Tavily, then Brave.
+const SEARCH_PROVIDERS: { id: string; label: string; hint: string }[] = [
+  { id: 'tavily', label: 'Tavily',       hint: 'app.tavily.com — free tier available' },
+  { id: 'brave',  label: 'Brave Search', hint: 'brave.com/search/api' },
+]
+
 function ProviderRow({
   id,
   label,
@@ -348,6 +356,54 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
           )
         })}
 
+      </div>
+
+      <div>
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-1">Search (optional)</h2>
+        <p className="text-[10px] text-theme-text-muted leading-relaxed">
+          Lets the assistant search the web for current information. Without one of these,
+          it answers from its own knowledge only — no error, no degraded chat.
+        </p>
+      </div>
+
+      <div className="bg-theme-surface border border-theme-border/50 rounded-xl divide-y divide-theme-border/30">
+        {SEARCH_PROVIDERS.map(({ id, label, hint }) => {
+          const isSet = configured.includes(id)
+          return (
+            <ProviderRow
+              key={id}
+              id={id}
+              label={label}
+              hint={hint}
+              isConfigured={isSet}
+              isBusy={busy === id}
+              activeHint={activeHint}
+              onToggleHint={toggleHint}
+              onRemove={() => handleDelete(id)}
+              error={errors[id]}
+            >
+              <div className="flex items-center gap-2 w-full">
+                <input
+                  type="password"
+                  value={drafts[id] || ''}
+                  onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
+                  placeholder={isSet ? 'New key' : 'Paste key'}
+                  autoComplete="off"
+                  className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleSave(id)}
+                  disabled={!(drafts[id] || '').trim() || busy === id}
+                  className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+                >
+                  {busy === id ? '…' : 'Save'}
+                </button>
+              </div>
+            </ProviderRow>
+          )
+        })}
       </div>
     </section>
   )

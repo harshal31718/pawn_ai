@@ -311,6 +311,7 @@ export interface StreamChatCallbacks {
   onMemoryHit?: (summary: string, scope?: string, sourceConvId?: string) => void
   onModelCall?: (model: string, purpose: string) => void
   onProviderSwitch?: (from: string, to: string) => void
+  onCitation?: (url: string, title: string) => void
 }
 
 export async function streamChat(
@@ -321,7 +322,7 @@ export async function streamChat(
   conversationId?: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { onToken, onDone, onError, onRateLimit, onStep, onMemoryHit, onModelCall, onProviderSwitch } =
+  const { onToken, onDone, onError, onRateLimit, onStep, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
     callbacks
 
   let res: Response
@@ -411,6 +412,9 @@ export async function streamChat(
             break
           case 'provider_switch':
             onProviderSwitch?.(String(event.from ?? ''), String(event.to ?? ''))
+            break
+          case 'citation':
+            onCitation?.(String(event.url ?? ''), String(event.title ?? ''))
             break
           default:
             break

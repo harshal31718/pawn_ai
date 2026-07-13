@@ -12,11 +12,17 @@ export interface TraceEvent {
   timestamp: string
 }
 
+export interface Citation {
+  url: string
+  title: string
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'notice'
   content: string
   trace?: TraceEvent[]
+  citations?: Citation[]
   viaProvider?: string
 }
 

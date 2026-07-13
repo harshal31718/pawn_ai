@@ -26,6 +26,10 @@ VALID_PROVIDERS = {
     "huggingface",
     "github",
     "openrouter",
+    # Web search (agent tools, Phase A / A.3) — not LLM providers, same BYOK
+    # storage/UX. Preference order when both are configured: tavily, then brave.
+    "tavily",
+    "brave",
 }
 
 # Short-lived in-memory cache of decrypted keys. resolver.pick() calls get_key()

@@ -281,6 +281,16 @@ export default function ChatPage() {
             ),
           )
         },
+        onCitation: (url, title) => {
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const existing = m.citations || []
+              if (existing.some((c) => c.url === url)) return m // de-dup by URL
+              return { ...m, citations: [...existing, { url, title }] }
+            }),
+          )
+        },
         onProviderSwitch: (from, to) => {
           const noticeMsg: Message = {
             id: mid(),

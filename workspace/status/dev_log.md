@@ -111,6 +111,79 @@ citations).
 
 ---
 
+### [2026-07-13] — Phase A / A.3: internet access, with the mandatory security audit
+
+BYOK: `key_store.VALID_PROVIDERS` gains `tavily`/`brave` (same AES-GCM storage as LLM
+provider keys — no new storage mechanism needed). `ApiKeysSection.tsx` gets a
+"Search (optional)" group, same `ProviderRow` UX as the LLM key rows.
+
+`agent/tools/web_search.py`: Tavily `POST` preferred, Brave `GET` fallback,
+`WEB_SEARCH_MAX_RESULTS=5`, numbered `title — url — snippet` observations. No key →
+absent from the toolset, no error surfaced (per the locked decision).
+
+`agent/tools/fetch_url.py`: the security-relevant piece of this step. `guard_url()`
+implements the plan's exact spec — scheme allowlist (http/https only), hostname
+resolved via `asyncio`'s `loop.getaddrinfo` (not blocking `socket.getaddrinfo`
+directly), every resolved IP checked against private/loopback/link-local/reserved/
+multicast/unspecified ranges via the `ipaddress` stdlib, called before every request
+including each redirect hop (`follow_redirects=False`, manual redirect loop,
+`max_redirects=3`). `trafilatura.extract` for readable-text extraction, truncated to
+`FETCH_MAX_CHARS=8000`.
+
+**Two real gaps found by code review, both fixed before the security audit:**
+1. IPv4-mapped IPv6 addresses (`::ffff:127.0.0.1`, `::ffff:169.254.169.254`) are a
+   known SSRF-filter bypass — Python's `IPv6Address.is_private`/`is_loopback` don't
+   inspect the embedded IPv4 payload. Fixed: `_is_blocked_ip` now unmaps and
+   re-checks. Two regression tests added.
+2. Forward-looking: citation chips (`Message.tsx`) rendered `href={c.url}` with no
+   scheme validation. Citations aren't live yet (nothing calls `citation_event` until
+   A.6), so this was flagged as "not yet reachable, fix before A.6 wires it up" —
+   fixed proactively anyway since it was cheap: hrefs are now filtered to
+   `^https?:\/\//i` before rendering.
+
+**Mandatory security-auditor pass** (per the plan, this step touches new outbound
+HTTP from user-influenced URLs) returned PASS, 0 CRITICAL, with an explicit verdict
+on the one accepted residual: a TOCTOU/DNS-rebinding gap where `guard_url`'s hostname
+resolution and httpx's own connection-time resolution are two independent DNS
+lookups a few milliseconds apart — a malicious/compromised DNS server could in
+principle answer differently between them. The plan's literal spec is hostname-based
+re-checking (not IP-pinning the connection), so this is a designed limitation, not an
+oversight; the auditor judged it non-blocking for a personal BYOK chat tool, with an
+explicit note to revisit via IP-pinning if this tool set is ever pointed at a
+deployment with sensitive internal services reachable from the backend's network.
+One informational NOTE also recorded (no raw-response byte cap before extraction —
+truncation currently happens post-extraction, not on the wire — future hardening,
+non-blocking, not fixed this pass).
+
+`events.py` gains `citation_event(url, title)` — pure plumbing, no caller yet (the
+execute loop that would call it is A.6, out of scope this session, same incremental
+pattern as A.1/A.2). Frontend: `client.ts` `onCitation`, `ChatPage.tsx` appends
+de-duped-by-URL citations onto the assistant message, `Message.tsx` renders source
+chips that stay visible independent of the trace-collapse toggle (get ahead of A.8's
+"citations stay visible when collapsed" requirement now, rather than reworking it
+later).
+
+New `tests/test_agent_tools_search.py` (21 tests): registry gating (fetch_url
+always-on, web_search key-gated), web_search provider-mocked (Tavily-preferred,
+Brave-fallback, no-key TOOL_ERROR), and a full SSRF matrix (non-http scheme, loopback
+literal, localhost hostname, `10.x`, the `169.254.169.254` cloud-metadata IP,
+DNS-resolution-failure, both IPv4-mapped-IPv6 cases, redirect-to-private on the
+second hop, max-redirects exceeded). One now-stale A.2 test loosened (it hardcoded
+the exact toolset as exactly `{calculator, get_datetime}`, which A.3 legitimately
+changes). 286 backend tests green (up from 265); `tsc --noEmit` + `npm run build`
+clean.
+
+**Aside, not a code issue:** the backend Docker image rebuild for this step took
+much longer than A.1/A.2's (~25+ min vs. seconds) — adding `trafilatura` to
+`requirements.txt` invalidated the single-layer `pip install` Docker cache, forcing
+every dependency (numpy, langgraph, google-api libs, etc.) to re-download from
+scratch over an unusually slow connection this session (~50-70 KB/s). Not a bug,
+just a heads-up for future steps that touch `requirements.txt`.
+
+Next: A.4 (`doc_search` replaces whole-doc injection) **[Phase M]**.
+
+---
+
 ### [2026-07-13] — Phase M complete: embedding fix + M.6 (projects UI) + M.7 (automatable parts)
 
 Closing out Phase M (`plan_memory_scoping.md`) this session. Picked up mid-M.6 after
