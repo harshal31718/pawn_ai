@@ -14,7 +14,7 @@ from app.core.drive_factory import call_drive, require_drive_for_user
 from app.storage import documents_drive
 from app.storage import conversations_drive
 from app.memory.summarize import summarize_conversation_task
-from app.memory.indexer import index_turn_task
+from app.memory.indexer import index_turn_task, resolve_scope
 
 router = APIRouter()
 
@@ -180,7 +180,21 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         )
         messages_to_send = [{"role": "system", "content": system_content}] + messages_to_send
 
-    # 3. Build inputs and config for LangGraph Agent
+    # 3. Resolve this chat's current scope (Phase M) once per request, so the
+    # agent's search_memory action queries the right RAG scope. Stateless
+    # chats (no conversation_id) get scope_type/scope_id = None -- the agent
+    # never queries memory for them.
+    scope_type = None
+    scope_id = None
+    if req.conversation_id:
+        try:
+            scope = await run_in_threadpool(resolve_scope, user_id, req.conversation_id, drive)
+        except NotConfiguredError:
+            scope = None
+        if scope:
+            scope_type, scope_id = scope
+
+    # 4. Build inputs and config for LangGraph Agent
     inputs = {
         "conversation_id": req.conversation_id or "stateless",
         "user_id": user_id,
@@ -190,7 +204,9 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "next_action": None,
         "final_answer": None,
         "user_model_id": model_id,
-        "step_count": 0
+        "step_count": 0,
+        "scope_type": scope_type,
+        "scope_id": scope_id,
     }
     
     thread_id = f"{user_id}:{req.conversation_id}" if req.conversation_id else f"{user_id}:stateless"
@@ -214,7 +230,9 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                     elif name == "step":
                         yield events.step_event(data.get("label", ""), data.get("detail", ""))
                     elif name == "memory_hit":
-                        yield events.memory_hit_event(data.get("summary", ""))
+                        yield events.memory_hit_event(
+                            data.get("summary", ""), data.get("scope", ""), data.get("source_conv_id", "")
+                        )
                     elif name == "model_call":
                         yield events.model_call_event(data.get("model", ""), data.get("purpose", ""))
                     elif name == "provider_switch":

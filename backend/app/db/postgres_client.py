@@ -27,7 +27,7 @@ def _connect() -> psycopg.Connection:
         raise RuntimeError("POSTGRES_DSN must be configured")
     conn = psycopg.connect(POSTGRES_DSN, row_factory=dict_row)
     # Lets a Python list be passed straight as a `vector(N)` column/param
-    # (memory_chunks.embedding, match_memory_chunks' query_embedding).
+    # (memory_chunks.embedding, match_scoped_chunks' query_embedding).
     register_vector(conn)
     return conn
 

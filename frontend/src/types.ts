@@ -3,6 +3,8 @@ export interface TraceEvent {
   label?: string
   detail?: string
   summary?: string
+  scope?: 'chat' | 'project'
+  sourceConvId?: string
   model?: string
   purpose?: string
   from?: string

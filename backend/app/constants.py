@@ -61,4 +61,6 @@ MEMORY_CHUNK_OVERLAP_TOKENS = 50
 # How long an in-process resolve_scope() result is trusted before re-walking
 # Drive folder placement (explicitly evicted on a chat move — see M.5).
 SCOPE_CACHE_TTL_SECONDS = 300
+# Default number of memory chunks retrieve() returns per query.
+MEMORY_TOP_K = 4
 

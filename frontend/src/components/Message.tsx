@@ -193,6 +193,11 @@ export default function MessageBubble({ message, isStreaming }: Props) {
                             <span className="text-amber-500 font-bold mt-0.5 select-none">↩</span>
                             <div className="flex-1 text-[11px] leading-relaxed text-theme-text-muted">
                               <span className="font-medium text-theme-text not-italic">Memory Hit:</span> {event.summary}
+                              {event.scope === 'project' && (
+                                <span className="ml-1.5 not-italic rounded-full border border-theme-border px-1.5 py-0.5 text-[10px] font-medium text-theme-text-muted align-middle">
+                                  project{event.sourceConvId ? ` · from ${event.sourceConvId.slice(0, 8)}` : ''}
+                                </span>
+                              )}
                             </div>
                           </div>
                         )

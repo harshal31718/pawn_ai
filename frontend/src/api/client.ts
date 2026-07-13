@@ -308,7 +308,7 @@ export interface StreamChatCallbacks {
   onError: (message: string) => void
   onRateLimit?: (retryAfterSeconds: number) => void
   onStep?: (label: string, detail: string) => void
-  onMemoryHit?: (summary: string) => void
+  onMemoryHit?: (summary: string, scope?: string, sourceConvId?: string) => void
   onModelCall?: (model: string, purpose: string) => void
   onProviderSwitch?: (from: string, to: string) => void
 }
@@ -400,7 +400,11 @@ export async function streamChat(
             onStep?.(String(event.label ?? ''), String(event.detail ?? ''))
             break
           case 'memory_hit':
-            onMemoryHit?.(String(event.summary ?? ''))
+            onMemoryHit?.(
+              String(event.summary ?? ''),
+              event.scope ? String(event.scope) : undefined,
+              event.source_conv_id ? String(event.source_conv_id) : undefined,
+            )
             break
           case 'model_call':
             onModelCall?.(String(event.model ?? ''), String(event.purpose ?? ''))

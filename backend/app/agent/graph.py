@@ -38,6 +38,11 @@ class AgentState(TypedDict):
     final_answer: Optional[str]
     user_model_id: str
     step_count: int
+    # Phase M (memory scoping): resolved once per request in chat.py via
+    # memory.indexer.resolve_scope. None for stateless chats (no
+    # conversation_id) -- search_memory_node returns [] without querying.
+    scope_type: Optional[str]
+    scope_id: Optional[str]
 
 def build_agent_prompt(
     history: List[Dict[str, Any]],
@@ -82,7 +87,9 @@ You must respond with exactly ONE valid JSON action object wrapped in your messa
 
 ## Available Actions
 Choose exactly one of the following actions to proceed:
-1. search_memory: Look up past conversation summaries/memories.
+1. search_memory: Look up this chat's (or, inside a project, this project's) own indexed
+   history when the conversation history and summary above aren't enough to answer —
+   not a per-turn habit, only reach for this when you're actually missing something.
    JSON Format: {{ "action": "search_memory", "query": "<what to search for>" }}
    
 2. ask_model: Delegate a subtask (e.g. draft, critique, research) to a model.
@@ -137,27 +144,11 @@ Based on the research and drafts above, write a comprehensive, final answer to t
 # Graph Nodes
 
 async def load_context_node(state: AgentState) -> dict:
-    from app.memory.retrieve import retrieve
-    
-    query = ""
-    if state["history"]:
-        query = state["history"][-1]["content"]
-        
-    hits = []
-    if query:
-        hits = await retrieve(
-            query,
-            user_id=state.get("user_id"),
-            active_conv_id=state["conversation_id"],
-            top_k=3,
-        )
-
-    for hit in hits:
-        await adispatch_custom_event("memory_hit", {"summary": hit["text"]})
-
-    return {
-        "retrieved_memory": [h["text"] for h in hits]
-    }
+    """Phase M (memory scoping): no longer always-retrieves at graph start.
+    The rolling summary (already folded into `history` by chat.py) remains
+    the always-present context; `retrieved_memory` starts empty and is only
+    populated by search_memory_node, on the agent's own decision to search."""
+    return {}
 
 async def agent_node(
     state: AgentState,
@@ -225,17 +216,25 @@ async def agent_node(
 async def search_memory_node(state: AgentState) -> dict:
     query = state["next_action"]["query"]
     await adispatch_custom_event("step", {"label": "Searching memory", "detail": query})
-    
-    from app.memory.retrieve import retrieve
-    hits = await retrieve(
-        query,
-        user_id=state.get("user_id"),
-        active_conv_id=state["conversation_id"],
-        top_k=3,
-    )
+
+    scope_type = state.get("scope_type")
+    scope_id = state.get("scope_id")
+
+    hits = []
+    if scope_type and scope_id:
+        from app.memory.retrieve import retrieve
+        hits = await retrieve(
+            query,
+            user_id=state.get("user_id"),
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
 
     for hit in hits:
-        await adispatch_custom_event("memory_hit", {"summary": hit["text"]})
+        await adispatch_custom_event(
+            "memory_hit",
+            {"summary": hit["text"], "scope": scope_type, "source_conv_id": hit.get("conv_id", "")},
+        )
 
     result = "\n".join(h["text"] for h in hits) if hits else "No relevant memory found."
     scratchpad = state["scratchpad"] + [{"action": "search_memory", "query": query, "result": result}]

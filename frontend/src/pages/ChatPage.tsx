@@ -224,7 +224,7 @@ export default function ChatPage() {
             ),
           )
         },
-        onMemoryHit: (summary) => {
+        onMemoryHit: (summary, scope, sourceConvId) => {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
@@ -235,6 +235,8 @@ export default function ChatPage() {
                     {
                       type: 'memory_hit',
                       summary,
+                      scope: scope as 'chat' | 'project' | undefined,
+                      sourceConvId,
                       timestamp: new Date().toLocaleTimeString(),
                     },
                   ],
