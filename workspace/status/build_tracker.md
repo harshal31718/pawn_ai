@@ -211,9 +211,43 @@ re-verified against the as-built Phase M code on 2026-07-13.
   step. No security-auditor run (no new outbound HTTP/secrets/auth surface; this
   step is pure Postgres/Drive plumbing reusing Phase M's existing security
   posture).
-- [ ] **A.5 — Model router**
-  New `core/router.py`: heuristic-first `classify()`, LLM fallback tier, `ROLE_LEVELS`,
-  user model-pick override for the final answer.
+- [x] **A.5 — Model router** ✓ (2026-07-13)
+  New `core/router.py`: `classify(messages, has_doc, has_tools_likely, resolver=None,
+  rate_limiter=None, user_id=None, has_search_key=False) -> RouteDecision`
+  (`{difficulty, needs_agent}`). Heuristic tier exact per plan: heavy if text length
+  > `ROUTER_HEAVY_CHAR_THRESHOLD=1500`, a fenced code block, any of the 8-keyword
+  heavy set (word-boundary, case-insensitive), a doc attached, or the prior turn used
+  tools; light if length < `ROUTER_LIGHT_CHAR_THRESHOLD=200` AND none of the above;
+  the ambiguous band between the two defers to the LLM fallback tier (one
+  `chat_complete` call on the `ROLE_LEVELS["orchestrator"]`="fast" level, fixed
+  single-token light/heavy prompt, ANY failure — model-pick error, upstream error,
+  unparseable response — defaults `heavy`/`needs_agent=True`, now logged to stderr
+  before defaulting). `needs_agent` = heavy, OR a URL is present, OR (search key
+  configured AND a time-sensitive keyword matches). `ROLE_LEVELS` dict added to
+  `constants.py` verbatim per the plan (8 entries). New `resolve_final_model(
+  difficulty, user_model_id, resolver, user_id=None)` helper (not literally named in
+  the plan's `classify()` signature, but required to satisfy the plan's own "user
+  override respected" test requirement — returns the user's explicit model pick
+  verbatim when given, bypassing the resolver entirely; otherwise resolves
+  `ROLE_LEVELS['final_heavy'/'final_light']`). `classify()`'s 4 extra params beyond
+  the plan's literal 3-arg signature are the resolver/rate_limiter/user_id/
+  has_search_key the LLM fallback tier actually needs to function — both design
+  choices explicitly assessed as reasonable interpretations (not deviations) by
+  code-reviewer. Self-contained this session — NOT wired into `agent/graph.py` yet
+  (that's A.6, out of scope). New `tests/test_router.py` (29 tests: every heavy
+  trigger individually incl. a word-boundary-not-substring negative case for "why",
+  light path, all 3 `needs_agent` triggers, fallback-not-invoked when the heuristic
+  tier decides either way, fallback invoked only for the ambiguous band, response
+  parsing (light/heavy), parse-failure/model-exception/no-resolver all default
+  heavy, exact `ROLE_LEVELS` match, `resolve_final_model` override/fallback/
+  per-difficulty-level tests). 333 backend tests green (up from 304) via
+  `docker compose exec backend pytest`. code-reviewer PASS (0 CRITICAL/WARN; several
+  NOTEs — swallowed-exception-with-no-logging fixed; keyword-list micro-optimization
+  and the two added-helper design calls left as accepted NOTEs). build-validator
+  PASS (every plan-specified trigger/threshold/keyword-set/ROLE_LEVELS-entry
+  verified against the diff line-by-line, live `pytest` run confirmed 333 green).
+  No security-auditor run (pure classification logic, no secrets/auth/outbound-HTTP
+  surface beyond the same `chat_complete` path A.1 already covers).
 - [ ] **A.6 — Orchestrator: graph v2**
   `agent/graph.py` rebuilt: `classify` → `direct_answer` | `plan` → `execute` (tool
   loop, budgeted) → `final`. Old ReAct nodes/parser deleted.

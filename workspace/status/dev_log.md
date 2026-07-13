@@ -305,6 +305,71 @@ classifier, `ROLE_LEVELS`).
 
 ---
 
+### [2026-07-13] — Phase A / A.5: model router (last step this session, A.1-A.5 done)
+
+New `core/router.py`, self-contained (deliberately not wired into
+`agent/graph.py` yet — that's A.6). `classify()` implements the plan's
+heuristic tier exactly: an OR of 5 heavy triggers (char threshold, code
+fence, an 8-keyword set matched with `\b` word-boundary regex so "why"
+doesn't false-positive inside "whystuff", a doc attached, the prior turn
+used tools), falling to light only when the text is under the light
+threshold AND none of those fired, and to a genuinely ambiguous middle band
+otherwise. `needs_agent` layers on top: heavy OR a URL is present OR (a
+search key is configured AND the message matches a time-sensitive keyword
+set) — the last one deliberately gated on having an actual search key,
+since flagging "needs_agent" for a tool that doesn't exist would be useless.
+
+The LLM fallback tier only fires for that ambiguous middle band. One
+`chat_complete` call on the `fast` capability level, a fixed prompt asking
+for exactly one word. Per the plan's explicit "fail toward capability, not
+away" instruction, any failure anywhere in this tier — no model available,
+an upstream error, an unparseable response — defaults to `heavy`/
+`needs_agent=True` rather than guessing light and risking an under-powered
+answer. code-reviewer's one real finding: this fallback swallowed its
+exception with no logging, which would make a broken fast-tier model
+silently invisible in production (always "successfully" defaulting to
+heavy with no signal anything was wrong). Fixed: logs to stderr before
+returning the default.
+
+Two small implementation calls, both explicitly reviewed and accepted as
+reasonable rather than deviations: (1) `classify()`'s real signature has 4
+more params than the plan's literal 3-arg text (`resolver`, `rate_limiter`,
+`user_id`, `has_search_key`) — the LLM fallback tier cannot make a model
+call without a resolver, so this is structurally necessary, not scope
+creep; (2) added a `resolve_final_model(difficulty, user_model_id, resolver)`
+helper not literally named in the plan, specifically because the plan's own
+test list requires "user override respected" as a testable behavior, and
+`classify()` itself has no natural place to thread a `user_model_id`
+through without conflating its `RouteDecision` return shape with final-model
+resolution (an A.6/graph concern). Returns the user's explicit pick verbatim
+when given, bypassing the resolver entirely; otherwise resolves
+`ROLE_LEVELS['final_heavy'/'final_light']`.
+
+New `tests/test_router.py` (29 tests) covers every heavy trigger
+individually (including the word-boundary negative case), the light path,
+all three `needs_agent` triggers, fallback-not-invoked when the heuristic
+tier already decided (both directions), fallback-invoked only for the
+ambiguous band, response parsing, all three failure-defaults-heavy paths
+(parse failure, model exception, no resolver passed at all), an exact
+`ROLE_LEVELS` dict match, and the `resolve_final_model` override/fallback
+behavior. 333 backend tests green (up from 304).
+
+code-reviewer PASS (0 CRITICAL/WARN; the logging fix above plus a couple of
+non-blocking NOTEs — keyword-list micro-optimization, no explicit prompt
+truncation before the ambiguous-band text reaches the fallback model, both
+judged not worth acting on given the 1500-char heavy threshold already
+bounds the input). build-validator PASS, verified every trigger/threshold/
+keyword/ROLE_LEVELS-entry against the diff line-by-line plus a live
+`pytest` run. No security-auditor run (pure classification logic, same
+`chat_complete` path A.1 already covers, no new secrets/auth surface).
+
+**Phase A status at end of session: A.1-A.5 all done and committed.** A.6
+(orchestrator graph v2 — the full LangGraph rewrite consuming everything
+A.1-A.5 built) is the next, largest, and riskiest remaining step per the
+plan's own risk section.
+
+---
+
 ### [2026-07-13] — Phase M complete: embedding fix + M.6 (projects UI) + M.7 (automatable parts)
 
 Closing out Phase M (`plan_memory_scoping.md`) this session. Picked up mid-M.6 after

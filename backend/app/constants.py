@@ -73,3 +73,26 @@ WEB_SEARCH_MAX_RESULTS = 5
 # fetch_url: extracted page text is truncated to this many characters.
 FETCH_MAX_CHARS = 8000
 
+# Model router (A.5): heuristic-tier thresholds on total user-message text
+# length. Above HEAVY -> always heavy; below LIGHT (and no other heavy
+# trigger fired) -> light; the band between the two defers to the LLM
+# fallback tier.
+ROUTER_HEAVY_CHAR_THRESHOLD = 1500
+ROUTER_LIGHT_CHAR_THRESHOLD = 200
+
+# Per-role capability level, resolved through
+# resolver.pick_model_by_capability(level, require_tools=...). The user's
+# explicit model pick (ModelSwitcher) always wins for the final answer
+# regardless of this table; every internal call (orchestrator, subagents,
+# summarizer, titler) goes through it.
+ROLE_LEVELS = {
+    "orchestrator": "fast",
+    "final_light": "fast",
+    "final_heavy": "research",
+    "summarizer": "fast",
+    "titler": "fast",
+    "subagent_researcher": "fast",
+    "subagent_coder": "research",
+    "subagent_summarizer": "fast",
+}
+
