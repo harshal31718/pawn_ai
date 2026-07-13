@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { CachedConversation, CachedProject } from '../types'
 import ProjectRow from './ProjectRow'
+import NewProjectRow from './NewProjectRow'
 import { FolderPlusIcon } from './icons'
 
 interface Props {
@@ -9,7 +10,7 @@ interface Props {
   activeId: string | null
   pendingIds?: Set<string>
   onSelectChat: (id: string) => void
-  onCreateProject: () => void
+  onCreateProject: (name: string) => void
   onNewChatInProject: (projectId: string) => void
   onRenameProject: (id: string, name: string) => void
   onRequestDeleteProject: (project: CachedProject, chats: CachedConversation[]) => void
@@ -19,8 +20,8 @@ interface Props {
 }
 
 /** Collapsible "Projects" block above the flat chat list, one expandable
- *  ProjectRow per project. Split out of Sidebar.tsx per
- *  .claude/rules/frontend.md (components over ~150 lines get split). */
+ *  ProjectRow per project plus a trailing NewProjectRow. Split out of
+ *  Sidebar.tsx per .claude/rules/frontend.md (components over ~150 lines get split). */
 export default function ProjectSection({
   projects,
   conversations,
@@ -37,8 +38,7 @@ export default function ProjectSection({
 }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-
-  if (projects.length === 0) return null
+  const [isCreating, setIsCreating] = useState(false)
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -47,6 +47,11 @@ export default function ProjectSection({
       else next.add(id)
       return next
     })
+  }
+
+  function handleCreate(name: string) {
+    onCreateProject(name)
+    setIsCreating(false)
   }
 
   return (
@@ -61,7 +66,10 @@ export default function ProjectSection({
         </button>
         <button
           type="button"
-          onClick={onCreateProject}
+          onClick={() => {
+            setCollapsed(false)
+            setIsCreating(true)
+          }}
           className="p-1 rounded hover:bg-theme-surface-hover text-theme-text-muted hover:text-theme-text transition-all active:scale-95 cursor-pointer"
           title="New project"
         >
@@ -88,9 +96,15 @@ export default function ProjectSection({
               onRebuildMemory={onRebuildMemory}
             />
           ))}
+          <NewProjectRow
+            isCreating={isCreating}
+            onStartCreate={() => setIsCreating(true)}
+            onCreate={handleCreate}
+            onCancel={() => setIsCreating(false)}
+          />
         </div>
       )}
-      <div className="mt-1 border-b border-theme-border/40" />
+      <div className="mt-1 pt-1 border-t border-theme-border/40" />
     </div>
   )
 }

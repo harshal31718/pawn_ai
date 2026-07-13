@@ -5,7 +5,7 @@ import { clearMemory, rebuildMemory } from '../api/client'
 import ConfirmDialog from './ConfirmDialog'
 import KebabMenu from './KebabMenu'
 import ProjectSection from './ProjectSection'
-import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon } from './icons'
+import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, FolderIcon } from './icons'
 
 interface Props {
   conversations: CachedConversation[]
@@ -17,7 +17,7 @@ interface Props {
   onCreate: (targetProjectId?: string) => string
   onDelete: (id: string) => void
   onRename: (id: string, newTitle: string) => void
-  onCreateProject: () => void
+  onCreateProject: (name: string) => void
   onRenameProject: (id: string, name: string) => void
   onDeleteProject: (id: string) => void
   onMoveChatToProject: (convId: string, projectId: string) => void
@@ -273,6 +273,13 @@ export default function Sidebar({
               onRebuildMemory={handleRebuildMemory}
             />
 
+            {/* Chats section header — mirrors Projects' muted label styling */}
+            <div className="px-3 pt-1 pb-1 shrink-0">
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted select-none">
+                Chats
+              </span>
+            </div>
+
             {/* Search Option */}
             <div className="px-3 pb-2 shrink-0">
               <div className="relative flex items-center">
@@ -490,7 +497,22 @@ export default function Sidebar({
                 <PencilIcon className="w-4.5 h-4.5" />
               </button>
 
-              {/* 3. Image Lab Button (Milestone A.0 — throwaway) */}
+              {/* 3. Projects Button — expands sidebar with Projects section visible */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpen()
+                }}
+                className="
+                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
+                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
+                "
+                title="Projects"
+              >
+                <FolderIcon className="w-4.5 h-4.5" />
+              </button>
+
+              {/* 4. Image Lab Button (Milestone A.0 — throwaway) */}
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -505,7 +527,7 @@ export default function Sidebar({
                 <BeakerIcon className="w-4.5 h-4.5" />
               </button>
 
-              {/* 4. Search Chat Option */}
+              {/* 5. Search Chat Option */}
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -521,7 +543,7 @@ export default function Sidebar({
               </button>
             </div>
  
-            {/* 5. Bottom Settings & Profile Avatar */}
+            {/* 6. Bottom Settings & Profile Avatar */}
             <div className="w-full flex flex-col items-center gap-3.5 border-t border-theme-border/40 pt-4 pb-1 px-1 shrink-0">
               {/* Settings Button */}
               <button

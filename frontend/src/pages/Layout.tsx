@@ -24,7 +24,7 @@ export default function Layout() {
         onCreate={store.createConversation}
         onDelete={store.deleteConversation}
         onRename={store.renameConversation}
-        onCreateProject={() => store.createProject()}
+        onCreateProject={(name) => store.createProject(name)}
         onRenameProject={store.renameProject}
         onDeleteProject={store.deleteProject}
         onMoveChatToProject={store.moveChatToProject}

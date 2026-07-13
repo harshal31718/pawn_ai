@@ -6,7 +6,44 @@ This becomes your interview script and project history.
 
 ---
 
-### [2026-07-13] — Phase A starts: A.1 native tool calling in the provider layer
+### [2026-07-13] — Sidebar polish: prominent project creation + Projects/Chats separation
+
+Small UI-only follow-up to Phase M (no plan change). Two problems: creating a
+project only worked via the small header "+" icon and always landed with the
+placeholder name "New Project" (no way to type a name up front); and the
+Projects block and the flat Chats list had no visual separation beyond
+whitespace.
+
+`onCreateProject` changed from `() => void` to `(name: string) => void`
+end-to-end (`Layout.tsx` → `Sidebar.tsx` → `ProjectSection.tsx`) — the store's
+`createProject(name?)` already accepted a name, it just wasn't being passed.
+New `NewProjectRow.tsx` component: a "New project" row at the end of the
+projects list, sibling in style to the sidebar's "New chat" button; clicking
+it (or the existing header "+") opens an inline text input — Enter creates
+with the typed name (trimmed; empty submissions are discarded, no more
+placeholder-only creation), Esc/blur cancels. `ProjectSection.tsx` also lost
+its `if (projects.length === 0) return null` early return, since that made
+the "new project" affordance disappear entirely for a user with zero
+projects — the whole point of this pass was to make creation discoverable.
+
+Visual separation: added a "Chats" muted-label header in `Sidebar.tsx`
+(matching `ProjectSection`'s existing "Projects" label styling) directly
+above the search box, and changed `ProjectSection`'s trailing rule to a full
+`border-t` divider so it reads as a boundary between the two sections rather
+than decoration.
+
+Mini sidebar (collapsed `w-12`): there was no projects entry point at all —
+only Expand/New chat/Image Lab/Search. Added a `FolderIcon` button that opens
+the full sidebar (same as the other icons' `onOpen` pattern), landing on the
+Projects section already visible above the chat list.
+
+`tsc --noEmit` and `npm run build` both clean. Did not spin up the full
+Docker stack to click through it live — this is a scoped, low-risk styling/
+wiring change (no new state machines, no backend touch) and the existing
+create/rename/collapse interaction patterns it reuses were already
+exercised by Phase M's own testing.
+
+
 
 Registered Phase A (`plan_chat_agent_refinement.md`) in `build_tracker.md`
 (A.1–A.9, all `[ ]`). This session: A.1 only.
@@ -457,6 +494,85 @@ Demo: mocked-model test confirms "hello"-shaped input takes `direct_answer`
 with zero `step` events; the execute-loop tests prove the iteration cap,
 token-budget cap, and malformed/unknown tool_call cases all resolve to a
 `TOOL_ERROR` observation or a budget nudge, never a raised exception.
+
+---
+
+### [2026-07-13] — Phase A / A.7: preset subagents (researcher/summarizer/coder)
+
+New `agent/subagents.py` — exactly three presets in a `SUBAGENTS` dict, each
+exposed to the orchestrator as a `delegate_<name>(task: str)` tool via
+`delegate_tool_specs()`: `researcher` (tools: `fetch_url` always, `web_search`
+only when a Tavily/Brave key is configured — same gating rule as the main
+tool registry; level `subagent_researcher`), `summarizer` (no tools, level
+`subagent_summarizer`), `coder` (no tools, level `subagent_coder`, heavy).
+`run_subagent(name, task, ctx, tokens_used) -> dict` runs its own bounded
+tool loop (`SUBAGENT_MAX_ITERATIONS=5`), sharing the parent's single
+`AGENT_MAX_TOKENS` counter (threaded in/out, never double-counted or reset).
+**Strictly sequential, per the locked product decision:** `run_subagent` is
+`await`ed inline inside `execute_node`'s own tool-call loop — no
+`create_task`/`asyncio.gather`/`TaskGroup` anywhere in the new code, verified
+by grep as well as by code-reviewer/build-validator. `agent/graph.py`'s
+`execute_node` special-cases any tool_call name prefixed `delegate_`,
+routing it to `run_subagent` directly instead of the generic `run_tool`
+dispatch (a subagent's result needs to feed tokens_used/tool_log/citations
+back into the parent's state, not just return a plain string) — the
+subagent's own nested tool_log entries (tagged `agent: "<name>"`) merge
+into the parent's `tool_log` right after the `delegate_<name>` entry itself
+(tagged `agent: "main"`), and any citations it found propagate into the
+parent's deduped `citations` list.
+
+**Depth guard (max depth 1, structural):** subagents get no `delegate_*`
+tools in any preset's `tools_fn` — and, per a code-reviewer WARN, this is
+now also enforced as an explicit runtime rejection inside `run_subagent`'s
+own dispatch loop (`TOOL_ERROR: subagents cannot delegate further`), not
+just true-by-omission from today's preset configs.
+
+**Avoiding a graph↔subagents circular import:** `execute_node` needs to call
+into `subagents.py` to delegate, but `subagents.py`'s tool loop needs the
+same `to_oai_tool`/citation-extraction helpers `graph.py` already had as
+private functions. Pulled both into a new shared `agent/oai_tools.py` module
+that neither of the other two imports from each other, rather than
+duplicating the regex/logic in both places.
+
+**One NOTE from code-reviewer, fixed:** the "does this user have a
+tavily/brave key" check was duplicated verbatim in three places (the main
+tool registry, the new researcher subagent, and `classify_node`'s
+`has_search_key` computation) — factored into one `key_store.has_search_key
+(user_id)` helper, all three call sites updated to use it so a future
+change to the gating rule can't drift between them.
+
+New `tests/test_subagents.py` (15 tests): exactly-three-presets, the depth
+guard (both the structural omission check and the new runtime-rejection
+regression test), researcher toolset gating with/without a key, delegate
+tool spec shape, unknown-subagent → `TOOL_ERROR`, no-tool-calls path,
+shared-budget accumulation (100→145 across a parent call plus a subagent's
+own two calls), iteration cap, already-exhausted-parent-budget short-circuit,
+never-raises-on-upstream-failure, delegate-prefix constant consistency
+across `graph.py`/`subagents.py`, and full `execute_node` wiring (confirms
+the delegate call bypasses the generic tool dispatch, trace merges
+correctly, tokens accumulate 10+5+42=57 across parent+subagent calls).
+359 backend tests green (up from 344) via `docker compose exec backend
+pytest` after a rebuild. code-reviewer PASS (2 WARN fixed, both above);
+build-validator PASS (all 9 plan criteria verified against the diff,
+359/359 live pytest run). No security-auditor run (delegation reuses
+A.1-A.5's already-audited tool/search/SSRF surfaces; the only new logic is
+in-process orchestration, no new secrets/auth/outbound-HTTP surface).
+
+Demo (mocked): "research X and summarize" → main's first `chat_complete`
+returns a `delegate_researcher` tool_call → `run_subagent("researcher", ...)`
+runs its own loop (calls `fetch_url`, gets a page, concludes with a sourced
+digest) → the digest becomes the `tool` message content for main's second
+`chat_complete` call, which then produces the final answer with no further
+tool_calls. The parent's `tool_log` ends up
+`[{"name": "delegate_researcher", "agent": "main", ...}, {"name": "fetch_url",
+"agent": "researcher", ...}]` — exactly the nested shape A.8's `TraceView`
+will render.
+
+**Phase A status at end of session: A.1-A.7 all done and committed.** A.8
+(trace persistence + frontend TraceView) is next — the plan's own step
+order defers it after A.7 specifically so the persisted trace shape and the
+nested `agent` field it renders are already proven out by real graph runs,
+not designed speculatively.
 
 ---
 
