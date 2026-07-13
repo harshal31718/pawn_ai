@@ -11,6 +11,7 @@ class ModelEntry(BaseModel):
     capability_tags: List[str]
     context_window: int
     active: bool
+    supports_tools: bool = True
 
 class EndpointEntry(BaseModel):
     id: str

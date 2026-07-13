@@ -13,7 +13,8 @@
       "coding"
     ],
     "context_window": 1048576,
-    "active": true
+    "active": true,
+    "supports_tools": true
   },
   {
     "id": "gemini-2.5-flash-lite",
@@ -27,7 +28,8 @@
       "summarization"
     ],
     "context_window": 1048576,
-    "active": true
+    "active": true,
+    "supports_tools": true
   },
   {
     "id": "llama-3.3-70b",
@@ -42,7 +44,8 @@
       "general"
     ],
     "context_window": 128000,
-    "active": true
+    "active": true,
+    "supports_tools": true
   },
   {
     "id": "deepseek-r1",
@@ -58,7 +61,8 @@
       "coding"
     ],
     "context_window": 65536,
-    "active": true
+    "active": true,
+    "supports_tools": true
   },
   {
     "id": "gpt-oss-120b",
@@ -73,7 +77,8 @@
       "instruction-following"
     ],
     "context_window": 8192,
-    "active": true
+    "active": true,
+    "supports_tools": true
   },
   {
     "id": "qwen-3-32b",
@@ -88,7 +93,8 @@
       "reasoning"
     ],
     "context_window": 32768,
-    "active": false
+    "active": false,
+    "supports_tools": true
   },
   {
     "id": "glm-4.7",
@@ -102,7 +108,8 @@
       "instruction-following"
     ],
     "context_window": 8192,
-    "active": true
+    "active": true,
+    "supports_tools": true
   },
   {
     "id": "text-embedding-004",
@@ -113,7 +120,8 @@
     "capability_level": null,
     "capability_tags": [],
     "context_window": 2048,
-    "active": false
+    "active": false,
+    "supports_tools": true
   },
   {
     "id": "gemini-embedding-2",
@@ -124,6 +132,7 @@
     "capability_level": null,
     "capability_tags": [],
     "context_window": 8192,
-    "active": true
+    "active": true,
+    "supports_tools": true
   }
 ]

@@ -53,10 +53,32 @@ subagents (researcher/summarizer/coder, strictly sequential), and persists the f
 agent trace. Prescriptive plan — implement exactly as written; `[Phase M]` tags were
 re-verified against the as-built Phase M code on 2026-07-13.
 
-- [ ] **A.1 — Native tool calling in the provider layer**
-  `llm_core.py` `chat_complete()` (non-streaming, tool_calls); `normalize.py`
-  `chat_complete()` wrapper (resolver/failover/rate-limit, routes/agent import from
-  normalize only); registry `ModelEntry.supports_tools`; resolver `require_tools` filter.
+- [x] **A.1 — Native tool calling in the provider layer** ✓ (2026-07-13)
+  `llm_core.py` gains `chat_complete(url, model, messages, headers, tools=None,
+  tool_choice="auto") -> dict` (non-streaming, same provider detection/wire format as
+  `stream_llm`, which stays untouched; raises a clear `ProviderError` on a malformed
+  200 response instead of a raw `KeyError`). `normalize.py` gains `chat_complete(model_id,
+  messages, resolver, rate_limiter, user_id=None, tools=None) -> dict` wrapping it with
+  the same two-level failover as `chat_stream` (new `_complete_one_model` helper,
+  endpoint-level then cross-model via `fallback_models`); imported aliased as
+  `_chat_complete_llm` to avoid shadowing normalize's own `chat_complete`. Registry
+  `ModelEntry` gains `supports_tools: bool = True` (`schemas.py`); set on all entries in
+  `data/registry/models.json` and `app/registry/seed.py`'s `INITIAL_MODELS`.
+  `resolver.pick_model_by_capability` gains `require_tools: bool = False` filter.
+  New `tests/test_chat_complete.py` (8 tests: tool_calls parsing, no-tools passthrough,
+  malformed-response error, 429 handling, normalize success + cross-model 429 failover,
+  require_tools filter positive/negative). 235 backend tests green (up from 227) via
+  `docker compose exec backend pytest`. code-reviewer PASS (1 WARN fixed: malformed-
+  response `KeyError`/`IndexError` now wrapped in a clear `ProviderError`; 3 NOTEs
+  accepted as pre-existing patterns — broad `except Exception` mirrors `_stream_one_model`,
+  `supports_tools` on embedding entries is semantically inert but harmless, `seed.py`'s
+  `INITIAL_MODELS` has pre-existing drift from `data/registry/models.json` — both files
+  still got the field, drift itself out of scope). build-validator PASS (all 7 plan
+  criteria verified, confirmed `chat_stream`/`stream_llm` diff-clean, no route/agent
+  imports `llm_core` directly). No security-auditor run (pure plumbing, no
+  secrets/config/auth touched).
+  Demo: `test_llm_core_chat_complete_parses_tool_calls` — a mocked model response with
+  a `tool_calls` list round-trips through `chat_complete` into the parsed message dict. ✓
 - [ ] **A.2 — Tool layer**
   New `agent/tools/` package: `base.py` (`ToolSpec`/`ToolContext`), `registry.py`
   (`get_tools`), `execute.py` (`run_tool`, `TOOL_TIMEOUT_SECONDS=20`, errors/timeouts →

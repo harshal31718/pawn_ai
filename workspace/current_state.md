@@ -1,7 +1,9 @@
 # PAWN — Current State
 
 Last updated: 2026-07-13
-Active step: **Phase M — memory scoping is done (2026-07-13, all of M.1–M.7's coding + automated verification complete).** `workspace/plan/plan_memory_scoping.md` drops the always-cross-chat memory tier for strict per-chat/per-project isolation via a two-container model (standalone chats + projects). **Only outstanding item: M.7's live verification checklist** (plan §M.7 items 1-7 + a re-index check from the embedding-model swap below) needs a real Drive-linked stack and the user in the loop — see `build_tracker.md`'s M.7 entry for the exact pending list. **Next up: Phase A — Chat Agent Refinement** (`workspace/plan/plan_chat_agent_refinement.md`), which needs its own refinement pass first — its `[Phase M]` tags describe the *planned* design and must be re-verified against the actual M.1-M.6 code (file/function names, `resolve_scope`, the `kind` param, `memory_hit` payload shape, Drive paths) before any implementation starts.
+Active step: **Phase A — Chat Agent Refinement, A.1 done (2026-07-13).** `workspace/plan/plan_chat_agent_refinement.md` replaces the hand-rolled ReAct JSON action protocol with native OpenAI-compatible tool/function calling, adds internet access, scoped doc retrieval, model routing, a rebuilt orchestrator, preset subagents, and trace persistence — registered in `build_tracker.md` as A.1–A.9. **A.1 (native tool calling in the provider layer) done:** `llm_core.chat_complete`/`normalize.chat_complete` (non-streaming, tool_calls-capable, same failover pattern as the untouched `chat_stream`), `ModelEntry.supports_tools`, `resolver.pick_model_by_capability(require_tools=...)`. 235 backend tests green. Next: A.2 (tool layer — `agent/tools/` package).
+
+Phase M — memory scoping is done (2026-07-13, all of M.1–M.7's coding + automated verification complete). `workspace/plan/plan_memory_scoping.md` drops the always-cross-chat memory tier for strict per-chat/per-project isolation via a two-container model (standalone chats + projects). **Only outstanding item: M.7's live verification checklist** (plan §M.7 items 1-7 + a re-index check from the embedding-model swap below) needs a real Drive-linked stack and the user in the loop — see `build_tracker.md`'s M.7 entry for the exact pending list.
 
 M.1 (schema + migration): `postgres/schema.sql`'s `memory_chunks` redefined with `scope_type`/`scope_id`/`chunk_id`/`kind`/`doc_id`/`msg_index` columns and a `unique(user_id, chunk_id)` idempotency constraint; old exclude-semantics SQL functions replaced with `match_scoped_chunks`/`search_scoped_chunks` (strict scope equality); `postgres/migrations/2026-07_memory_scoping.sql` applied to local dev Postgres; `memory/index.py`'s `add_chunk` re-signatured to upsert on `(user_id, chunk_id)`.
 
@@ -33,6 +35,14 @@ Phase D (Production Deployment): D.1-D.8 all done — Supabase fully replaced by
 Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30). All Phase W, img2img, and Phase 6 UI work is now on main. imageLab branch deleted. Next: migrate PAWN to the permanent free-tier instance once Ampere capacity opens up.
 
 ---
+
+### Phase A — A.1: native tool calling in the provider layer (plan/plan_chat_agent_refinement.md) — 2026-07-13
+
+- `backend/app/core/llm_core.py` — new `chat_complete(url, model, messages, headers, tools=None, tool_choice="auto") -> dict`, non-streaming sibling to `stream_llm` (untouched), same provider detection/wire format; malformed 200 responses raise a clear `ProviderError` instead of a raw `KeyError`.
+- `backend/app/core/normalize.py` — new `chat_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None) -> dict`, mirrors `chat_stream`'s two-level failover (endpoint-level, then cross-model) via a new `_complete_one_model` helper; imports llm_core's version aliased as `_chat_complete_llm`.
+- `backend/app/registry/schemas.py` — `ModelEntry.supports_tools: bool = True`; set explicitly on every entry in `data/registry/models.json` and `seed.py`'s `INITIAL_MODELS`.
+- `backend/app/resolver/resolver.py` — `pick_model_by_capability` gains `require_tools: bool = False`.
+- New `backend/tests/test_chat_complete.py` (8 tests). 235 backend tests green (up from 227). code-reviewer PASS (1 WARN fixed); build-validator PASS.
 
 ## What's Built
 

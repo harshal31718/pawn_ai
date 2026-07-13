@@ -6,6 +6,53 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-13] — Phase A starts: A.1 native tool calling in the provider layer
+
+Registered Phase A (`plan_chat_agent_refinement.md`) in `build_tracker.md`
+(A.1–A.9, all `[ ]`). This session: A.1 only.
+
+`llm_core.py` gains `chat_complete(url, model, messages, headers, tools=None,
+tool_choice="auto") -> dict` — a non-streaming sibling to `stream_llm` (untouched),
+same provider detection/wire format, used for agent-internal calls (plan, tool
+decisions) — never the final streamed answer. `normalize.py` gains its own
+`chat_complete(model_id, messages, resolver, rate_limiter, user_id=None,
+tools=None) -> dict`, mirroring `chat_stream`'s two-level failover (endpoint-level
+then cross-model) via a new `_complete_one_model` helper; imported llm_core's
+version aliased as `_chat_complete_llm` to avoid shadowing normalize's own function
+name. Registry `ModelEntry.supports_tools: bool = True` (schemas.py), set explicitly
+on every entry in `data/registry/models.json` and `seed.py`'s `INITIAL_MODELS`.
+`resolver.pick_model_by_capability` gains `require_tools: bool = False`.
+
+**One real gotcha, not a code bug:** local `python -m pytest` hung indefinitely on
+`test_chat.py`'s first streaming test — reproduced even on a clean `git stash`, so
+it predates this session's changes and isn't caused by anything here. The project's
+own testing convention (`docker compose exec backend pytest`) is the one that
+actually works; used that throughout. Also discovered the backend Docker image
+needs an explicit `docker compose build backend` before `exec pytest` picks up new
+source — only `./backend/data` is bind-mounted in `docker-compose.yml`, not
+`app/`/`tests/`, so a stale image silently runs old code (caught this the first
+run: it reported the pre-A.1 227-test count instead of the new 234/235).
+
+code-reviewer PASS: 1 WARN fixed (`llm_core.chat_complete`'s
+`data["choices"][0]["message"]` now wrapped in try/except → a clear
+`ProviderError(kind="upstream_error")` on a malformed response instead of a raw
+`KeyError` leaking through as the failover's final error message); 3 NOTEs accepted
+as out of scope (a broad `except Exception` in `_complete_one_model` mirrors the
+pre-existing pattern in `_stream_one_model`, not new; `supports_tools` on the two
+embedding-type registry entries is semantically inert but harmless; `seed.py`'s
+`INITIAL_MODELS` has pre-existing drift from `data/registry/models.json` —
+missing `gemini-embedding-2`, different `active` flags on 2 models — inert in
+practice since `seed_registry()` only writes when the data files don't already
+exist, out of scope for this step). build-validator PASS (all 7 plan criteria
+verified against the diff + a live `docker compose exec backend pytest` run).
+No security-auditor run — pure plumbing, no secrets/config/auth/uploads touched.
+235 backend tests green (up from 227; +7 new, +1 added during the WARN fix).
+
+Next: A.2 (tool layer — `agent/tools/` package: `base.py`, `registry.py`,
+`execute.py`, `calculator`, `get_datetime`).
+
+---
+
 ### [2026-07-13] — Phase M complete: embedding fix + M.6 (projects UI) + M.7 (automatable parts)
 
 Closing out Phase M (`plan_memory_scoping.md`) this session. Picked up mid-M.6 after

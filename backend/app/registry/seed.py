@@ -11,7 +11,8 @@ INITIAL_MODELS = [
     "capability_level": "balanced",
     "capability_tags": ["general", "summarization", "instruction-following", "coding"],
     "context_window": 1048576,
-    "active": True
+    "active": True,
+    "supports_tools": True
   },
   {
     "id": "gemini-2.5-flash-lite",
@@ -22,7 +23,8 @@ INITIAL_MODELS = [
     "capability_level": "fast",
     "capability_tags": ["general", "summarization"],
     "context_window": 1048576,
-    "active": True
+    "active": True,
+    "supports_tools": True
   },
   {
     "id": "llama-3.3-70b",
@@ -33,7 +35,8 @@ INITIAL_MODELS = [
     "capability_level": "balanced",
     "capability_tags": ["coding", "reasoning", "general"],
     "context_window": 128000,
-    "active": True
+    "active": True,
+    "supports_tools": True
   },
   {
     "id": "deepseek-r1",
@@ -44,7 +47,8 @@ INITIAL_MODELS = [
     "capability_level": "research",
     "capability_tags": ["reasoning", "math", "research", "coding"],
     "context_window": 65536,
-    "active": True
+    "active": True,
+    "supports_tools": True
   },
   {
     "id": "gpt-oss-120b",
@@ -55,7 +59,8 @@ INITIAL_MODELS = [
     "capability_level": "balanced",
     "capability_tags": ["general", "coding", "instruction-following"],
     "context_window": 8192,
-    "active": True
+    "active": True,
+    "supports_tools": True
   },
   {
     "id": "qwen-3-32b",
@@ -66,7 +71,8 @@ INITIAL_MODELS = [
     "capability_level": "balanced",
     "capability_tags": ["general", "coding", "reasoning"],
     "context_window": 32768,
-    "active": True
+    "active": True,
+    "supports_tools": True
   },
   {
     "id": "glm-4.7",
@@ -77,7 +83,8 @@ INITIAL_MODELS = [
     "capability_level": "fast",
     "capability_tags": ["general", "instruction-following"],
     "context_window": 8192,
-    "active": True
+    "active": True,
+    "supports_tools": True
   },
   {
     "id": "text-embedding-004",
@@ -88,7 +95,8 @@ INITIAL_MODELS = [
     "capability_level": None,
     "capability_tags": [],
     "context_window": 2048,
-    "active": True
+    "active": True,
+    "supports_tools": True
   }
 ]
 

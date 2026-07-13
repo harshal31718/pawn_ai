@@ -49,6 +49,36 @@ async def close_client() -> None:
         _client = None
 
 
+async def chat_complete(
+    url: str,
+    model: str,
+    messages: list[dict],
+    headers: dict[str, str],
+    tools: list[dict] | None = None,
+    tool_choice: str = "auto",
+) -> dict:
+    """Non-streaming completion. Returns the full first choice's message dict
+    ({"role", "content", "tool_calls"} — shape passed through as-is from the
+    provider). Same provider wire format as stream_llm; used for agent-internal
+    calls (plan, tool decisions), never for the final user-facing streamed answer."""
+    payload: dict = {"model": model, "messages": messages, "stream": False}
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = tool_choice
+    resp = await _get_client().post(f"{url}/chat/completions", json=payload, headers=headers)
+    if resp.status_code >= 400:
+        body = resp.content
+        raise ProviderError(
+            kind="rate_limit" if resp.status_code == 429 else "upstream_error",
+            message=_format_upstream_error(resp.status_code, body),
+        )
+    data = resp.json()
+    try:
+        return data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        raise ProviderError(kind="upstream_error", message="Provider returned an unexpected response shape")
+
+
 async def stream_llm(
     url: str, model: str, messages: list[dict[str, str]], headers: dict[str, str]
 ) -> AsyncGenerator[str, None]:

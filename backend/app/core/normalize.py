@@ -10,8 +10,17 @@ Public API:
         on_provider_switch: Callable[[str, str], None] | None = None,
     ) -> AsyncGenerator[str, None]:
 
-Routes and agent nodes call ONLY this function.
-Never import llm_core.stream_llm directly outside of this module.
+    async def chat_complete(
+        model_id: str,
+        messages: list,
+        resolver: Resolver,
+        rate_limiter: EndpointRateLimiter,
+        user_id: str | None = None,
+        tools: list | None = None,
+    ) -> dict:
+
+Routes and agent nodes call ONLY these functions.
+Never import llm_core.stream_llm / llm_core.chat_complete directly outside of this module.
 """
 import httpx
 import asyncio
@@ -19,7 +28,7 @@ from typing import AsyncGenerator, Callable
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import ProviderError, NoEndpointError
-from app.core.llm_core import stream_llm
+from app.core.llm_core import stream_llm, chat_complete as _chat_complete_llm
 
 class _ModelExhausted(Exception):
     """Internal: a single model produced no tokens and all its endpoints failed.
@@ -145,6 +154,78 @@ async def chat_stream(
             continue
         # Note: a mid-stream error (after tokens) propagates from _stream_one_model
         # and is intentionally NOT caught here — we cannot restart a partial reply.
+
+    if last_error:
+        if isinstance(last_error, ProviderError):
+            raise last_error
+        if isinstance(last_error, NoEndpointError):
+            raise last_error
+        raise ProviderError(kind="upstream_error", message=str(last_error))
+    raise NoEndpointError(f"No available endpoint for model '{model_id}'")
+
+
+async def _complete_one_model(
+    model_id: str,
+    messages: list,
+    resolver: Resolver,
+    rate_limiter: EndpointRateLimiter,
+    user_id: str | None,
+    tools: list | None,
+) -> dict:
+    """Complete against ONE model, failing over across that model's keyed endpoints
+    (priority order). Raises _ModelExhausted if every endpoint failed, so the caller
+    can try a different model."""
+    candidates = resolver.pick(model_id, user_id=user_id)
+
+    last_error: Exception | None = None
+    for url, provider_model_id, headers, endpoint_id, provider in candidates:
+        try:
+            message = await _chat_complete_llm(url, provider_model_id, messages, headers, tools=tools)
+            rate_limiter.record_call(endpoint_id)
+            rate_limiter.record_success(endpoint_id)
+            return message
+
+        except ProviderError as pe:
+            last_error = pe
+            if pe.kind == "rate_limit":
+                rate_limiter.record_429(endpoint_id)
+            else:
+                rate_limiter.record_connect_failure(endpoint_id)
+
+        except (httpx.HTTPError, Exception) as e:
+            last_error = e
+            rate_limiter.record_connect_failure(endpoint_id)
+
+    raise _ModelExhausted(last_error or NoEndpointError(f"No available endpoint for model '{model_id}'"))
+
+
+async def chat_complete(
+    model_id: str,
+    messages: list,
+    resolver: Resolver,
+    rate_limiter: EndpointRateLimiter,
+    user_id: str | None = None,
+    tools: list | None = None,
+) -> dict:
+    """Non-streaming completion for the given model_id, with the same two-level
+    failover as chat_stream (endpoint-level, then cross-model). Used for
+    agent-internal calls (plan, tool decisions) — never for the final streamed
+    user-facing answer, which stays on chat_stream.
+
+    Returns the completion message dict ({"role", "content", "tool_calls"}).
+    """
+    models = resolver.fallback_models(model_id, user_id=user_id)
+
+    last_error: Exception | None = None
+    for candidate_model in models:
+        try:
+            return await _complete_one_model(candidate_model, messages, resolver, rate_limiter, user_id, tools)
+        except _ModelExhausted as me:
+            last_error = me.error
+            continue
+        except NoEndpointError as ne:
+            last_error = ne
+            continue
 
     if last_error:
         if isinstance(last_error, ProviderError):
