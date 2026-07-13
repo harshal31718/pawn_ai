@@ -9,8 +9,11 @@ backups/
 # SSH keypairs (Oracle instance access, etc.) — never commit
 keys/
 
-# data — personal conversation and memory files
-data/
+# data — personal conversation/memory runtime files (registry/ is committed
+# data per CLAUDE.md, not runtime state — deliberately NOT ignored)
+backend/data/conversations/
+backend/data/memory/
+backend/data/checkpoints.db
 
 # python
 __pycache__/

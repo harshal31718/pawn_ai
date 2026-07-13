@@ -44,17 +44,17 @@ def test_registry_seeding_and_loading():
     assert len(internal_embed) == 1
     assert internal_embed[0].id == "text-embedding-004"
     
-    # Endpoints priority sort check
+    # Endpoints priority sort check. Registry refresh 2026-07-13 deactivated
+    # llama-3.3-70b's cerebras (deprecated), github (platform retiring), and
+    # openrouter (:free variant ending) endpoints — only groq + huggingface
+    # remain active. endpoints_for() returns active endpoints only.
     endpoints = registry.endpoints_for("llama-3.3-70b")
-    assert len(endpoints) >= 5
-    # Check priority is sorted ascending: 1, 2, 3, 4, 5
+    assert len(endpoints) >= 2
+    # Check priority is sorted ascending: 1, 3 (2/4/5 now inactive)
     priorities = [e.priority for e in endpoints]
     assert priorities == sorted(priorities)
     assert endpoints[0].provider == "groq"         # Priority 1
-    assert endpoints[1].provider == "cerebras"     # Priority 2
-    assert endpoints[2].provider == "huggingface"  # Priority 3
-    assert endpoints[3].provider == "github"       # Priority 4
-    assert endpoints[4].provider == "openrouter"   # Priority 5
+    assert endpoints[1].provider == "huggingface"  # Priority 3
 
 def test_registry_api_endpoint(client):
     response = client.get("/registry/models")
@@ -75,6 +75,7 @@ def test_registry_api_endpoint(client):
     model_ids = [m["model_id"] for m in data]
     assert "text-embedding-004" not in model_ids
     
-    # Check endpoint count for llama-3.3-70b
+    # Check endpoint count for llama-3.3-70b (registry refresh 2026-07-13:
+    # only groq + huggingface remain active, see test_registry_seeding_and_loading)
     llama_entry = next(m for m in data if m["model_id"] == "llama-3.3-70b")
-    assert llama_entry["endpoint_count"] >= 4
+    assert llama_entry["endpoint_count"] >= 2

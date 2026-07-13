@@ -136,8 +136,21 @@ this on prod = retrieval silently broken.
 
 ## 5. Implementation steps
 
-### M.1 — Schema + migration file
+### M.1 — Schema + migration file + embedding model replacement
 
+- **Embedding model swap (added 2026-07-13, verified against Google's deprecations
+  page):** `text-embedding-004` was SHUT DOWN by Google on 2026-01-14 — every embed
+  call against the real API now fails (memory has been degrading to FTS-only via the
+  existing fail-soft paths). Replace with **`gemini-embedding-2`** (NOT
+  `gemini-embedding-001`, which shuts down 2026-07-14). In `memory/embed.py`: model
+  `gemini-embedding-2` with `output_dimensionality: 768` — verified supported (768 is
+  a Google-recommended dimension) and auto-normalized by this model, so the
+  `vector(768)` schema and cosine search are unchanged. Registry data:
+  deactivate the `text-embedding-004` model + endpoint entries, add
+  `gemini-embedding-2` (type `embedding`, visibility `internal`, input token limit
+  8192) + its google endpoint. No re-embedding migration is needed — this plan wipes
+  `memory_chunks` anyway (decision #10), so all new chunks embed with the new model
+  from the start. Update the vector-dimension comment in `postgres/schema.sql`.
 - Update `postgres/schema.sql` (table + functions as §4); write
   `postgres/migrations/2026-07_memory_scoping.sql`; apply to local dev Postgres.
 - `memory/index.py` → `add_chunk(user_id, scope_type, scope_id, conv_id, chunk_id,

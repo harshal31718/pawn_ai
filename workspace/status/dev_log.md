@@ -6,6 +6,49 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-13] — Registry refresh (registry-refresh skill, applied via Cowork session)
+
+Sources verified directly (not just the CLI agent's report): GitHub changelog
+2026-07-01, Gemini deprecations page, Gemini embeddings docs, Gemini rate-limits page.
+
+- Deactivated 6 endpoints: `ep-llama-3.3-70b-cerebras` + `ep-qwen-3-32b-cerebras`
+  (Cerebras deprecated 2026-02-16), `ep-deepseek-r1-openrouter` (:free tier removed),
+  `ep-llama-3.3-70b-github` + `ep-deepseek-r1-github` (GitHub Models retires
+  2026-07-30; brownouts 07-16/07-23 — deactivated ahead of them),
+  `ep-llama-3.3-70b-openrouter` (free variant ends 2026-07-19 — proactive).
+- `qwen-3-32b` model → `active: false` (zero endpoints left).
+- `last_verified` bumped to 2026-07-13 on the 7 endpoints re-verified today.
+- REJECTED from the CLI agent's proposal: 4 Gemini rate-limit field changes — the
+  rate-limits docs page no longer publishes per-model free-tier numbers (moved into
+  AI Studio account view), so the values were unverifiable; skill rule: never invent
+  limits. Existing stored limits left as-is.
+- URGENT finding confirmed + CORRECTED: `text-embedding-004` shut down 2026-01-14.
+  The CLI agent recommended migrating to `gemini-embedding-001` — WRONG target: that
+  model shuts down 2026-07-14 (tomorrow). Correct replacement is
+  `gemini-embedding-2` (supports `output_dimensionality=768`, auto-normalized →
+  `vector(768)` schema keeps working). Fix folded into Phase M step M.1
+  (`plan_memory_scoping.md`), which wipes `memory_chunks` anyway, so no re-embed
+  migration is needed. Registry embedding entries deliberately untouched today per
+  the skill's hard rule.
+- Heads-up for next refresh: groq `llama-3.3-70b-versatile` deprecation notice for
+  2026-08-16; `gemini-2.5-flash`/`-lite` earliest shutdown 2026-10-16 (successors:
+  `gemini-3.5-flash` / `gemini-3.1-flash-lite`); new Gemini 3.x models exist but not
+  added (context/limits unverified this pass).
+- **Also found and fixed while committing this refresh:** `.gitignore`'s bare `data/`
+  pattern was silently matching `backend/data/registry/*.json` too — the model
+  registry (per `.claude/CLAUDE.md`: "data, not code," meant to be committed) had
+  **never actually been tracked in git**, on any branch, since the file was created.
+  Every prior registry-refresh session's edits only ever existed in the working
+  tree/Docker volume, not in version control. Narrowed the ignore rule to the three
+  actual runtime-data paths (`backend/data/conversations/`, `backend/data/memory/`,
+  `backend/data/checkpoints.db`) so `registry/` is no longer swept up. This refresh
+  is the first one to actually land in git history.
+- Validation: JSON parse + referential integrity clean; every active model has ≥1
+  active endpoint (llama-3.3-70b: groq+hf; deepseek-r1: hf only). Full pytest run
+  completed this session (see below).
+
+---
+
 ### [2026-07-13] — Phase M / M.1: memory-scoping schema + migration
 
 Kicked off Phase M (`workspace/plan/plan_memory_scoping.md`, prescriptive, locked 2026-07-13): drops the always-cross-chat memory tier for strict per-chat/per-project isolation. Session scope: M.1 and M.2 only.
