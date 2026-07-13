@@ -53,6 +53,64 @@ Next: A.2 (tool layer — `agent/tools/` package: `base.py`, `registry.py`,
 
 ---
 
+### [2026-07-13] — Phase A / A.2: tool layer, plus a real DoS bug caught by review
+
+New `backend/app/agent/tools/` package: `base.py` (`ToolSpec`/`ToolContext`),
+`registry.py` (`get_tools(ctx)` — this session only wires the two always-on tools;
+`web_search`'s search-key gating and `search_memory`/`doc_search`'s scope gating are
+explicitly deferred to A.3/A.4, since those tools don't exist yet — documented in the
+module docstring rather than guessed at), `execute.py` (`run_tool` wraps every handler
+in `asyncio.wait_for(TOOL_TIMEOUT_SECONDS=20)`, converts any exception/timeout into a
+`"TOOL_ERROR: ..."` string, never raises into the graph), `calculator.py`,
+`get_datetime.py` (UTC ISO 8601 only — no user-local variant, since nothing in PAWN
+tracks a user's timezone anywhere yet; a real gap against the plan's literal wording,
+called out rather than silently dropped, deferred until there's an actual timezone
+source to convert against).
+
+**Real bug caught by code review, not by the first test pass.** The calculator's AST
+evaluator is a genuine whitelist (only `Constant`/`BinOp`/`UnaryOp` node types reach
+`_eval_node`'s recursion — no `Name`/`Call`/`Attribute`/`Subscript`/comprehensions/
+`Lambda`, so classic sandbox-escape payloads like `__import__('os').system(...)`,
+`(1).__class__`, or `[x for x in ...]` all hit the trailing `raise ValueError`
+structurally, not via string-matching). But a **valid** expression under that grammar
+— an unbounded `**` exponent, e.g. `99999999999999 ** 99999999999999` — is itself a
+resource-exhaustion vector: `_calculator_handler` called `safe_eval_arithmetic`
+synchronously inside an `async def`, so the computation never yields control back to
+the event loop, meaning `run_tool`'s `asyncio.wait_for` timeout literally cannot
+preempt it once it starts (a single crafted expression could block every concurrent
+request on this single-worker backend). code-reviewer's first pass caught this and
+correctly graded it CRITICAL despite the tool layer not being wired into the live
+graph yet — "ships as-is otherwise" was the right call. Fixed three ways: (1)
+`_eval_node`'s `ast.Pow` branch now checks `abs(exponent) > _MAX_POW_EXPONENT` (1000)
+*before* calling `operator.pow`, confirmed by hand-tracing recursive `**` chains that
+the check fires strictly pre-compute at every level, not just the outermost; (2)
+`safe_eval_arithmetic` rejects expressions over `_MAX_EXPRESSION_LENGTH` (200 chars)
+before `ast.parse`, incidentally bounding recursion depth too; (3)
+`_calculator_handler` now offloads via `asyncio.to_thread` as defense-in-depth, so the
+timeout stays meaningful even against a future bound-check oversight. Re-verified by a
+second, skeptical code-reviewer pass (explicitly asked to confirm the fix rather than
+take it on faith) — confirmed the exponent check precedes the `pow` call on every
+recursion level, the bounds are generous for real use (`2**1000` and even a
+14000-digit base raised to 1000 both compute in negligible time) yet tight enough to
+block the original PoC, and no other resource-exhaustion vector was missed.
+
+New `tests/test_agent_tools.py` (20 tests): registry assembly, `run_tool`
+success/timeout/exception/never-raises, calculator correctness + the adversarial
+sandbox-escape cases above + oversized-exponent/overlong-expression regression tests
++ a static `\beval\(`/`\bexec\(` source-scan (regexed to dodge false-positiving on the
+module's own `safe_eval_arithmetic`/`_eval_node` names), get_datetime UTC format.
+265 backend tests green (up from 235). build-validator PASS (both the A.3/A.4
+tool-gating scope cut and the get_datetime user-local gap explicitly flagged as
+accepted, not silently passed over). No security-auditor run — per the plan, that's
+mandatory only for A.3's SSRF surface (in A.9); A.2 touches no secrets/config/auth,
+and the calculator's actual security-relevant surface (the sandbox + the DoS bug
+above) got two independent code-reviewer passes instead.
+
+Next: A.3 (BYOK search keys + `web_search`/`fetch_url` tools + SSRF guard +
+citations).
+
+---
+
 ### [2026-07-13] — Phase M complete: embedding fix + M.6 (projects UI) + M.7 (automatable parts)
 
 Closing out Phase M (`plan_memory_scoping.md`) this session. Picked up mid-M.6 after

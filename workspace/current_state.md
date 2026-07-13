@@ -1,7 +1,7 @@
 # PAWN — Current State
 
 Last updated: 2026-07-13
-Active step: **Phase A — Chat Agent Refinement, A.1 done (2026-07-13).** `workspace/plan/plan_chat_agent_refinement.md` replaces the hand-rolled ReAct JSON action protocol with native OpenAI-compatible tool/function calling, adds internet access, scoped doc retrieval, model routing, a rebuilt orchestrator, preset subagents, and trace persistence — registered in `build_tracker.md` as A.1–A.9. **A.1 (native tool calling in the provider layer) done:** `llm_core.chat_complete`/`normalize.chat_complete` (non-streaming, tool_calls-capable, same failover pattern as the untouched `chat_stream`), `ModelEntry.supports_tools`, `resolver.pick_model_by_capability(require_tools=...)`. 235 backend tests green. Next: A.2 (tool layer — `agent/tools/` package).
+Active step: **Phase A — Chat Agent Refinement, A.1+A.2 done (2026-07-13).** `workspace/plan/plan_chat_agent_refinement.md` replaces the hand-rolled ReAct JSON action protocol with native OpenAI-compatible tool/function calling, adds internet access, scoped doc retrieval, model routing, a rebuilt orchestrator, preset subagents, and trace persistence — registered in `build_tracker.md` as A.1–A.9. **A.1 (native tool calling in the provider layer) done:** `llm_core.chat_complete`/`normalize.chat_complete` (non-streaming, tool_calls-capable, same failover pattern as the untouched `chat_stream`), `ModelEntry.supports_tools`, `resolver.pick_model_by_capability(require_tools=...)`. **A.2 (tool layer) done:** new `agent/tools/` package (`base.py`/`registry.py`/`execute.py`/`calculator.py`/`get_datetime.py`), `TOOL_TIMEOUT_SECONDS=20`; a CRITICAL DoS in the calculator's `**` exponent handling was found by code review and fixed (bounded exponent/expression length + `asyncio.to_thread` offload). 265 backend tests green. Next: A.3 (BYOK search keys + web_search/fetch_url tools + SSRF guard + citations).
 
 Phase M — memory scoping is done (2026-07-13, all of M.1–M.7's coding + automated verification complete). `workspace/plan/plan_memory_scoping.md` drops the always-cross-chat memory tier for strict per-chat/per-project isolation via a two-container model (standalone chats + projects). **Only outstanding item: M.7's live verification checklist** (plan §M.7 items 1-7 + a re-index check from the embedding-model swap below) needs a real Drive-linked stack and the user in the loop — see `build_tracker.md`'s M.7 entry for the exact pending list.
 
@@ -43,6 +43,13 @@ Phase: dev/main — imageLab merged into dev, dev merged into main (2026-06-30).
 - `backend/app/registry/schemas.py` — `ModelEntry.supports_tools: bool = True`; set explicitly on every entry in `data/registry/models.json` and `seed.py`'s `INITIAL_MODELS`.
 - `backend/app/resolver/resolver.py` — `pick_model_by_capability` gains `require_tools: bool = False`.
 - New `backend/tests/test_chat_complete.py` (8 tests). 235 backend tests green (up from 227). code-reviewer PASS (1 WARN fixed); build-validator PASS.
+
+### Phase A — A.2: tool layer (plan/plan_chat_agent_refinement.md) — 2026-07-13
+
+- New `backend/app/agent/tools/` package — `base.py` (`ToolSpec`/`ToolContext`), `registry.py` (`get_tools(ctx)`, currently returns only the two always-on tools — `web_search`/`search_memory`/`doc_search` gating deferred to A.3/A.4), `execute.py` (`run_tool` — `asyncio.wait_for` + never-raise `TOOL_ERROR` wrapping), `calculator.py`, `get_datetime.py`.
+- `backend/app/constants.py` — `TOOL_TIMEOUT_SECONDS = 20`.
+- **CRITICAL fixed:** the calculator's AST evaluator originally let an unbounded `**` exponent (e.g. `99999999999999 ** 99999999999999`) through as valid grammar — a synchronous resource-exhaustion DoS the `asyncio.wait_for` timeout couldn't preempt since the computation never yields to the event loop. Fixed with `_MAX_POW_EXPONENT=1000`/`_MAX_EXPRESSION_LENGTH=200` bounds checked before computing, plus `asyncio.to_thread` offload as defense-in-depth.
+- New `backend/tests/test_agent_tools.py` (20 tests). 265 backend tests green (up from 235). code-reviewer: 1st pass FAIL → fixed → re-verified PASS; build-validator PASS.
 
 ## What's Built
 

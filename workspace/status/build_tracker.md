@@ -79,11 +79,39 @@ re-verified against the as-built Phase M code on 2026-07-13.
   secrets/config/auth touched).
   Demo: `test_llm_core_chat_complete_parses_tool_calls` — a mocked model response with
   a `tool_calls` list round-trips through `chat_complete` into the parsed message dict. ✓
-- [ ] **A.2 — Tool layer**
-  New `agent/tools/` package: `base.py` (`ToolSpec`/`ToolContext`), `registry.py`
-  (`get_tools`), `execute.py` (`run_tool`, `TOOL_TIMEOUT_SECONDS=20`, errors/timeouts →
-  `TOOL_ERROR: ...` observations, never raise). `calculator` (safe AST evaluator, never
-  `eval()`) and `get_datetime` tools.
+- [x] **A.2 — Tool layer** ✓ (2026-07-13)
+  New `agent/tools/` package: `base.py` (`ToolSpec`/`ToolContext` dataclasses exactly
+  as specced), `registry.py` (`get_tools(ctx)` — this session only assembles the two
+  always-on tools, `calculator`/`get_datetime`; `web_search` (A.3) and
+  `search_memory`/`doc_search` (A.4) conditional gating is explicitly deferred to those
+  steps, documented in the module docstring), `execute.py` (`run_tool` wraps every
+  handler in `asyncio.wait_for(..., TOOL_TIMEOUT_SECONDS)`; any exception/timeout →
+  `"TOOL_ERROR: ..."`, never raises into the graph — verified by a dedicated
+  never-raises test). `constants.py` gains `TOOL_TIMEOUT_SECONDS = 20`. `calculator.py`:
+  hand-rolled whitelist-only AST evaluator (`Constant`/`BinOp`/`UnaryOp` only — no
+  `Name`/`Call`/`Attribute`/`Subscript`/comprehensions/`Lambda`/etc., never `eval()`/
+  `exec()`), plus `_MAX_POW_EXPONENT=1000` and `_MAX_EXPRESSION_LENGTH=200` bounds and
+  an `asyncio.to_thread` offload — added after code-reviewer's first pass found a
+  CRITICAL (an unbounded `**` exponent is a valid-grammar resource-exhaustion DoS the
+  timeout alone can't preempt, since the computation is synchronous and never yields
+  control back to the event loop). `get_datetime.py` returns current UTC in ISO 8601;
+  the plan's "+ user-local ISO strings" wording is not implemented — no user-timezone
+  field exists anywhere in the app today, so there's nothing to convert against
+  (documented gap, not silently dropped).
+  New `tests/test_agent_tools.py` (20 tests: registry assembly, run_tool
+  success/timeout/exception/never-raises, calculator correctness + adversarial
+  sandbox-escape rejections + oversized-exponent/overlong-expression rejections +
+  static no-eval/exec source scan, get_datetime UTC format). 265 backend tests green
+  (up from 235) via `docker compose exec backend pytest`. code-reviewer: 1st pass FAIL
+  (1 CRITICAL — the calculator DoS above); fixed (exponent/length bounds +
+  `asyncio.to_thread`); re-verified PASS via independent static trace confirming the
+  bound check runs strictly before `operator.pow` on every recursion level. No
+  security-auditor run (per plan, mandatory only for A.3's SSRF surface in A.9; A.2
+  touches no secrets/config/auth — the calculator's safety was the security-relevant
+  surface here and got the equivalent scrutiny via two code-reviewer passes).
+  build-validator PASS (all plan criteria verified against the diff + a live
+  `docker compose exec backend pytest` run; the A.3/A.4 tool-gating scope cut and the
+  get_datetime user-local gap both explicitly called out as accepted, not silent).
 - [ ] **A.3 — Internet access: `web_search` + `fetch_url`**
   BYOK Tavily/Brave search keys; `tools/web_search.py`, `tools/fetch_url.py` (SSRF guard,
   `trafilatura` extraction); citation events + source chips.
