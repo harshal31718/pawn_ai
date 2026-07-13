@@ -85,6 +85,14 @@ def set_key(user_id: str, provider: str, plain_key: str) -> None:
     _evict(user_id, provider)
 
 
+def has_search_key(user_id: Optional[str]) -> bool:
+    """True if the user has a Tavily or Brave key configured (agent tools /
+    A.3). Single source of truth for this check -- the router (A.5), the
+    main tool registry (A.4), and the researcher subagent (A.7) all gate
+    web_search access on it and must agree."""
+    return bool(get_key(user_id, "tavily") or get_key(user_id, "brave"))
+
+
 def get_key(user_id: str, provider: str) -> Optional[str]:
     """Fetch and decrypt a user's API key for a provider, or None if absent."""
     now = time.time()

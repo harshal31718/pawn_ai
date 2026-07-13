@@ -24,7 +24,7 @@ def get_tools(ctx: ToolContext) -> List[ToolSpec]:
     search_memory/doc_search (A.4) are added only when ctx.scope_type is not
     None [Phase M] — stateless chats get no memory tools."""
     tools = list(_ALWAYS_ON)
-    if key_store.get_key(ctx.user_id, "tavily") or key_store.get_key(ctx.user_id, "brave"):
+    if key_store.has_search_key(ctx.user_id):
         tools.append(WEB_SEARCH_TOOL)
     if ctx.scope_type is not None:
         tools.append(SEARCH_MEMORY_TOOL)

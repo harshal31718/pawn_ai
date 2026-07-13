@@ -17,7 +17,9 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_core.callbacks import adispatch_custom_event
 
-from app.agent.tools.base import ToolContext, ToolSpec
+from app.agent.oai_tools import extract_citations, to_oai_tool
+from app.agent.subagents import DELEGATE_PREFIX, delegate_tool_specs, run_subagent
+from app.agent.tools.base import ToolContext
 from app.agent.tools.execute import run_tool
 from app.agent.tools.registry import get_tools
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS
@@ -72,17 +74,6 @@ def _resolve_deps(resolver: Optional[Resolver], rate_limiter: Optional[EndpointR
     return resolver or DummyResolver(), rate_limiter or DummyRateLimiter()
 
 
-def _to_oai_tool(spec: ToolSpec) -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": spec.name,
-            "description": spec.description,
-            "parameters": spec.parameters,
-        },
-    }
-
-
 async def _on_provider_switch_events(from_p: str, to_p: str) -> None:
     await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
 
@@ -100,7 +91,7 @@ async def classify_node(
     has_search_key = False
     if user_id:
         from app.core import key_store
-        has_search_key = bool(key_store.get_key(user_id, "tavily") or key_store.get_key(user_id, "brave"))
+        has_search_key = key_store.has_search_key(user_id)
 
     decision = await router_classify(
         state["messages"],
@@ -186,7 +177,7 @@ async def plan_node(
         resolver=resolver, rate_limiter=rate_limiter,
     )
     tools = get_tools(ctx)
-    tool_specs = [_to_oai_tool(t) for t in tools]
+    tool_specs = [to_oai_tool(t) for t in tools] + delegate_tool_specs()
 
     try:
         model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True)
@@ -220,7 +211,6 @@ async def plan_node(
 
 # ── execute: the tool loop ───────────────────────────────────────────────
 
-_CITATION_LINE_RE = re.compile(r"^\d+\.\s*(?P<title>.*?)\s+—\s+(?P<url>https?://\S+)\s+—", re.MULTILINE)
 _MEMORY_HIT_START_RE = re.compile(r"^-\s*\[conv:(?P<conv_id>[^\]]*)\]\s*", re.MULTILINE)
 
 
@@ -243,20 +233,6 @@ def _memory_hit_lines(observation: str) -> List[Dict[str, str]]:
     return hits
 
 
-def _extract_citations(name: str, args: dict, observation: str) -> List[Dict[str, str]]:
-    if observation.startswith("TOOL_ERROR"):
-        return []
-    if name == "web_search":
-        return [
-            {"url": m.group("url"), "title": m.group("title").strip() or m.group("url")}
-            for m in _CITATION_LINE_RE.finditer(observation)
-        ]
-    if name == "fetch_url":
-        url = args.get("url", "")
-        return [{"url": url, "title": url}] if url else []
-    return []
-
-
 async def execute_node(
     state: AgentState,
     resolver: Optional[Resolver] = None,
@@ -272,7 +248,7 @@ async def execute_node(
         resolver=resolver, rate_limiter=rate_limiter,
     )
     tools = get_tools(ctx)
-    tool_specs = [_to_oai_tool(t) for t in tools]
+    tool_specs = [to_oai_tool(t) for t in tools] + delegate_tool_specs()
     tools_by_name = {t.name: t for t in tools}
 
     try:
@@ -326,6 +302,37 @@ async def execute_node(
             except json.JSONDecodeError:
                 args = {}
 
+            if name.startswith(DELEGATE_PREFIX):
+                subagent_name = name[len(DELEGATE_PREFIX):]
+                task = args.get("task", "")
+                await adispatch_custom_event(
+                    "step", {"label": f"Delegating to {subagent_name}", "detail": task, "agent": "main"}
+                )
+
+                start = time.monotonic()
+                sub_result = await run_subagent(subagent_name, task, ctx, tokens_used)
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+
+                observation = sub_result["result"]
+                tokens_used = sub_result["tokens_used"]
+                tool_log.append(
+                    {"name": name, "args": args, "observation": observation, "elapsed_ms": elapsed_ms, "agent": "main"}
+                )
+                # Nested subagent tool calls, tagged with their own agent name (A.8 renders these nested).
+                tool_log.extend(sub_result["tool_log"])
+                for citation in sub_result["citations"]:
+                    if citation["url"] not in seen_urls:
+                        seen_urls.add(citation["url"])
+                        citations.append(citation)
+                        await adispatch_custom_event("citation", citation)
+
+                working_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": observation,
+                })
+                continue
+
             await adispatch_custom_event(
                 "step", {"label": f"Calling {name}", "detail": json.dumps(args), "agent": "main"}
             )
@@ -350,7 +357,7 @@ async def execute_node(
                             {"summary": hit["text"], "scope": scope_type or "", "source_conv_id": hit["source_conv_id"]},
                         )
 
-            for citation in _extract_citations(name, args, observation):
+            for citation in extract_citations(name, args, observation):
                 if citation["url"] not in seen_urls:
                     seen_urls.add(citation["url"])
                     citations.append(citation)

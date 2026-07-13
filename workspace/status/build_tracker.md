@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **started 2026-07-13, A.1–A.6 done this session, A.7 next** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase A — Chat Agent Refinement, A.6 done (orchestrator graph v2), A.7 (preset subagents) next.** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started same day. A.1-A.6 all done and committed this session — see the A.6 entry below for the graph v2 rewrite details. Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **started 2026-07-13, A.1–A.7 done this session, A.8 next** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **Phase A — Chat Agent Refinement, A.7 done (preset subagents), A.8 (trace persistence + frontend) next.** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started same day. A.1-A.7 all done and committed this session — see the A.6/A.7 entries below for the graph v2 rewrite and subagent delegation details. Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -278,9 +278,50 @@ re-verified against the as-built Phase M code on 2026-07-13.
   with zero `step` events; execute-loop tests prove the iteration cap,
   token-budget cap, and malformed/unknown tool_call cases all resolve to a
   `TOOL_ERROR` observation or a budget nudge, never a raised exception. ✓
-- [ ] **A.7 — Preset subagents**
-  `agent/subagents.py`: `researcher`/`summarizer`/`coder`, sequential delegation via
-  `delegate_<name>` tools, shared token budget, no nested delegation.
+- [x] **A.7 — Preset subagents** ✓ (2026-07-13)
+  New `agent/subagents.py`: exactly three presets in a `SUBAGENTS` dict —
+  `researcher` (`fetch_url` always + `web_search` gated on a configured
+  search key, level `subagent_researcher`), `summarizer` (no tools, level
+  `subagent_summarizer`), `coder` (no tools, level `subagent_coder`, heavy) —
+  each exposed as a `delegate_<name>(task: str)` tool via
+  `delegate_tool_specs()`. `run_subagent(name, task, ctx, tokens_used)` runs
+  its own bounded tool loop (`SUBAGENT_MAX_ITERATIONS=5`), sharing the
+  parent's single `AGENT_MAX_TOKENS` counter (threaded in/out, never
+  double-counted). **Strictly sequential** — `execute_node` special-cases
+  `delegate_`-prefixed tool_calls and `await`s `run_subagent` inline in its
+  own loop (bypassing the generic `run_tool` dispatch, since a subagent's
+  result must feed `tokens_used`/`tool_log`/`citations` back into
+  `AgentState`); no `create_task`/`asyncio.gather` anywhere, verified by
+  grep and by code-reviewer/build-validator. Nested `tool_log` entries
+  (tagged `agent: "<name>"`) splice into the parent's right after the
+  `delegate_<name>` entry (`agent: "main"`); citations propagate into the
+  parent's deduped list. **Depth guard (max depth 1):** no preset exposes a
+  delegate tool, and `run_subagent`'s own dispatch loop now also explicitly
+  rejects any delegate-shaped call at runtime (not just true by omission —
+  a code-reviewer WARN caught this and it was fixed with a regression test).
+  New shared `agent/oai_tools.py` (`to_oai_tool`/`extract_citations`) avoids
+  a graph↔subagents circular import. New `key_store.has_search_key()`
+  de-duplicates a search-key-gating check that had drifted into three call
+  sites (main registry, researcher subagent, `classify_node`) — another
+  code-reviewer NOTE, fixed. New `tests/test_subagents.py` (15 tests):
+  preset shape, both depth-guard forms, researcher gating with/without a
+  key, delegate tool spec shape, unknown-subagent error, no-tool-calls path,
+  shared-budget accumulation, iteration cap, exhausted-parent-budget
+  short-circuit, never-raises-on-upstream-failure, delegate-prefix
+  consistency, and full `execute_node` wiring (bypass verified, trace
+  merges, tokens accumulate 10+5+42=57 across parent+subagent calls). 359
+  backend tests green (up from 344) via `docker compose exec backend
+  pytest` (rebuild required — `backend/tests/` isn't bind-mounted).
+  code-reviewer PASS (2 WARN fixed, above); build-validator PASS (all 9
+  plan criteria verified against the diff, 359/359 live pytest run). No
+  security-auditor run (delegation reuses A.1-A.5's already-audited
+  tool/search/SSRF surfaces; purely in-process orchestration, no new
+  secrets/auth/outbound-HTTP surface).
+  Demo (mocked): "research X and summarize" → main delegates to `researcher`
+  (nested `fetch_url` step visible in the merged trace) → researcher
+  concludes with a sourced digest → main composes the final answer from it,
+  with zero interleaving (strictly sequential, one subagent call completes
+  fully before main's loop continues). ✓
 - [ ] **A.8 — Trace persistence + frontend**
   `trace` field on persisted assistant messages **[Phase M layout]**; `TraceView.tsx`;
   streaming activity block + auto-collapse summary row; citation chips.
