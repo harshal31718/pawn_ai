@@ -90,3 +90,12 @@ class FakeDriveStorage:
             self.delete_file(fid)
         self._folders.pop(file_id, None)
         self._files.pop(file_id, None)
+
+    def move_item(self, item_id: str, new_parent_id: str, old_parent_id: str) -> None:
+        """Mirrors DriveStorage.move_item — relocates a file or folder to a
+        new parent. old_parent_id is accepted for interface parity but unused
+        here (this fake models single-parent items, unlike real Drive)."""
+        if item_id in self._folders:
+            self._folders[item_id]["parent"] = new_parent_id
+        elif item_id in self._files:
+            self._files[item_id]["parent"] = new_parent_id

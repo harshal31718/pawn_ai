@@ -3,15 +3,25 @@
 DriveStorage wraps the Drive v3 API for PAWN's per-user file operations.
 All paths are relative to a user's PAWN/ root folder in Drive.
 
-Folder structure created on first use:
+Folder structure created on first use (Phase M — memory scoping):
   PAWN/
     conversations/
-      {conv_id}/
-        meta.json
-        messages.jsonl
-        summary.md
+      chats/
+        {conv_id}/
+          meta.json
+          messages.jsonl
+          summary.md
+          rag_chunks.jsonl
+      projects/
+        {project_id}/
+          project.json
+          {conv_id}/            # same shape as a standalone chat
     uploads/
       {doc_id}.txt
+
+Folder placement alone determines a chat's scope (chats/ = standalone,
+projects/{pid}/ = that project) — see storage/conversations_drive.py and
+storage/projects_drive.py, and workspace/plan/plan_memory_scoping.md §3.
 """
 
 from __future__ import annotations
@@ -252,3 +262,22 @@ class DriveStorage:
         fid = self.find_file(name, parent_id)
         if fid:
             self.delete_file(fid)
+
+    def move_item(self, item_id: str, new_parent_id: str, old_parent_id: str) -> None:
+        """Relocate a file or folder to a new parent (single Drive metadata
+        call — used for chat moves standalone<->project and the one-time
+        legacy-layout migration, Phase M). Drive items can have multiple
+        parents, so both adding the new parent and removing the old one are
+        required, not just adding."""
+        with self._lock:
+            self._files().update(
+                fileId=item_id,
+                addParents=new_parent_id,
+                removeParents=old_parent_id,
+                fields="id, parents",
+            ).execute()
+            # Cached path->ID maps may reference the old parent path; drop
+            # them all (cheap to rebuild) rather than track reverse keys,
+            # mirroring delete_file's cache invalidation.
+            self._folders.clear()
+            self._file_ids.clear()

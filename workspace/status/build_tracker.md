@@ -14,7 +14,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 ## Current Status
 
 **Active phases (merged track):** Phase M — Memory Scoping (Standalone Chats, Projects, Scoped RAG) (ACTIVE — this session covers M.1-M.2) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase M in progress — implementing M.1/M.2 (2026-07-13).** Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active step:** **Phase M — M.1 and M.2 done (2026-07-13), stopped per session scope. M.3 (chunker + write path) next.** Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -59,15 +59,19 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
   still reference the pre-M.1 shape, fail soft — see `dev_log.md` 2026-07-13.
   Demo: psql shows new table + functions; old functions gone. ✓
 
-- [ ] **M.2 — Drive storage layer: new layout + projects**
+- [x] **M.2 — Drive storage layer: new layout + projects** ✓ (2026-07-13)
   `storage/drive.py` gains `move_item`. `storage/conversations_drive.py` retargeted to
-  `PAWN/conversations/chats/`; per-chat `rag_chunks.jsonl` helpers. New
-  `storage/projects_drive.py` (create/list/rename/delete project, list_project_chats,
-  move_chat). Automatic one-time Drive migration (legacy `conversations/<id>/` →
-  `conversations/chats/<id>/`) on first authenticated request per user, with legacy
-  read-fallback until migrated. `tests/fake_drive.py` extended.
+  `PAWN/conversations/chats/`; project-aware `_locate_conv_folder`; per-chat
+  `rag_chunks.jsonl` helpers. New `storage/projects_drive.py` (create/list/rename/delete
+  project, list_project_chats, move_chat). Automatic one-time Drive migration (legacy
+  `conversations/<id>/` → `conversations/chats/<id>/`), layout-inferred, no flag file.
+  `tests/fake_drive.py` extended (`move_item`); new `test_projects_drive.py` (15 tests).
+  180 backend tests green. code-reviewer found + fixed 1 CRITICAL (id()-keyed migration
+  cache → instance-attribute flag); re-review PASS. No routes yet — pure storage layer,
+  wired up by M.3 (indexer)/M.5 (projects API) next.
   Demo: create project via curl → Drive shows `projects/<id>/project.json`; old chats
-  appear under `chats/`.
+  appear under `chats/`. ✓ (verified directly against storage layer + FakeDrive; curl-level
+  demo deferred to M.5 once routes/projects.py exists)
 
 - [ ] **M.3 — Chunker + write path (indexing every turn)**
   `memory/chunker.py`, `memory/indexer.py` (`index_turn_task`), `resolve_scope`
