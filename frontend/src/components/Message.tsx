@@ -78,51 +78,62 @@ export default function MessageBubble({ message, isStreaming }: Props) {
 
           {isUser ? (
             message.content
-          ) : message.content === '' && isStreaming ? (
-            /* Thinking indicator: shown before first token arrives */
-            <span className="flex items-center gap-1.5 py-0.5" aria-label="Thinking">
-              <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" />
-              <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.2s' }} />
-              <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.4s' }} />
-            </span>
           ) : (
             <>
-              <ReactMarkdown
-                components={{
-                  ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
-                  ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
-                  li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
-                  p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0 leading-relaxed">{children}</p>,
-                  h1: ({ children }) => <h1 className="text-lg font-bold my-2">{children}</h1>,
-                  h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
-                  h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
-                  pre: ({ children }) => (
-                    <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-sm sm:text-xs leading-normal">
-                      {children}
-                    </pre>
-                  ),
-                  code: ({ children, className }) => {
-                    const isInline = !className
-                    return isInline ? (
-                      <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-sm sm:text-xs border border-theme-border/30">
-                        {children}
-                      </code>
-                    ) : (
-                      <code className={className}>{children}</code>
-                    )
-                  },
-                  a: ({ children, href }) => (
-                    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
-                      {children}
-                    </a>
-                  ),
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
-              {/* Blinking cursor during active stream */}
-              {isStreaming && (
-                <span className="inline-block w-0.5 h-3.5 bg-theme-text-muted opacity-75 animate-pulse ml-px align-middle" aria-hidden />
+              {/* Agent activity renders inline, above the reply, inside the
+                  same bubble (Phase A / A.8 — "Claude-app style", locked with
+                  the user 2026-07-13: one continuous block, not a separate
+                  card underneath). */}
+              {message.trace && message.trace.length > 0 && (
+                <TraceView trace={message.trace} isStreaming={isStreaming} />
+              )}
+              {message.content === '' && isStreaming ? (
+                /* Thinking indicator: shown before first token arrives */
+                <span className="flex items-center gap-1.5 py-0.5" aria-label="Thinking">
+                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" />
+                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.2s' }} />
+                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.4s' }} />
+                </span>
+              ) : (
+                <>
+                  <ReactMarkdown
+                    components={{
+                      ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
+                      ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
+                      li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
+                      p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0 leading-relaxed">{children}</p>,
+                      h1: ({ children }) => <h1 className="text-lg font-bold my-2">{children}</h1>,
+                      h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
+                      h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
+                      pre: ({ children }) => (
+                        <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-sm sm:text-xs leading-normal">
+                          {children}
+                        </pre>
+                      ),
+                      code: ({ children, className }) => {
+                        const isInline = !className
+                        return isInline ? (
+                          <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-sm sm:text-xs border border-theme-border/30">
+                            {children}
+                          </code>
+                        ) : (
+                          <code className={className}>{children}</code>
+                        )
+                      },
+                      a: ({ children, href }) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {message.content}
+                  </ReactMarkdown>
+                  {/* Blinking cursor during active stream */}
+                  {isStreaming && (
+                    <span className="inline-block w-0.5 h-3.5 bg-theme-text-muted opacity-75 animate-pulse ml-px align-middle" aria-hidden />
+                  )}
+                </>
               )}
             </>
           )}
@@ -132,18 +143,14 @@ export default function MessageBubble({ message, isStreaming }: Props) {
           <CitationChips citations={message.citations} />
         )}
 
-        {/* Metadata row + agent trace (Phase A / A.8 — extracted to TraceView) */}
-        {!isUser && (message.viaProvider || (message.trace && message.trace.length > 0)) && (
-          <div className="mt-1.5 flex flex-col w-full px-2 relative z-10">
-            {message.viaProvider && (
-              <span className="inline-flex items-center self-start px-1.5 py-0.5 rounded-full
-                               bg-theme-surface border border-theme-border/40
-                               text-[10px] text-theme-text-muted font-medium leading-none select-none">
-                via {formatProviderName(message.viaProvider)}
-              </span>
-            )}
-            <TraceView trace={message.trace ?? []} isStreaming={isStreaming} />
-          </div>
+        {/* Provider badge — the agent trace itself now renders inline inside
+            the bubble, above the reply (Phase A / A.8). */}
+        {!isUser && message.viaProvider && (
+          <span className="mt-1.5 ml-2 inline-flex items-center self-start px-1.5 py-0.5 rounded-full
+                           bg-theme-surface border border-theme-border/40
+                           text-[10px] text-theme-text-muted font-medium leading-none select-none">
+            via {formatProviderName(message.viaProvider)}
+          </span>
         )}
       </div>
     </div>

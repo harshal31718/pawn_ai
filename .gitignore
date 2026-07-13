@@ -14,6 +14,8 @@ keys/
 backend/data/conversations/
 backend/data/memory/
 backend/data/checkpoints.db
+backend/data/checkpoints.db-shm
+backend/data/checkpoints.db-wal
 
 # python
 __pycache__/

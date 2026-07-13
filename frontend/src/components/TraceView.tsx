@@ -169,7 +169,7 @@ export default function TraceView({ trace, isStreaming }: Props) {
   const groups = groupByAgent(trace)
 
   return (
-    <div className="mt-1 flex flex-col w-full text-[11px] text-theme-text-muted">
+    <div className="mb-2 flex flex-col w-full text-[11px] text-theme-text-muted">
       <button
         type="button"
         onClick={() => setIsOpen((o) => !o)}
