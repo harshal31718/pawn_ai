@@ -13,7 +13,7 @@ import { mid } from '../store/ids'
 import type { LayoutContext } from './Layout'
 
 export default function ChatPage() {
-  const { id: urlConvId } = useParams<{ id: string }>()
+  const { id: urlConvId, projectId: urlProjectId } = useParams<{ id: string; projectId?: string }>()
   const navigate = useNavigate()
   const { isSidebarOpen, setIsSidebarOpen, store } = useOutletContext<LayoutContext>()
   const {
@@ -69,14 +69,30 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlConvId])
 
-  // Sync store → URL: when the active conversation changes in the store
-  // (e.g. user clicks a sidebar item), update the URL to match.
+  // Sync store → URL: when the active conversation changes in the store (e.g.
+  // user clicks a sidebar item, or a chat's scope changes), update the URL to
+  // match — routing to /project/:projectId/chat/:id for chats inside a
+  // project, /chat/:id for standalone ones.
   useEffect(() => {
-    if (activeConvId && activeConvId !== urlConvId) {
-      navigate(`/chat/${activeConvId}`, { replace: true })
-    }
+    if (!activeConvId) return
+    const conv = conversations.find((c) => c.id === activeConvId)
+    // An unpromoted draft isn't in `conversations` yet and has no known scope —
+    // trust whatever URL got us here (the New Chat / New-chat-in-project
+    // handlers already navigate explicitly) rather than bouncing back to
+    // /chat/:id before the first send resolves its real scope.
+    if (!conv) return
+    const targetPath = conv.project_id
+      ? `/project/${conv.project_id}/chat/${activeConvId}`
+      : `/chat/${activeConvId}`
+    const currentPath =
+      activeConvId === urlConvId
+        ? urlProjectId
+          ? `/project/${urlProjectId}/chat/${urlConvId}`
+          : `/chat/${urlConvId}`
+        : null
+    if (targetPath !== currentPath) navigate(targetPath, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConvId])
+  }, [activeConvId, conversations])
 
   // When the active conversation changes, sync the model picker to its model
   // and drop any attached document.

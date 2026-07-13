@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.storage.drive import DriveStorage
+from app.storage import projects_drive
 from app.storage.projects_drive import _projects_folder
 
 # Attribute name used to memoize "already checked for legacy layout" directly
@@ -178,6 +179,28 @@ def list_conversations(drive: DriveStorage) -> List[Dict[str, Any]]:
                 results.append(meta)
             except (json.JSONDecodeError, Exception):
                 pass
+    results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    return results
+
+
+def list_all_conversations(drive: DriveStorage) -> List[Dict[str, Any]]:
+    """Every chat, standalone and project-scoped, each meta tagged with its
+    current `project_id` (None for standalone) — derived purely from folder
+    placement, the same walk resolve_conv_scope uses. `GET /conversations`
+    (routes/conversations.py) uses this so the sidebar's Projects section
+    (Phase M, M.6) can render each project's chat list without a second
+    per-project round trip."""
+    results = list_conversations(drive)
+    for meta in results:
+        meta["project_id"] = None
+
+    projects_folder = _projects_folder(drive)
+    for project in drive.list_subfolders(projects_folder):
+        project_id = project["name"]  # project folders are named `<id>` only
+        for meta in projects_drive.list_project_chats(drive, project_id):
+            meta["project_id"] = project_id
+            results.append(meta)
+
     results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return results
 

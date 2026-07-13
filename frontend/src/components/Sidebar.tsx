@@ -1,17 +1,27 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { ConversationMeta } from '../api/client'
+import type { CachedConversation, CachedProject } from '../types'
+import { clearMemory, rebuildMemory } from '../api/client'
+import ConfirmDialog from './ConfirmDialog'
+import KebabMenu from './KebabMenu'
+import ProjectSection from './ProjectSection'
 import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon } from './icons'
 
 interface Props {
-  conversations: ConversationMeta[]
+  conversations: CachedConversation[]
+  projects: CachedProject[]
   activeId: string | null
   pendingIds?: Set<string>
   syncError?: string | null
   onSelect: (id: string) => void
-  onCreate: () => string
+  onCreate: (targetProjectId?: string) => string
   onDelete: (id: string) => void
   onRename: (id: string, newTitle: string) => void
+  onCreateProject: () => void
+  onRenameProject: (id: string, name: string) => void
+  onDeleteProject: (id: string) => void
+  onMoveChatToProject: (convId: string, projectId: string) => void
+  onRemoveChatFromProject: (convId: string) => void
   isOpen: boolean
   onClose: () => void
   onOpen: () => void
@@ -19,8 +29,15 @@ interface Props {
   email?: string
 }
 
+type PendingDialog =
+  | { kind: 'addToProject'; convId: string; convTitle: string; projectId: string; projectName: string }
+  | { kind: 'removeFromProject'; convId: string; convTitle: string; projectName: string }
+  | { kind: 'deleteProject'; project: CachedProject; chats: CachedConversation[] }
+  | { kind: 'clearMemory'; scopeType: 'chat' | 'project'; scopeId: string; label: string }
+
 export default function Sidebar({
   conversations,
+  projects,
   activeId,
   pendingIds,
   syncError,
@@ -28,6 +45,11 @@ export default function Sidebar({
   onCreate,
   onDelete,
   onRename,
+  onCreateProject,
+  onRenameProject,
+  onDeleteProject,
+  onMoveChatToProject,
+  onRemoveChatFromProject,
   isOpen,
   onClose,
   onOpen,
@@ -39,13 +61,23 @@ export default function Sidebar({
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [dialog, setDialog] = useState<PendingDialog | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  const standaloneConversations = conversations.filter((c) => !c.project_id)
   const filteredConversations = query.trim()
-    ? conversations.filter((c) =>
+    ? standaloneConversations.filter((c) =>
         (c.title || '').toLowerCase().includes(query.trim().toLowerCase())
       )
-    : conversations
+    : standaloneConversations
+
+  function handleRequestClearMemory(scopeType: 'chat' | 'project', scopeId: string, label: string) {
+    setDialog({ kind: 'clearMemory', scopeType, scopeId, label })
+  }
+
+  function handleRebuildMemory(scopeType: 'chat' | 'project', scopeId: string) {
+    rebuildMemory(scopeType, scopeId).catch((err) => alert(`Failed to rebuild memory: ${err.message}`))
+  }
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -54,7 +86,7 @@ export default function Sidebar({
     }
   }, [editingId])
 
-  function handleStartRename(conv: ConversationMeta, e: React.MouseEvent) {
+  function handleStartRename(conv: CachedConversation, e: React.MouseEvent) {
     e.stopPropagation()
     setEditingId(conv.id)
     setEditValue(conv.title)
@@ -84,6 +116,12 @@ export default function Sidebar({
     onClose()
   }
 
+  const handleNewChatInProject = (projectId: string) => {
+    const newId = onCreate(projectId)
+    navigate(`/project/${projectId}/chat/${newId}`)
+    onClose()
+  }
+
   const handleImageLab = () => {
     navigate('/imagelab')
     onClose()
@@ -94,9 +132,42 @@ export default function Sidebar({
     navigate(`/chat/${id}`)
   }
 
+  const handleSelectProjectChat = (id: string, projectId: string) => {
+    onSelect(id)
+    navigate(`/project/${projectId}/chat/${id}`)
+  }
+
   const handleOpenSettings = () => {
     navigate('/settings')
     onClose()
+  }
+
+  function handleRequestRemoveChatFromProject(convId: string, convTitle: string, projectName: string) {
+    setDialog({ kind: 'removeFromProject', convId, convTitle, projectName })
+  }
+
+  function handleRequestDeleteProject(project: CachedProject, chats: CachedConversation[]) {
+    setDialog({ kind: 'deleteProject', project, chats })
+  }
+
+  function handleAddToProject(convId: string, convTitle: string, projectId: string, projectName: string) {
+    setDialog({ kind: 'addToProject', convId, convTitle, projectId, projectName })
+  }
+
+  function handleConfirmDialog() {
+    if (!dialog) return
+    if (dialog.kind === 'addToProject') {
+      onMoveChatToProject(dialog.convId, dialog.projectId)
+    } else if (dialog.kind === 'removeFromProject') {
+      onRemoveChatFromProject(dialog.convId)
+    } else if (dialog.kind === 'deleteProject') {
+      onDeleteProject(dialog.project.id)
+    } else {
+      clearMemory(dialog.scopeType, dialog.scopeId).catch((err) =>
+        alert(`Failed to clear memory: ${err.message}`),
+      )
+    }
+    setDialog(null)
   }
 
   return (
@@ -181,6 +252,26 @@ export default function Sidebar({
                 </div>
               </div>
             )}
+
+            {/* Projects section — above the flat chat list */}
+            <ProjectSection
+              projects={projects}
+              conversations={conversations}
+              activeId={activeId}
+              pendingIds={pendingIds}
+              onSelectChat={(id) => {
+                const projectId = conversations.find((c) => c.id === id)?.project_id
+                if (projectId) handleSelectProjectChat(id, projectId)
+                else handleSelectConversation(id)
+              }}
+              onCreateProject={onCreateProject}
+              onNewChatInProject={handleNewChatInProject}
+              onRenameProject={onRenameProject}
+              onRequestDeleteProject={handleRequestDeleteProject}
+              onRequestRemoveChatFromProject={handleRequestRemoveChatFromProject}
+              onClearMemory={handleRequestClearMemory}
+              onRebuildMemory={handleRebuildMemory}
+            />
 
             {/* Search Option */}
             <div className="px-3 pb-2 shrink-0">
@@ -314,6 +405,25 @@ export default function Sidebar({
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
                               </svg>
                             </button>
+                            <KebabMenu
+                              title="More options"
+                              items={[
+                                {
+                                  label: 'Add to project',
+                                  submenu: projects.map((p) => ({
+                                    label: p.name,
+                                    onClick: () => handleAddToProject(conv.id, conv.title, p.id, p.name),
+                                  })),
+                                },
+                                {
+                                  label: 'Memory',
+                                  submenu: [
+                                    { label: 'Clear memory', onClick: () => handleRequestClearMemory('chat', conv.id, conv.title) },
+                                    { label: 'Rebuild memory index', onClick: () => handleRebuildMemory('chat', conv.id) },
+                                  ],
+                                },
+                              ]}
+                            />
                           </div>
                         )
                       )}
@@ -446,6 +556,80 @@ export default function Sidebar({
           onClick={() => setDeleteConfirmId(null)}
         />
       )}
+
+      {/* Blocking confirm dialogs — add-to-project / remove-from-project / delete-project */}
+      <ConfirmDialog
+        open={dialog?.kind === 'addToProject'}
+        title="Add to project"
+        message={
+          dialog?.kind === 'addToProject' ? (
+            <>
+              This chat's history becomes part of <strong>{dialog.projectName}</strong>'s shared memory
+              — other chats in the project can use it.
+            </>
+          ) : null
+        }
+        confirmLabel="Add"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
+      <ConfirmDialog
+        open={dialog?.kind === 'removeFromProject'}
+        title="Remove from project"
+        message={
+          dialog?.kind === 'removeFromProject' ? (
+            <>
+              This chat's memory leaves <strong>{dialog.projectName}</strong>. Note: anything other
+              chats already wrote using this chat's info stays in those chats.
+            </>
+          ) : null
+        }
+        confirmLabel="Remove"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
+      <ConfirmDialog
+        open={dialog?.kind === 'deleteProject'}
+        title="Delete project"
+        destructive
+        message={
+          dialog?.kind === 'deleteProject' ? (
+            <>
+              <p className="mb-2">
+                Deletes the project <strong>and all {dialog.chats.length} chat{dialog.chats.length === 1 ? '' : 's'} inside it</strong>,
+                including their memory. This cannot be undone.
+              </p>
+              {dialog.chats.length > 0 && (
+                <ul className="list-disc pl-4 space-y-0.5 max-h-32 overflow-y-auto">
+                  {dialog.chats.map((c) => (
+                    <li key={c.id} className="truncate">{c.title}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : null
+        }
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
+      <ConfirmDialog
+        open={dialog?.kind === 'clearMemory'}
+        title="Clear memory"
+        destructive
+        message={
+          dialog?.kind === 'clearMemory' ? (
+            <>
+              Deletes all indexed memory for <strong>{dialog.label}</strong>
+              {dialog.scopeType === 'project' ? ' and every chat inside it' : ''}, both the search index
+              and the underlying record it rebuilds from. This cannot be undone.
+            </>
+          ) : null
+        }
+        confirmLabel="Clear"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
     </>
   )
 }

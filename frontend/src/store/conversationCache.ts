@@ -4,8 +4,8 @@
  *  ceiling) to stay under the ~5 MB localStorage quota.
  */
 
-import type { CachedConversation, PersistedMsg } from '../types'
-import type { ConversationMeta } from '../api/client'
+import type { CachedConversation, CachedProject, PersistedMsg } from '../types'
+import type { ConversationMeta, Project } from '../api/client'
 
 const CACHE_VERSION = 1
 const MAX_MSG_CONVS = 30          // keep message arrays for the N most-recent convs
@@ -15,6 +15,7 @@ const SAVE_DEBOUNCE_MS = 300
 export interface CacheShape {
   version: number
   conversations: CachedConversation[]
+  projects: CachedProject[]
   messages: Record<string, PersistedMsg[]>
   lru: string[]                   // convIds, most-recently-touched first
 }
@@ -24,7 +25,7 @@ function keyFor(userId: string | null): string {
 }
 
 function emptyCache(): CacheShape {
-  return { version: CACHE_VERSION, conversations: [], messages: {}, lru: [] }
+  return { version: CACHE_VERSION, conversations: [], projects: [], messages: {}, lru: [] }
 }
 
 /** Synchronous, corruption-safe load. Any parse error or version mismatch yields a
@@ -46,6 +47,9 @@ export function loadCache(userId: string | null): CacheShape {
     return {
       version: CACHE_VERSION,
       conversations: parsed.conversations as CachedConversation[],
+      // `projects` is new (Phase M) — a pre-existing cache written before this
+      // field existed simply has none yet, not a corrupt cache.
+      projects: Array.isArray(parsed.projects) ? (parsed.projects as CachedProject[]) : [],
       messages: parsed.messages as Record<string, PersistedMsg[]>,
       lru: Array.isArray(parsed.lru) ? (parsed.lru as string[]) : [],
     }
@@ -102,6 +106,7 @@ export function flushPending(): void {
     const data: CacheShape = {
       version: CACHE_VERSION,
       conversations: cache.conversations,
+      projects: cache.projects,
       messages,
       lru,
     }
@@ -150,6 +155,7 @@ export function mergeServerMeta(
       message_count: s.message_count,
       updated_at: s.updated_at,
       model_id: s.model_id || l.model_id,
+      project_id: s.project_id ?? l.project_id,
       _synced: true,
     })
   }
@@ -161,5 +167,44 @@ export function mergeServerMeta(
   }
 
   result.sort((a, b) => (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0))
+  return result
+}
+
+/** Merge server project metadata into the local list — same reconciliation
+ *  shape as `mergeServerMeta` (adopt server name unless locally renamed more
+ *  recently; keep unsynced local-only projects; drop synced ones the server
+ *  no longer has; add new server projects). */
+export function mergeServerProjects(
+  local: CachedProject[],
+  server: Project[],
+): CachedProject[] {
+  const serverById = new Map(server.map((s) => [s.id, s]))
+  const localIds = new Set(local.map((l) => l.id))
+  const result: CachedProject[] = []
+
+  for (const l of local) {
+    const s = serverById.get(l.id)
+    if (!s) {
+      if (!l._synced) result.push(l)
+      continue
+    }
+    const serverUpdated = Date.parse(s.updated_at ?? '') || 0
+    const adoptName = l.name === 'New Project' || serverUpdated > l._localUpdatedAt
+    result.push({
+      ...l,
+      name: adoptName ? s.name : l.name,
+      chat_count: s.chat_count,
+      updated_at: s.updated_at ?? l.updated_at,
+      _synced: true,
+    })
+  }
+
+  for (const s of server) {
+    if (!localIds.has(s.id)) {
+      result.push({ ...s, _synced: true, _localUpdatedAt: 0 })
+    }
+  }
+
+  result.sort((a, b) => (Date.parse(b.updated_at ?? '') || 0) - (Date.parse(a.updated_at ?? '') || 0))
   return result
 }

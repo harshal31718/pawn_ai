@@ -459,6 +459,7 @@ export interface ConversationMeta {
   updated_at: string
   model_id: string
   message_count: number
+  project_id?: string | null
 }
 
 export interface ConversationDetail {
@@ -515,6 +516,100 @@ export async function updateConversationTitle(convId: string, title: string): Pr
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
+}
+
+// ─── Projects (Phase M — memory scoping) ───────────────────────────────────
+
+export interface Project {
+  id: string
+  name: string
+  created_at: string
+  updated_at?: string
+  chat_count?: number
+}
+
+export async function getProjects(): Promise<Project[]> {
+  const res = await fetch(`${BASE_URL}/projects`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function createProject(name?: string, id?: string): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      ...(id ? { id } : {}),
+      ...(name ? { name } : {}),
+    }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function renameProject(projectId: string, name: string): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ name }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (res.status === 404) return
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function moveChatToProject(projectId: string, convId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}/chats/${convId}`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function removeChatFromProject(projectId: string, convId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}/chats/${convId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (res.status === 404) return
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+// ─── Memory management (Phase M — memory scoping) ──────────────────────────
+
+export async function rebuildMemory(scopeType: 'chat' | 'project', scopeId: string): Promise<{ chunks_indexed: number }> {
+  const res = await fetch(`${BASE_URL}/memory/rebuild`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ scope_type: scopeType, scope_id: scopeId }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function clearMemory(scopeType: 'chat' | 'project', scopeId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/memory/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ scope_type: scopeType, scope_id: scopeId }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
 }
 
 export interface RegistryModel {

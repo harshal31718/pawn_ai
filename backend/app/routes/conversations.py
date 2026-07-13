@@ -28,7 +28,7 @@ class ConversationUpdate(BaseModel):
 #     executes on the event loop) ───────────────────────────────────────────
 
 def _list(drive, user_id):
-    return drive_storage.list_conversations(drive)
+    return drive_storage.list_all_conversations(drive)
 
 
 def _create(drive, user_id, conv_id, title, model_id):

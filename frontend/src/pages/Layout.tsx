@@ -16,6 +16,7 @@ export default function Layout() {
     <div className="flex h-screen w-screen bg-theme-bg text-theme-text overflow-hidden font-sans transition-colors duration-200">
       <Sidebar
         conversations={store.conversations}
+        projects={store.projects}
         activeId={store.activeConvId}
         pendingIds={store.pendingIds}
         syncError={store.syncError}
@@ -23,6 +24,11 @@ export default function Layout() {
         onCreate={store.createConversation}
         onDelete={store.deleteConversation}
         onRename={store.renameConversation}
+        onCreateProject={() => store.createProject()}
+        onRenameProject={store.renameProject}
+        onDeleteProject={store.deleteProject}
+        onMoveChatToProject={store.moveChatToProject}
+        onRemoveChatFromProject={store.removeChatFromProject}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onOpen={() => setIsSidebarOpen(true)}
