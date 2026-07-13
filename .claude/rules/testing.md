@@ -33,3 +33,6 @@
 - A cross-stack gate is required only when the step changed a shared contract
   surface: SSE event shapes (`events.py` / `client.ts`), request/response models,
   or route paths.
+- Full-suite runs use `pytest -n auto` (pytest-xdist) inside the backend container:
+  `docker compose exec backend pytest -n auto`. Scoped single-file runs during
+  iteration don't need `-n`.
