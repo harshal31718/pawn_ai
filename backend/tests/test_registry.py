@@ -38,11 +38,15 @@ def test_registry_seeding_and_loading():
     
     # Internal models check
     internal_fast = registry.internal_models("fast")
-    # glm-4.7 and gemini-2.5-flash-lite are visible to user but wait, are they visibility=user or internal?
-    # Let's check: text-embedding-004 is internal.
+    # Embedding models are internal. Phase M (memory scoping) swapped
+    # text-embedding-004 (shut down by Google 2026-01-14) for gemini-embedding-2
+    # -- the old entry stays in the registry deactivated, not deleted, so both
+    # show up here; only the new one is active.
     internal_embed = [m for m in registry._models.values() if m.visibility == "internal"]
-    assert len(internal_embed) == 1
-    assert internal_embed[0].id == "text-embedding-004"
+    assert len(internal_embed) == 2
+    active_embed = [m for m in internal_embed if m.active]
+    assert len(active_embed) == 1
+    assert active_embed[0].id == "gemini-embedding-2"
     
     # Endpoints priority sort check. Registry refresh 2026-07-13 deactivated
     # llama-3.3-70b's cerebras (deprecated), github (platform retiring), and

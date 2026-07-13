@@ -59,7 +59,7 @@ create table if not exists memory_chunks (
   doc_id     text,                       -- set only when kind='document'
   msg_index  int,
   text       text not null,
-  embedding  vector(768),               -- text-embedding-004 dimensionality
+  embedding  vector(768),               -- gemini-embedding-2, output_dimensionality=768
   fts_doc    tsvector generated always as (to_tsvector('english', text)) stored,
   created_at timestamptz default now(),
   unique (user_id, chunk_id)

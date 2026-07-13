@@ -113,6 +113,17 @@
     "capability_level": null,
     "capability_tags": [],
     "context_window": 2048,
+    "active": false
+  },
+  {
+    "id": "gemini-embedding-2",
+    "display_name": "Gemini Embedding 2",
+    "type": "embedding",
+    "visibility": "internal",
+    "tier": "free",
+    "capability_level": null,
+    "capability_tags": [],
+    "context_window": 8192,
     "active": true
   }
 ]

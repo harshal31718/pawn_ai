@@ -206,7 +206,22 @@
     "rpd_limit": null,
     "tpm_limit": null,
     "tpd_limit": null,
-    "active": true,
+    "active": false,
     "last_verified": "2026-06-15"
+  },
+  {
+    "id": "ep-gemini-embedding-2-google",
+    "model_id": "gemini-embedding-2",
+    "provider": "google",
+    "provider_model_id": "gemini-embedding-2",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "secret": "gemini_api_key",
+    "priority": 1,
+    "rpm_limit": 1500,
+    "rpd_limit": null,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-13"
   }
 ]
