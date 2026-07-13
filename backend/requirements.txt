@@ -5,6 +5,7 @@ httpx
 httpx2
 pytest
 pytest-asyncio
+pytest-xdist  # parallel test runs: pytest -n auto (full-suite gate)
 pdfplumber
 python-multipart
 numpy

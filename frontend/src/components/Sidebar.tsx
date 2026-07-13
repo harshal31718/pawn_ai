@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import type { CachedConversation, CachedProject } from '../types'
 import { clearMemory, rebuildMemory } from '../api/client'
 import ConfirmDialog from './ConfirmDialog'
@@ -57,6 +57,9 @@ export default function Sidebar({
   email,
 }: Props) {
   const navigate = useNavigate()
+  const location = useLocation()
+  // /project/:projectId or /project/:projectId/chat/:id → highlight that project's row
+  const activeProjectId = location.pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
@@ -135,6 +138,10 @@ export default function Sidebar({
   const handleSelectProjectChat = (id: string, projectId: string) => {
     onSelect(id)
     navigate(`/project/${projectId}/chat/${id}`)
+  }
+
+  const handleOpenProject = (projectId: string) => {
+    navigate(`/project/${projectId}`)
   }
 
   const handleOpenSettings = () => {
@@ -258,7 +265,9 @@ export default function Sidebar({
               projects={projects}
               conversations={conversations}
               activeId={activeId}
+              activeProjectId={activeProjectId}
               pendingIds={pendingIds}
+              onOpenProject={handleOpenProject}
               onSelectChat={(id) => {
                 const projectId = conversations.find((c) => c.id === id)?.project_id
                 if (projectId) handleSelectProjectChat(id, projectId)

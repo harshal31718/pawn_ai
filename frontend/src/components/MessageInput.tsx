@@ -13,6 +13,10 @@ interface Props {
   selectedProvider?: string
   onChangeProvider?: (id: string) => void
   models?: RegistryModel[]
+  /** Attached document chip, rendered INSIDE the input island (2026-07-13 UX
+   *  fix: the chip used to float loose above the input over the canvas). */
+  attachment?: { name: string } | null
+  onRemoveAttachment?: () => void
 }
 
 export default function MessageInput({
@@ -26,6 +30,8 @@ export default function MessageInput({
   selectedProvider = '',
   onChangeProvider,
   models = [],
+  attachment = null,
+  onRemoveAttachment,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -105,10 +111,35 @@ export default function MessageInput({
         w-full bg-theme-surface transition-all duration-300
         flex flex-wrap gap-2
         ${disabled ? 'border border-theme-border/40 opacity-75' : 'border border-theme-border'}
-        ${isMultiLine
+        ${isMultiLine || attachment
           ? 'items-end p-3 rounded-3xl shadow-lg'
           : 'items-center px-3 py-1.5 rounded-full shadow-md'}
       `}>
+        {/* 0. Attached document chip — lives inside the island, above the textarea */}
+        {attachment && (
+          <div className="w-full order-0 flex">
+            <div className="inline-flex items-center gap-1.5 bg-theme-bg border border-theme-border/60 rounded-lg px-2 py-1 text-xs text-theme-text select-none animate-in fade-in zoom-in duration-200">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted shrink-0">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+              </svg>
+              <span className="font-medium truncate max-w-[200px]">{attachment.name}</span>
+              {onRemoveAttachment && (
+                <button
+                  type="button"
+                  onClick={onRemoveAttachment}
+                  disabled={disabled}
+                  className="ml-1 text-theme-text-muted hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
+                  title="Remove attachment"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+                    <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* 1. The Textarea: Always mounted to preserve keyboard focus */}
         <textarea
           ref={textareaRef}

@@ -8,7 +8,9 @@ interface Props {
   projects: CachedProject[]
   conversations: CachedConversation[]
   activeId: string | null
+  activeProjectId?: string | null
   pendingIds?: Set<string>
+  onOpenProject: (projectId: string) => void
   onSelectChat: (id: string) => void
   onCreateProject: (name: string) => void
   onNewChatInProject: (projectId: string) => void
@@ -26,7 +28,9 @@ export default function ProjectSection({
   projects,
   conversations,
   activeId,
+  activeProjectId,
   pendingIds,
+  onOpenProject,
   onSelectChat,
   onCreateProject,
   onNewChatInProject,
@@ -84,9 +88,11 @@ export default function ProjectSection({
               project={project}
               chats={conversations.filter((c) => c.project_id === project.id)}
               activeId={activeId}
+              activeProjectId={activeProjectId}
               pendingIds={pendingIds}
               expanded={expandedIds.has(project.id)}
               onToggleExpand={() => toggleExpand(project.id)}
+              onOpenProject={onOpenProject}
               onSelectChat={onSelectChat}
               onNewChatInProject={onNewChatInProject}
               onRenameProject={onRenameProject}

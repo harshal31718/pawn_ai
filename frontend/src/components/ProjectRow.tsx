@@ -7,9 +7,11 @@ interface Props {
   project: CachedProject
   chats: CachedConversation[]
   activeId: string | null
+  activeProjectId?: string | null
   pendingIds?: Set<string>
   expanded: boolean
   onToggleExpand: () => void
+  onOpenProject: (projectId: string) => void
   onSelectChat: (id: string) => void
   onNewChatInProject: (projectId: string) => void
   onRenameProject: (id: string, name: string) => void
@@ -25,9 +27,11 @@ export default function ProjectRow({
   project,
   chats,
   activeId,
+  activeProjectId,
   pendingIds,
   expanded,
   onToggleExpand,
+  onOpenProject,
   onSelectChat,
   onNewChatInProject,
   onRenameProject,
@@ -61,10 +65,24 @@ export default function ProjectRow({
   return (
     <div className="select-none">
       <div
-        onClick={onToggleExpand}
-        className="group relative flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer text-theme-text hover:bg-theme-surface-hover transition-all"
+        onClick={() => onOpenProject(project.id)}
+        className={`group relative flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+          activeProjectId === project.id
+            ? 'bg-theme-brand text-theme-brand-text shadow-sm'
+            : 'text-theme-text hover:bg-theme-surface-hover'
+        }`}
       >
-        <ChevronRightIcon className={`w-3 h-3 shrink-0 text-theme-text-muted transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        <button
+          type="button"
+          title={expanded ? 'Collapse' : 'Expand'}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleExpand()
+          }}
+          className="p-0.5 -m-0.5 rounded hover:bg-theme-surface shrink-0"
+        >
+          <ChevronRightIcon className={`w-3 h-3 text-theme-text-muted transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </button>
         <FolderIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
         {isEditing ? (
           <input

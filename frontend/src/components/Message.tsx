@@ -1,5 +1,6 @@
 import { useState, useRef, useLayoutEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { Message } from '../types'
 import TraceView from './TraceView'
 import CitationChips from './CitationChips'
@@ -90,14 +91,38 @@ export default function MessageBubble({ message, isStreaming }: Props) {
               {message.content === '' && isStreaming ? (
                 /* Thinking indicator: shown before first token arrives */
                 <span className="flex items-center gap-1.5 py-0.5" aria-label="Thinking">
-                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" />
-                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.2s' }} />
-                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-text-muted" style={{ animationDelay: '0.4s' }} />
+                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-ai-bubble-text/60" />
+                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-ai-bubble-text/60" style={{ animationDelay: '0.2s' }} />
+                  <span className="thinking-dot w-1.5 h-1.5 rounded-full bg-theme-ai-bubble-text/60" style={{ animationDelay: '0.4s' }} />
                 </span>
               ) : (
                 <>
                   <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
                     components={{
+                      table: ({ children }) => (
+                        <div className="overflow-x-auto my-2 rounded-lg border border-theme-border/40">
+                          <table className="w-full text-sm sm:text-xs border-collapse">{children}</table>
+                        </div>
+                      ),
+                      thead: ({ children }) => (
+                        <thead className="bg-theme-surface-hover/80 text-theme-text">{children}</thead>
+                      ),
+                      th: ({ children }) => (
+                        <th className="px-3 py-1.5 text-left font-semibold border-b border-theme-border/40 whitespace-nowrap">
+                          {children}
+                        </th>
+                      ),
+                      td: ({ children }) => (
+                        <td className="px-3 py-1.5 border-b border-theme-border/20 align-top">{children}</td>
+                      ),
+                      tr: ({ children }) => <tr className="even:bg-theme-surface-hover/30">{children}</tr>,
+                      blockquote: ({ children }) => (
+                        <blockquote className="border-l-2 border-theme-border pl-3 my-2 text-theme-text-muted italic">
+                          {children}
+                        </blockquote>
+                      ),
+                      hr: () => <hr className="my-3 border-theme-border/40" />,
                       ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
                       ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
                       li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
@@ -131,7 +156,7 @@ export default function MessageBubble({ message, isStreaming }: Props) {
                   </ReactMarkdown>
                   {/* Blinking cursor during active stream */}
                   {isStreaming && (
-                    <span className="inline-block w-0.5 h-3.5 bg-theme-text-muted opacity-75 animate-pulse ml-px align-middle" aria-hidden />
+                    <span className="inline-block w-0.5 h-3.5 bg-theme-ai-bubble-text opacity-75 animate-pulse ml-px align-middle" aria-hidden />
                   )}
                 </>
               )}
