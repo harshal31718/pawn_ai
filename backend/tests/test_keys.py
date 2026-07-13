@@ -1,8 +1,8 @@
 """Tests for BYOK /keys routes and resolver per-user key lookup.
 
 The Postgres-backed key_store is mocked — these tests verify routing, validation,
-that key values are never returned to the client, and that the resolver prefers a
-user's BYOK key over the shared secret.
+that key values are never returned to the client, and that the resolver only
+ever uses a user's own BYOK key (no shared/fallback key of any kind).
 """
 
 from unittest.mock import patch
@@ -58,15 +58,15 @@ def test_delete_key(client):
     mock_del.assert_called_once_with("test-user-id", "google")
 
 
-def test_resolver_prefers_user_byok_key():
-    """resolver.pick should use the user's BYOK key over the shared secret."""
+def test_resolver_uses_user_byok_key():
+    """resolver.pick should key endpoints with the user's BYOK key."""
     from app.registry.loader import load_registry
     from app.core.rate_limiter import EndpointRateLimiter
     from app.resolver.resolver import Resolver
 
     registry = load_registry()
     rl = EndpointRateLimiter()
-    resolver = Resolver(registry, rl, {"gemini_api_key": "SHARED-KEY"})
+    resolver = Resolver(registry, rl)
 
     with patch("app.core.key_store.get_key", return_value="USER-BYOK-KEY") as mock_get:
         candidates = resolver.pick("google", user_id="user-1")
@@ -75,12 +75,11 @@ def test_resolver_prefers_user_byok_key():
     assert candidates
     all_headers = " ".join(str(h) for (_, _, h, _, _) in candidates)
     assert "USER-BYOK-KEY" in all_headers
-    assert "SHARED-KEY" not in all_headers
     mock_get.assert_called()
 
 
 def test_resolver_raises_when_no_byok_key():
-    """If the user has no BYOK key, resolver.pick raises (no shared-secret fallback)."""
+    """If the user has no BYOK key, resolver.pick raises (no fallback of any kind)."""
     from app.registry.loader import load_registry
     from app.core.rate_limiter import EndpointRateLimiter
     from app.resolver.resolver import Resolver
@@ -88,7 +87,7 @@ def test_resolver_raises_when_no_byok_key():
 
     registry = load_registry()
     rl = EndpointRateLimiter()
-    resolver = Resolver(registry, rl, {"gemini_api_key": "SHARED-KEY"})
+    resolver = Resolver(registry, rl)
 
     with patch("app.core.key_store.get_key", return_value=None):
         with pytest.raises(NoEndpointError):

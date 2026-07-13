@@ -6,16 +6,15 @@ from app.core.rate_limiter import EndpointRateLimiter
 from app.core.llm_core import _detect_provider, _provider_headers
 
 class Resolver:
-    def __init__(self, registry: Registry, rate_limiter: EndpointRateLimiter, secrets: Dict[str, str]):
+    def __init__(self, registry: Registry, rate_limiter: EndpointRateLimiter):
         self._registry = registry
         self._rate_limiter = rate_limiter
-        self._secrets = secrets
 
     def _resolve_key(self, ep, user_id: Optional[str]) -> str:
         """Resolve the API key for an endpoint from the user's BYOK keys (Settings).
 
         Only per-user keys configured in Settings are used — there is no shared
-        Docker-secret fallback. Returns "" when the user has no key for the provider.
+        fallback of any kind. Returns "" when the user has no key for the provider.
         """
         if not user_id:
             return ""

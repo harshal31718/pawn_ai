@@ -19,7 +19,7 @@ from app.resolver.resolver import Resolver
 
 
 def _ctx():
-    resolver = Resolver(load_registry(), EndpointRateLimiter(), secrets={})
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
     return ToolContext(
         user_id="u1", scope_type=None, scope_id=None,
         resolver=resolver, rate_limiter=resolver._rate_limiter,

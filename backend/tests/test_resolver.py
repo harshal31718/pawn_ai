@@ -21,7 +21,7 @@ from app.exceptions import NoEndpointError
 
 def _resolver():
     registry = load_registry()
-    return Resolver(registry, EndpointRateLimiter(), secrets={})
+    return Resolver(registry, EndpointRateLimiter())
 
 
 def _keys(*allowed):

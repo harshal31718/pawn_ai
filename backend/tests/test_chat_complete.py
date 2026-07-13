@@ -112,7 +112,7 @@ async def test_llm_core_chat_complete_raises_on_429():
 
 @pytest.mark.asyncio
 async def test_normalize_chat_complete_returns_message():
-    resolver = Resolver(load_registry(), EndpointRateLimiter(), secrets={})
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
 
     async def fake_complete(url, model, messages, headers, tools=None, tool_choice="auto"):
         return {"role": "assistant", "content": "ok", "tool_calls": None}
@@ -133,7 +133,7 @@ async def test_normalize_chat_complete_returns_message():
 async def test_normalize_chat_complete_fails_over_on_429():
     """Endpoint-level failover: the Google model is rate-limited on every keyed
     endpoint, so chat_complete falls back to a Groq-served model."""
-    resolver = Resolver(load_registry(), EndpointRateLimiter(), secrets={})
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
 
     async def selective_complete(url, model, messages, headers, tools=None, tool_choice="auto"):
         if "generativelanguage" in url:
@@ -159,7 +159,7 @@ def test_require_tools_excludes_models_without_tool_support():
     # gemini-2.5-flash-lite is the only 'fast' model with a google key; flip its
     # supports_tools flag off in-memory to prove the filter excludes it.
     registry._models["gemini-2.5-flash-lite"].supports_tools = False
-    resolver = Resolver(registry, EndpointRateLimiter(), secrets={})
+    resolver = Resolver(registry, EndpointRateLimiter())
 
     from app.exceptions import NoEndpointError
 
@@ -171,6 +171,6 @@ def test_require_tools_excludes_models_without_tool_support():
 
 
 def test_require_tools_false_is_a_no_op_by_default():
-    resolver = Resolver(load_registry(), EndpointRateLimiter(), secrets={})
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
     with _keys("google"):
         assert resolver.pick_model_by_capability("fast", user_id="u") == "gemini-2.5-flash-lite"

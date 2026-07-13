@@ -28,7 +28,7 @@ async def test_cross_model_fallback_completes_on_groq():
     """User has google + groq. The selected Google model is rate-limited on every
     keyed endpoint → the reply completes on a Groq-served model, and on_model_switch
     fires for the switch."""
-    resolver = Resolver(load_registry(), EndpointRateLimiter(), secrets={})
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
 
     async def selective_stream(url, model, messages, headers):
         if "generativelanguage" in url:
@@ -60,7 +60,7 @@ async def test_cross_model_fallback_completes_on_groq():
 async def test_no_fallback_when_user_only_has_the_rate_limited_provider():
     """User has only google; the only Google model is rate-limited → no usable
     fallback, so a ProviderError(rate_limit) surfaces."""
-    resolver = Resolver(load_registry(), EndpointRateLimiter(), secrets={})
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
 
     async def always_rate_limited(url, model, messages, headers):
         raise ProviderError(kind="rate_limit", message="429")

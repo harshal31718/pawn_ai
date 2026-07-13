@@ -13,7 +13,7 @@ from app.resolver.resolver import Resolver
 
 
 def _resolver():
-    return Resolver(load_registry(), EndpointRateLimiter(), secrets={})
+    return Resolver(load_registry(), EndpointRateLimiter())
 
 
 def _msgs(text: str):
