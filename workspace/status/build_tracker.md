@@ -13,8 +13,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **started 2026-07-13, A.1/A.2 in progress this session** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
-**Active step:** **Phase A — Chat Agent Refinement, A.1/A.2 (native tool calling + tool layer).** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started same day. Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
+**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **started 2026-07-13, A.1–A.6 done this session, A.7 next** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active step:** **Phase A — Chat Agent Refinement, A.6 done (orchestrator graph v2), A.7 (preset subagents) next.** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started same day. A.1-A.6 all done and committed this session — see the A.6 entry below for the graph v2 rewrite details. Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
 
@@ -248,9 +248,36 @@ re-verified against the as-built Phase M code on 2026-07-13.
   verified against the diff line-by-line, live `pytest` run confirmed 333 green).
   No security-auditor run (pure classification logic, no secrets/auth/outbound-HTTP
   surface beyond the same `chat_complete` path A.1 already covers).
-- [ ] **A.6 — Orchestrator: graph v2**
-  `agent/graph.py` rebuilt: `classify` → `direct_answer` | `plan` → `execute` (tool
-  loop, budgeted) → `final`. Old ReAct nodes/parser deleted.
+- [x] **A.6 — Orchestrator: graph v2** ✓ (2026-07-13)
+  `agent/graph.py` rebuilt: `classify` → `direct_answer` (fast path, zero
+  overhead) | `plan` → `execute` (budgeted tool loop, `AGENT_MAX_ITERATIONS=8`/
+  `AGENT_MAX_TOKENS=24000`, budget-exhaustion nudge) → `final` (compact tool-log
+  digest, `resolve_final_model()` user-override respected). `agent/parser.py`/
+  `agent/routing.py` (old ReAct `build_agent_prompt`/`route_action`) deleted
+  entirely, not kept alongside. `AgentState` rewritten per plan; `memory_hit`/
+  `citation` events now emitted from the execute loop; `events.step_event`
+  gains `agent` field. `llm_core`/`normalize.chat_complete` gain `tool_choice`
+  passthrough + attached `usage`. `backend/tests/test_agent.py` fully
+  rewritten (old-protocol tests removed, not ported) — classify routing,
+  direct-answer zero-overhead, plan skip/cap/failure, execute loop (success/
+  unknown-tool/malformed-JSON/iteration-cap/token-budget-cap), final digest/
+  model-override. 344 backend tests green (up from 333) via
+  `docker compose exec backend pytest` (needed a `docker compose build backend`
+  first since `backend/tests/` isn't bind-mounted). code-reviewer PASS (2 WARN
+  fixed: multiline-fragile memory-hit regex rewritten as marker-to-next-marker
+  parsing +3 regression tests; bare `except Exception` in plan/execute split
+  into `(ProviderError, NoEndpointError)` vs generic with distinct log labels
+  — a first attempt at the latter also flipped `budget_exhausted=True` on the
+  execute-loop's exception path, which broke a pre-existing test by always
+  appending the budget nudge on any provider error; reverted that part, kept
+  only the clearer logging). build-validator PASS (all 7 plan criteria
+  verified line-by-line against the diff, 344/344 live pytest run). No
+  security-auditor run (pure orchestration logic reusing A.1-A.5's
+  already-audited tool/search/SSRF surfaces, no new secrets/auth touched).
+  Demo: mocked-model tests confirm "hello"-shaped input takes `direct_answer`
+  with zero `step` events; execute-loop tests prove the iteration cap,
+  token-budget cap, and malformed/unknown tool_call cases all resolve to a
+  `TOOL_ERROR` observation or a budget nudge, never a raised exception. ✓
 - [ ] **A.7 — Preset subagents**
   `agent/subagents.py`: `researcher`/`summarizer`/`coder`, sequential delegation via
   `delegate_<name>` tools, shared token budget, no nested delegation.

@@ -4,10 +4,14 @@
 *Tracker: register as Phase A in `workspace/status/build_tracker.md` when work begins.*
 
 > **DEPENDENCY: this plan assumes `plan_memory_scoping.md` (Phase M) is FULLY
-> IMPLEMENTED.** Everywhere a paragraph relies on Phase M behavior it is tagged
-> **[Phase M]**. This plan will be refined once Phase M is actually built — the
-> [Phase M] tags mark exactly which assumptions to re-verify at that point. Do not
-> start this plan before Phase M is done.
+> IMPLEMENTED.** Phase M shipped on dev 2026-07-13. **Refinement pass done
+> 2026-07-13:** every [Phase M] tag was re-verified against the as-built code
+> (`resolve_scope` in `memory/indexer.py`; `retrieve(query, user_id, scope_type,
+> scope_id, top_k)`; `kind`/`doc_id` columns + `match_kind` function param;
+> `memory_hit_event(summary, scope, source_conv_id)`; `memory/locks.py`
+> `get_conv_lock`; `routes/memory.py` rebuild/clear; `chats/`/`projects/` Drive
+> layout; embedding = `gemini-embedding-2` @ 768 dims). The tags are accurate —
+> implement against them directly.
 
 > **This plan is prescriptive.** All design decisions are final and locked with the
 > user. Implement exactly as written — do not substitute alternative designs, add

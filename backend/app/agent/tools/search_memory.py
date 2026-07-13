@@ -25,7 +25,11 @@ async def _search_memory_handler(args: dict, ctx: ToolContext) -> str:
     )
     if not hits:
         return "No relevant memory found."
-    return "\n".join(f"- {h['text']}" for h in hits)
+    # `[conv:<id>]` prefix carries provenance through the flattened string
+    # observation so the execute loop (A.6) can still emit a proper
+    # memory_hit event per hit (scope + source_conv_id, per Phase M) without
+    # a second retrieve() call -- the model just sees it as part of the text.
+    return "\n".join(f"- [conv:{h.get('conv_id', '')}] {h['text']}" for h in hits)
 
 
 SEARCH_MEMORY_TOOL = ToolSpec(

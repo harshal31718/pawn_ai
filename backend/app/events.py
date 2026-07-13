@@ -36,9 +36,10 @@ def provider_switch_event(from_provider: str, to_provider: str) -> str:
     return f"data: {json.dumps({'type': 'provider_switch', 'from': from_provider, 'to': to_provider})}\n\n"
 
 
-def step_event(label: str, detail: str = "") -> str:
-    """Agent reasoning step — shown in the trace panel."""
-    return f"data: {json.dumps({'type': 'step', 'label': label, 'detail': detail})}\n\n"
+def step_event(label: str, detail: str = "", agent: str = "main") -> str:
+    """Agent reasoning step — shown in the trace panel. `agent` is "main" for
+    the orchestrator, or a subagent name (Phase A / A.7) for nested steps."""
+    return f"data: {json.dumps({'type': 'step', 'label': label, 'detail': detail, 'agent': agent})}\n\n"
 
 
 def memory_hit_event(summary: str, scope: str = "", source_conv_id: str = "") -> str:

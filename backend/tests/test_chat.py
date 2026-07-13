@@ -121,14 +121,12 @@ def test_chat_forwards_full_history(client):
             assert resp.status_code == 200
             resp.read()
 
-    # With the agent graph, we have:
-    # 1. agent_node call (1 planning prompt)
-    # 2. final_node call (3 history messages + 1 synthesis prompt)
-    # Total messages captured = 5
-    assert len(captured_messages) == 5
-    assert captured_messages[1]["content"] == "my name is Priya"
-    assert captured_messages[2]["role"] == "assistant"
-    assert captured_messages[3]["content"] == "what is my name?"
+    # Short/plain text -> classify() routes to direct_answer (Phase A / A.6):
+    # one streaming call forwarding the full history verbatim, no extra prompts.
+    assert len(captured_messages) == 3
+    assert captured_messages[0]["content"] == "my name is Priya"
+    assert captured_messages[1]["role"] == "assistant"
+    assert captured_messages[2]["content"] == "what is my name?"
 
 
 # ─── Step 9: Multi-provider (normalize.py routing) ───────────────────────────
@@ -148,9 +146,9 @@ def test_chat_defaults_to_gemini(client):
         ) as resp:
             resp.read()
 
-    # Two calls: agent_node (fast resolved to gemini) + final_node (gemini by default)
-    assert len(captured_urls) == 2
-    assert "generativelanguage" in captured_urls[1]
+    # Short/plain text -> classify() routes to direct_answer: one streaming call.
+    assert len(captured_urls) == 1
+    assert "generativelanguage" in captured_urls[0]
 
 
 def test_chat_routes_to_groq(client):
@@ -168,9 +166,9 @@ def test_chat_routes_to_groq(client):
         ) as resp:
             resp.read()
 
-    # Two calls: agent_node (fast -> gemini) + final_node (user model -> groq)
-    assert len(captured_urls) == 2
-    assert "groq.com" in captured_urls[1]
+    # Short/plain text -> classify() routes to direct_answer: one streaming call.
+    assert len(captured_urls) == 1
+    assert "groq.com" in captured_urls[0]
 
 
 def test_chat_routes_to_cerebras(client):
@@ -188,9 +186,9 @@ def test_chat_routes_to_cerebras(client):
         ) as resp:
             resp.read()
 
-    # Two calls: agent_node (fast -> gemini) + final_node (user model -> cerebras)
-    assert len(captured_urls) == 2
-    assert "cerebras.ai" in captured_urls[1]
+    # Short/plain text -> classify() routes to direct_answer: one streaming call.
+    assert len(captured_urls) == 1
+    assert "cerebras.ai" in captured_urls[0]
 
 
 def test_chat_unknown_provider_returns_error_event(client):

@@ -1,15 +1,33 @@
-from typing import TypedDict, Optional, List, Dict, Any
-from functools import partial
-import asyncio
+"""Agent orchestrator, graph v2 (Phase A / A.6).
+
+classify -> direct_answer (needs_agent=False, THE fast path) | plan -> execute -> final
+
+Replaces the old hand-rolled ReAct JSON action protocol (build_agent_prompt,
+route_action, the load_context/agent/search_memory/ask_model nodes) with
+native tool calling (A.1), the tool layer (A.2-A.4), and the model router
+(A.5). Deleted, not kept alongside.
+"""
+
+import json
+import re
+import sys
+import time
+from typing import Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
 from langchain_core.callbacks import adispatch_custom_event
 
-from app.agent.parser import parse_action
+from app.agent.tools.base import ToolContext, ToolSpec
+from app.agent.tools.execute import run_tool
+from app.agent.tools.registry import get_tools
+from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS
 from app.core import normalize
+from app.core.router import classify as router_classify
+from app.core.router import resolve_final_model
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
-from app.exceptions import NoEndpointError
+from app.exceptions import NoEndpointError, ProviderError
+
 
 class DummyRateLimiter:
     def can_use(self, endpoint) -> bool: return True
@@ -23,303 +41,370 @@ class DummyResolver:
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
     def pick_by_capability(self, level, visibility="internal", user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
-    def pick_model_by_capability(self, level, visibility="internal", user_id=None):
+    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False):
         return "gemini-2.5-flash"
     def fallback_models(self, model_id, user_id=None):
         return [model_id]
 
+
 class AgentState(TypedDict):
+    messages: List[Dict[str, Any]]
+    user_id: Optional[str]
     conversation_id: str
-    user_id: str
-    history: List[Dict[str, Any]]
-    retrieved_memory: List[str]
-    scratchpad: List[Dict[str, Any]]
-    next_action: Optional[Dict[str, Any]]
-    final_answer: Optional[str]
     user_model_id: str
-    step_count: int
+    has_doc: bool
     # Phase M (memory scoping): resolved once per request in chat.py via
-    # memory.indexer.resolve_scope. None for stateless chats (no
-    # conversation_id) -- search_memory_node returns [] without querying.
+    # memory.indexer.resolve_scope. None for stateless chats.
     scope_type: Optional[str]
     scope_id: Optional[str]
-
-def build_agent_prompt(
-    history: List[Dict[str, Any]],
-    memory: List[str],
-    scratchpad: List[Dict[str, Any]],
-    available_actions: List[str],
-    step_count: int
-) -> str:
-    conv_parts = []
-    for msg in history:
-        conv_parts.append(f"{msg['role'].upper()}: {msg['content']}")
-    conv_str = "\n".join(conv_parts)
-
-    memory_str = "\n".join(f"- {m}" for m in memory) if memory else "No past memory retrieved."
-
-    scratch_parts = []
-    for idx, step in enumerate(scratchpad):
-        action_type = step.get("action")
-        if action_type == "search_memory":
-            scratch_parts.append(
-                f"STEP {idx+1} ACTION: {action_type}(query='{step.get('query')}')\n"
-                f"RESULT: {step.get('result')}"
-            )
-        elif action_type == "ask_model":
-            scratch_parts.append(
-                f"STEP {idx+1} ACTION: {action_type}(purpose='{step.get('purpose')}', prompt='{step.get('prompt')}')\n"
-                f"RESULT: {step.get('result')}"
-            )
-    scratch_str = "\n\n".join(scratch_parts) if scratch_parts else "No steps taken yet."
-
-    prompt = f"""You are an AI assistant orchestrating a multi-turn reasoning graph to answer the user's question.
-You must respond with exactly ONE valid JSON action object wrapped in your message. Do not output any prose before or after the JSON.
-
-## Conversation History
-{conv_str}
-
-## Retrieved Past Memories
-{memory_str}
-
-## Scratchpad (Prior Steps Taken This Turn)
-{scratch_str}
-
-## Available Actions
-Choose exactly one of the following actions to proceed:
-1. search_memory: Look up this chat's (or, inside a project, this project's) own indexed
-   history when the conversation history and summary above aren't enough to answer —
-   not a per-turn habit, only reach for this when you're actually missing something.
-   JSON Format: {{ "action": "search_memory", "query": "<what to search for>" }}
-   
-2. ask_model: Delegate a subtask (e.g. draft, critique, research) to a model.
-   JSON Format: {{ "action": "ask_model", "purpose": "draft|critique|research", "prompt": "<concrete instructions for the model to do>" }}
-   
-3. final: Conclude and produce the final answer. If you have gathered enough information, choose this action.
-   JSON Format: {{ "action": "final", "answer": "<synthesized answer, or leave empty if you want the main model to write it>" }}
-
-Step Constraint: You have used {step_count} of 8 reasoning steps. If step_count is approaching 8, you MUST choose the "final" action.
-
-Choose the next action. Output ONLY the JSON action.
-"""
-    return prompt.strip()
-
-def build_synthesis_prompt(
-    original_question: str,
-    memory: List[str],
-    scratchpad: List[Dict[str, Any]],
-    agent_answer: str = ""
-) -> str:
-    scratch_parts = []
-    for idx, step in enumerate(scratchpad):
-        action_type = step.get("action")
-        if action_type == "search_memory":
-            scratch_parts.append(
-                f"Step {idx+1} (Memory Search for '{step.get('query')}'):\n"
-                f"{step.get('result')}"
-            )
-        elif action_type == "ask_model":
-            scratch_parts.append(
-                f"Step {idx+1} (Model Delegation '{step.get('purpose')}'):\n"
-                f"{step.get('result')}"
-            )
-    scratch_str = "\n\n".join(scratch_parts) if scratch_parts else "None."
-
-    prompt = f"""You are now composing the final response to the user's question.
-Use the collected background research and agent steps summarized below to compose a direct, accurate, and comprehensive answer.
-
-## Original User Question
-{original_question}
-
-## Collected Research/Context:
-{scratch_str}
-
-{f"## Drafted Answer:\n{agent_answer}" if agent_answer else ""}
-
-Based on the research and drafts above, write a comprehensive, final answer to the user. Answer directly, clearly, and concisely.
-"""
-    return prompt.strip()
+    # Router (A.5) output.
+    difficulty: str
+    needs_agent: bool
+    # Orchestration state.
+    plan: List[str]
+    tool_log: List[Dict[str, Any]]  # {name, args, observation, elapsed_ms, agent}
+    tokens_used: int
+    citations: List[Dict[str, str]]
+    final_answer: Optional[str]
 
 
-# Graph Nodes
+def _resolve_deps(resolver: Optional[Resolver], rate_limiter: Optional[EndpointRateLimiter]):
+    return resolver or DummyResolver(), rate_limiter or DummyRateLimiter()
 
-async def load_context_node(state: AgentState) -> dict:
-    """Phase M (memory scoping): no longer always-retrieves at graph start.
-    The rolling summary (already folded into `history` by chat.py) remains
-    the always-present context; `retrieved_memory` starts empty and is only
-    populated by search_memory_node, on the agent's own decision to search."""
-    return {}
 
-async def agent_node(
+def _to_oai_tool(spec: ToolSpec) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters,
+        },
+    }
+
+
+async def _on_provider_switch_events(from_p: str, to_p: str) -> None:
+    await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+
+
+# ── classify ──────────────────────────────────────────────────────────────
+
+async def classify_node(
     state: AgentState,
     resolver: Optional[Resolver] = None,
-    rate_limiter: Optional[EndpointRateLimiter] = None
+    rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
-    if resolver is None or rate_limiter is None:
-        resolver = resolver or DummyResolver()
-        rate_limiter = rate_limiter or DummyRateLimiter()
-
-    step_count = state["step_count"]
-    if step_count >= 8:
-        last_result = state["scratchpad"][-1].get("result", "") if state["scratchpad"] else "Step limit exceeded."
-        return {
-            "next_action": {"action": "final", "answer": last_result},
-            "step_count": step_count + 1
-        }
-        
-    prompt = build_agent_prompt(
-        history=state["history"],
-        memory=state["retrieved_memory"],
-        scratchpad=state["scratchpad"],
-        available_actions=["search_memory", "ask_model", "final"],
-        step_count=step_count
-    )
-    
-    await adispatch_custom_event("step", {"label": "Thinking", "detail": f"step {step_count + 1}"})
-
+    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
-    # Pick a fast model the user actually has a key for; fall back to their selected
-    # model if no keyed fast model exists.
-    try:
-        model_id = resolver.pick_model_by_capability("fast", user_id=user_id)
-    except NoEndpointError:
-        model_id = state["user_model_id"]
 
-    async def on_switch(from_p, to_p):
-        await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+    has_search_key = False
+    if user_id:
+        from app.core import key_store
+        has_search_key = bool(key_store.get_key(user_id, "tavily") or key_store.get_key(user_id, "brave"))
 
-    async def on_model_switch(from_m, to_m):
-        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
-
-    response = ""
-    async for token in normalize.chat_stream(
-        model_id=model_id,
-        messages=[{"role": "user", "content": prompt}],
+    decision = await router_classify(
+        state["messages"],
+        has_doc=state.get("has_doc", False),
+        # The previous-assistant-turn-used-tools signal needs persisted trace
+        # data (A.8) to detect reliably; not available yet this session.
+        has_tools_likely=False,
         resolver=resolver,
         rate_limiter=rate_limiter,
-        on_provider_switch=on_switch,
         user_id=user_id,
-        on_model_switch=on_model_switch,
-    ):
-        response += token
+        has_search_key=has_search_key,
+    )
+    return {"difficulty": decision["difficulty"], "needs_agent": decision["needs_agent"]}
 
-    action = parse_action(response)
-    
-    if not isinstance(action, dict) or "action" not in action:
-        action = {"action": "final", "answer": response.strip()}
-        
-    return {
-        "next_action": action,
-        "step_count": step_count + 1
-    }
 
-async def search_memory_node(state: AgentState) -> dict:
-    query = state["next_action"]["query"]
-    await adispatch_custom_event("step", {"label": "Searching memory", "detail": query})
+def route_after_classify(state: AgentState) -> str:
+    return "plan" if state.get("needs_agent") else "direct_answer"
 
-    scope_type = state.get("scope_type")
-    scope_id = state.get("scope_id")
 
-    hits = []
-    if scope_type and scope_id:
-        from app.memory.retrieve import retrieve
-        hits = await retrieve(
-            query,
-            user_id=state.get("user_id"),
-            scope_type=scope_type,
-            scope_id=scope_id,
-            match_kind="message",
-        )
+# ── direct_answer: the fast path, zero agent overhead ───────────────────────
 
-    for hit in hits:
-        await adispatch_custom_event(
-            "memory_hit",
-            {"summary": hit["text"], "scope": scope_type, "source_conv_id": hit.get("conv_id", "")},
-        )
-
-    result = "\n".join(h["text"] for h in hits) if hits else "No relevant memory found."
-    scratchpad = state["scratchpad"] + [{"action": "search_memory", "query": query, "result": result}]
-    
-    return {
-        "scratchpad": scratchpad,
-        "next_action": None
-    }
-
-async def ask_model_node(
+async def direct_answer_node(
     state: AgentState,
     resolver: Optional[Resolver] = None,
-    rate_limiter: Optional[EndpointRateLimiter] = None
+    rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
-    if resolver is None or rate_limiter is None:
-        resolver = resolver or DummyResolver()
-        rate_limiter = rate_limiter or DummyRateLimiter()
-
-    purpose = state["next_action"]["purpose"]
-    prompt_text = state["next_action"]["prompt"]
+    """needs_agent=False path: one streaming call, no tools, no plan, no
+    extra step events -- this must incur genuinely zero agent overhead."""
+    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
-
-    from app.agent.routing import PURPOSE_TO_LEVEL
-    level = PURPOSE_TO_LEVEL.get(purpose, "balanced")
-    # Pick a model at this tier the user has a key for; fall back to their selection.
-    try:
-        model_id = resolver.pick_model_by_capability(level, user_id=user_id)
-    except NoEndpointError:
-        model_id = state["user_model_id"]
+    model_id = state["user_model_id"]
 
     candidates = resolver.pick(model_id, user_id=user_id)
     active_provider = candidates[0][4] if candidates else "unknown"
-    active_provider_model = candidates[0][1] if candidates else "unknown"
-
-    await adispatch_custom_event("model_call", {"model": f"{active_provider}:{active_provider_model}", "purpose": purpose})
-    await adispatch_custom_event("step", {"label": "Drafting" if purpose == "draft" else "Critiquing", "detail": purpose})
-
-    async def on_switch(from_p, to_p):
-        await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+    await adispatch_custom_event("final_provider", {"provider": active_provider})
 
     async def on_model_switch(from_m, to_m):
         await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+        await adispatch_custom_event("final_provider", {"provider": to_m})
 
-    response = ""
+    full_response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
-        messages=[{"role": "user", "content": prompt_text}],
+        messages=state["messages"],
         resolver=resolver,
         rate_limiter=rate_limiter,
-        on_provider_switch=on_switch,
+        on_provider_switch=_on_provider_switch_events,
         user_id=user_id,
         on_model_switch=on_model_switch,
     ):
-        response += token
+        full_response += token
+        await adispatch_custom_event("token", {"delta": token})
 
-    scratchpad = state["scratchpad"] + [{"action": "ask_model", "purpose": purpose, "result": response}]
+    return {"final_answer": full_response}
+
+
+# ── plan ──────────────────────────────────────────────────────────────────
+
+_PLAN_SYSTEM_PROMPT = (
+    "You are planning how to answer the user's request. Write a short numbered "
+    "plan (at most 5 steps) describing what you'll do to gather information and "
+    "answer well. Do not answer the question itself here -- only the plan."
+)
+
+
+async def plan_node(
+    state: AgentState,
+    resolver: Optional[Resolver] = None,
+    rate_limiter: Optional[EndpointRateLimiter] = None,
+) -> dict:
+    """One chat_complete (tool_choice='none' -- tools are listed so the model
+    knows what it can do later, but it must not call them here) producing a
+    short plan. Skipped (empty plan) for difficulty='light' + needs_agent=True
+    (e.g. a bare URL) -- no point planning a one-tool-call turn."""
+    if state.get("difficulty") == "light":
+        return {"plan": []}
+
+    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
+    user_id = state.get("user_id")
+
+    ctx = ToolContext(
+        user_id=user_id, scope_type=state.get("scope_type"), scope_id=state.get("scope_id"),
+        resolver=resolver, rate_limiter=rate_limiter,
+    )
+    tools = get_tools(ctx)
+    tool_specs = [_to_oai_tool(t) for t in tools]
+
+    try:
+        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True)
+    except NoEndpointError:
+        model_id = state["user_model_id"]
+
+    messages = [{"role": "system", "content": _PLAN_SYSTEM_PROMPT}] + state["messages"]
+
+    tokens_used = state.get("tokens_used", 0)
+    try:
+        result = await normalize.chat_complete(
+            model_id, messages, resolver, rate_limiter, user_id=user_id,
+            tools=tool_specs, tool_choice="none",
+        )
+    except (ProviderError, NoEndpointError) as e:
+        print(f"Plan step failed (upstream), proceeding with an empty plan: {e}", file=sys.stderr)
+        return {"plan": [], "tokens_used": tokens_used}
+    except Exception as e:
+        print(f"Plan step failed (unexpected), proceeding with an empty plan: {e}", file=sys.stderr)
+        return {"plan": [], "tokens_used": tokens_used}
+
+    tokens_used += (result.get("usage") or {}).get("total_tokens", 0) or 0
+    plan_text = (result.get("content") or "").strip()
+    plan_lines = [line.strip() for line in plan_text.splitlines() if line.strip()][:5]
+
+    if plan_lines:
+        await adispatch_custom_event("step", {"label": "Plan", "detail": "\n".join(plan_lines), "agent": "main"})
+
+    return {"plan": plan_lines, "tokens_used": tokens_used}
+
+
+# ── execute: the tool loop ───────────────────────────────────────────────
+
+_CITATION_LINE_RE = re.compile(r"^\d+\.\s*(?P<title>.*?)\s+—\s+(?P<url>https?://\S+)\s+—", re.MULTILINE)
+_MEMORY_HIT_START_RE = re.compile(r"^-\s*\[conv:(?P<conv_id>[^\]]*)\]\s*", re.MULTILINE)
+
+
+def _memory_hit_lines(observation: str) -> List[Dict[str, str]]:
+    """Parses search_memory's `- [conv:<id>] <text>` markers back into per-hit
+    records, so the execute loop can emit one memory_hit event per hit with
+    correct source_conv_id (Phase M) instead of one flattened event for the
+    whole tool call. Each hit's text runs from its marker to the start of the
+    next marker (or end of string) rather than to end-of-line, since a
+    retrieved chunk's text can itself contain embedded newlines. doc_search's
+    `[filename] ...` observations don't carry a conv_id marker, so they get a
+    single event with an empty source_conv_id."""
+    starts = list(_MEMORY_HIT_START_RE.finditer(observation))
+    if not starts:
+        return [{"text": observation, "source_conv_id": ""}]
+    hits = []
+    for i, m in enumerate(starts):
+        text_end = starts[i + 1].start() if i + 1 < len(starts) else len(observation)
+        hits.append({"text": observation[m.end():text_end].rstrip("\n"), "source_conv_id": m.group("conv_id")})
+    return hits
+
+
+def _extract_citations(name: str, args: dict, observation: str) -> List[Dict[str, str]]:
+    if observation.startswith("TOOL_ERROR"):
+        return []
+    if name == "web_search":
+        return [
+            {"url": m.group("url"), "title": m.group("title").strip() or m.group("url")}
+            for m in _CITATION_LINE_RE.finditer(observation)
+        ]
+    if name == "fetch_url":
+        url = args.get("url", "")
+        return [{"url": url, "title": url}] if url else []
+    return []
+
+
+async def execute_node(
+    state: AgentState,
+    resolver: Optional[Resolver] = None,
+    rate_limiter: Optional[EndpointRateLimiter] = None,
+) -> dict:
+    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
+    user_id = state.get("user_id")
+    scope_type = state.get("scope_type")
+    scope_id = state.get("scope_id")
+
+    ctx = ToolContext(
+        user_id=user_id, scope_type=scope_type, scope_id=scope_id,
+        resolver=resolver, rate_limiter=rate_limiter,
+    )
+    tools = get_tools(ctx)
+    tool_specs = [_to_oai_tool(t) for t in tools]
+    tools_by_name = {t.name: t for t in tools}
+
+    try:
+        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True)
+    except NoEndpointError:
+        model_id = state["user_model_id"]
+
+    working_messages = list(state["messages"])
+    plan = state.get("plan") or []
+    if plan:
+        working_messages = [{"role": "system", "content": "Plan:\n" + "\n".join(plan)}] + working_messages
+
+    tool_log: List[Dict[str, Any]] = list(state.get("tool_log", []))
+    citations: List[Dict[str, str]] = list(state.get("citations", []))
+    seen_urls = {c["url"] for c in citations}
+    tokens_used = state.get("tokens_used", 0)
+
+    budget_exhausted = False
+    for _ in range(AGENT_MAX_ITERATIONS):
+        if tokens_used >= AGENT_MAX_TOKENS:
+            budget_exhausted = True
+            break
+
+        try:
+            result = await normalize.chat_complete(
+                model_id, working_messages, resolver, rate_limiter, user_id=user_id, tools=tool_specs,
+            )
+        except (ProviderError, NoEndpointError) as e:
+            print(f"Execute loop chat_complete failed (upstream): {e}", file=sys.stderr)
+            break
+        except Exception as e:
+            print(f"Execute loop chat_complete failed (unexpected): {e}", file=sys.stderr)
+            break
+
+        tokens_used += (result.get("usage") or {}).get("total_tokens", 0) or 0
+        tool_calls = result.get("tool_calls")
+        content = result.get("content") or ""
+
+        if not tool_calls:
+            working_messages.append({"role": "assistant", "content": content})
+            break
+
+        working_messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+
+        for call in tool_calls:
+            fn = call.get("function", {}) or {}
+            name = fn.get("name", "")
+            raw_args = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                args = {}
+
+            await adispatch_custom_event(
+                "step", {"label": f"Calling {name}", "detail": json.dumps(args), "agent": "main"}
+            )
+
+            spec = tools_by_name.get(name)
+            start = time.monotonic()
+            if spec is None:
+                observation = f"TOOL_ERROR: unknown tool '{name}'"
+            else:
+                observation = await run_tool(spec, args, ctx)
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+
+            tool_log.append(
+                {"name": name, "args": args, "observation": observation, "elapsed_ms": elapsed_ms, "agent": "main"}
+            )
+
+            if name in ("search_memory", "doc_search") and not observation.startswith("TOOL_ERROR"):
+                if observation not in ("No relevant memory found.", "No relevant document content found."):
+                    for hit in _memory_hit_lines(observation):
+                        await adispatch_custom_event(
+                            "memory_hit",
+                            {"summary": hit["text"], "scope": scope_type or "", "source_conv_id": hit["source_conv_id"]},
+                        )
+
+            for citation in _extract_citations(name, args, observation):
+                if citation["url"] not in seen_urls:
+                    seen_urls.add(citation["url"])
+                    citations.append(citation)
+                    await adispatch_custom_event("citation", citation)
+
+            working_messages.append({
+                "role": "tool",
+                "tool_call_id": call.get("id", ""),
+                "content": observation,
+            })
+    else:
+        budget_exhausted = True
+
+    if budget_exhausted:
+        working_messages.append({"role": "system", "content": "budget exhausted — answer with what you have"})
+
     return {
-        "scratchpad": scratchpad,
-        "next_action": None
+        "messages": working_messages,
+        "tool_log": tool_log,
+        "citations": citations,
+        "tokens_used": tokens_used,
     }
+
+
+# ── final ────────────────────────────────────────────────────────────────
 
 async def final_node(
     state: AgentState,
     resolver: Optional[Resolver] = None,
-    rate_limiter: Optional[EndpointRateLimiter] = None
+    rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
-    if resolver is None or rate_limiter is None:
-        resolver = resolver or DummyResolver()
-        rate_limiter = rate_limiter or DummyRateLimiter()
-
-    synthesis_prompt = build_synthesis_prompt(
-        original_question=state["history"][-1]["content"],
-        memory=state["retrieved_memory"],
-        scratchpad=state["scratchpad"],
-        agent_answer=state["next_action"].get("answer", "") if state["next_action"] else ""
-    )
-    
-    await adispatch_custom_event("step", {"label": "Composing final answer", "detail": ""})
-
+    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
-    model_id = state["user_model_id"]
+
+    model_id = resolve_final_model(
+        state.get("difficulty", "light"), state.get("user_model_id"), resolver, user_id=user_id
+    )
+
+    # Digest, not raw observations: the tool loop's own last messages already
+    # carry the assistant's synthesis of what it found; we just append a
+    # compact recap so the final model doesn't have to re-derive it from a
+    # long tool-call transcript.
+    digest_messages = list(state["messages"])
+    tool_log = state.get("tool_log", [])
+    if tool_log:
+        digest_lines = [f"- {t['name']}: {t['observation'][:300]}" for t in tool_log]
+        digest_messages.append(
+            {"role": "system", "content": "Findings from tool use this turn:\n" + "\n".join(digest_lines)}
+        )
+
+    await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
+
     candidates = resolver.pick(model_id, user_id=user_id)
     initial_provider = candidates[0][4] if candidates else "unknown"
-    
     await adispatch_custom_event("final_provider", {"provider": initial_provider})
 
     async def on_switch(from_p, to_p):
@@ -333,7 +418,7 @@ async def final_node(
     full_response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
-        messages=state["history"] + [{"role": "user", "content": synthesis_prompt}],
+        messages=digest_messages,
         resolver=resolver,
         rate_limiter=rate_limiter,
         on_provider_switch=on_switch,
@@ -342,54 +427,32 @@ async def final_node(
     ):
         full_response += token
         await adispatch_custom_event("token", {"delta": token})
-        
-    return {
-        "final_answer": full_response
-    }
 
-
-def route_action(state: AgentState) -> str:
-    action = state.get("next_action")
-    if not action or not isinstance(action, dict):
-        return "agent"
-    act_type = action.get("action")
-    if act_type in ["search_memory", "ask_model", "final"]:
-        return act_type
-    return "agent"
+    return {"final_answer": full_response}
 
 
 def build_agent_graph(
     resolver: Optional[Resolver] = None,
-    rate_limiter: Optional[EndpointRateLimiter] = None
+    rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> StateGraph:
-    if resolver is None or rate_limiter is None:
-        resolver = resolver or DummyResolver()
-        rate_limiter = rate_limiter or DummyRateLimiter()
+    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
 
     graph = StateGraph(AgentState)
-    
-    graph.add_node("load_context", load_context_node)
-    graph.add_node("agent", partial(agent_node, resolver=resolver, rate_limiter=rate_limiter))
-    graph.add_node("search_memory", search_memory_node)
-    graph.add_node("ask_model", partial(ask_model_node, resolver=resolver, rate_limiter=rate_limiter))
+
+    from functools import partial
+    graph.add_node("classify", partial(classify_node, resolver=resolver, rate_limiter=rate_limiter))
+    graph.add_node("direct_answer", partial(direct_answer_node, resolver=resolver, rate_limiter=rate_limiter))
+    graph.add_node("plan", partial(plan_node, resolver=resolver, rate_limiter=rate_limiter))
+    graph.add_node("execute", partial(execute_node, resolver=resolver, rate_limiter=rate_limiter))
     graph.add_node("final", partial(final_node, resolver=resolver, rate_limiter=rate_limiter))
-    
-    graph.set_entry_point("load_context")
-    graph.add_edge("load_context", "agent")
-    
+
+    graph.set_entry_point("classify")
     graph.add_conditional_edges(
-        "agent",
-        route_action,
-        {
-            "search_memory": "search_memory",
-            "ask_model": "ask_model",
-            "final": "final",
-            "agent": "agent"
-        }
+        "classify", route_after_classify, {"direct_answer": "direct_answer", "plan": "plan"}
     )
-    
-    graph.add_edge("search_memory", "agent")
-    graph.add_edge("ask_model", "agent")
+    graph.add_edge("direct_answer", END)
+    graph.add_edge("plan", "execute")
+    graph.add_edge("execute", "final")
     graph.add_edge("final", END)
-    
+
     return graph

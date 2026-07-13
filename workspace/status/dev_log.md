@@ -370,6 +370,96 @@ plan's own risk section.
 
 ---
 
+### [2026-07-13] — Phase A / A.6: orchestrator graph v2 (the full rewrite)
+
+`agent/graph.py` rebuilt end to end around `classify -> direct_answer
+(needs_agent=False, THE fast path) | plan -> execute (tool loop, budgeted) ->
+final`, replacing the hand-rolled ReAct JSON action protocol entirely.
+`agent/parser.py`/`agent/routing.py` (`build_agent_prompt`, `route_action`) are
+deleted, not kept alongside — the old `load_context`/`agent`/`search_memory`/
+`ask_model` nodes are gone; `ask_model`'s per-purpose delegation is subsumed by
+A.5's per-role routing.
+
+- `classify_node` calls `core.router.classify` (A.5), threading in
+  `has_search_key` (from `key_store`) and writing `difficulty`/`needs_agent`
+  into `AgentState`; `route_after_classify` sends `needs_agent=False` straight
+  to `direct_answer` (one `chat_stream` call, zero step/plan events — verified
+  by `test_direct_answer_streams_with_no_step_events` asserting `"step" not in
+  dispatched`) and everything else to `plan`.
+- `plan_node` — one `chat_complete(..., tool_choice="none")` on the
+  `orchestrator` role level producing a ≤5-line plan, emitted as a `step`
+  event; skipped (empty plan, no model call) when `difficulty=="light"` but
+  `needs_agent=True` (e.g. a bare URL) — no point planning a one-tool-call
+  turn. Any failure here (upstream error, unparseable response) falls back to
+  an empty plan rather than blocking the turn.
+- `execute_node` — the tool loop: `chat_complete(..., tools=get_tools(ctx))`
+  each iteration; a returned `tool_calls` list is run through `run_tool`
+  (A.2's never-raises wrapper) and appended as `role:"tool"` messages; stops
+  when the model returns no `tool_calls`, `AGENT_MAX_ITERATIONS=8` is hit, or
+  cumulative `tokens_used` (summed from each call's `usage.total_tokens`)
+  reaches `AGENT_MAX_TOKENS=24000` — either budget cap appends a "budget
+  exhausted — answer with what you have" system message before falling
+  through to `final`. `search_memory`/`doc_search` hits emit one `memory_hit`
+  event per hit (scope + `source_conv_id`, Phase M) via a `_memory_hit_lines`
+  parser; `web_search`/`fetch_url` results emit deduped `citation` events.
+- `final_node` streams via the existing (untouched) `chat_stream`, on
+  `resolve_final_model()` (A.5's user-override rule: explicit ModelSwitcher
+  pick always wins for the final answer even on a heavy turn), with a compact
+  digest of `tool_log` appended as one system message — not the raw tool
+  transcript, so the final call's context stays small regardless of how much
+  the tool loop did.
+- `llm_core.chat_complete`/`normalize.chat_complete` gain a `tool_choice`
+  passthrough (needed for `plan_node`'s `"none"`) and now attach `usage` onto
+  the returned message dict (additive key, not a shape change — existing
+  callers only read `content`/`tool_calls`) so the execute loop can track
+  `AGENT_MAX_TOKENS`. `events.step_event` gains `agent: str = "main"` (subagent
+  names arrive in A.7); `routes/chat.py`'s dispatch table forwards it and adds
+  a `citation` event branch.
+
+**Two WARNs from code-reviewer, both fixed:**
+1. The `search_memory`/`doc_search` hit parser originally anchored on
+   `^...$` per physical line (`re.MULTILINE`), which silently truncated any
+   retrieved chunk whose own text spanned multiple lines (very plausible for
+   real excerpts). Rewritten as `_memory_hit_lines` — each hit now runs from
+   its `- [conv:<id>]` marker to the start of the next marker (or end of
+   string), preserving embedded newlines. 3 new regression tests added
+   (`test_memory_hit_lines_*`).
+2. `plan_node`/`execute_node` caught a bare `except Exception` around
+   `chat_complete`, masking genuine bugs behind the same "upstream failure"
+   log line. Split into `except (ProviderError, NoEndpointError)` (expected,
+   logged as "upstream") vs `except Exception` (logged as "unexpected") —
+   same never-raises behavior, clearer logs. **Caught a self-inflicted
+   regression while fixing this:** an initial pass also set
+   `budget_exhausted=True` on the execute-loop's exception path (a reviewer
+   NOTE, not a WARN, suggested distinguishing it from a clean stop) — that
+   flipped `test_chat_truncates_context_to_last_10_messages` (a `- [conv:...]`-adjacent
+   pre-existing test) from 11 to 12 captured messages, because it now always
+   appended the "budget exhausted" nudge on any provider error mid-loop,
+   including ones that don't actually need it. Reverted that part; kept only
+   the clearer logging.
+- Also confirmed en route: `docker compose exec backend pytest` needs an
+  explicit `docker compose build backend` first whenever `backend/tests/`
+  changes — only `./backend/app` is bind-mounted/dev-watched
+  (`docker-compose.yml`'s `develop.watch`), `./backend/tests` isn't synced at
+  all, so a stale image silently runs old test files (rediscovered the same
+  gotcha A.1's dev-log entry already flagged).
+- 344 backend tests green (up from 333) via `docker compose exec backend
+  pytest` after the rebuild. code-reviewer PASS (2 WARN fixed, above; several
+  NOTEs accepted — non-greedy citation-title regex truncation on an embedded
+  em-dash, cosmetic; `DummyResolver`/`DummyRateLimiter` living in production
+  `graph.py` rather than `conftest.py`, harmless since `build_agent_graph`
+  always binds real deps via `functools.partial`). build-validator PASS (all
+  7 plan criteria verified against the diff, 344/344 live pytest run
+  confirmed). No security-auditor run (pure orchestration logic reusing
+  A.1-A.5's already-audited tool/search/SSRF surfaces — no new secrets/auth
+  touched).
+Demo: mocked-model test confirms "hello"-shaped input takes `direct_answer`
+with zero `step` events; the execute-loop tests prove the iteration cap,
+token-budget cap, and malformed/unknown tool_call cases all resolve to a
+`TOOL_ERROR` observation or a budget nudge, never a raised exception.
+
+---
+
 ### [2026-07-13] — Phase M complete: embedding fix + M.6 (projects UI) + M.7 (automatable parts)
 
 Closing out Phase M (`plan_memory_scoping.md`) this session. Picked up mid-M.6 after

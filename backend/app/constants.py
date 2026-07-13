@@ -96,3 +96,15 @@ ROLE_LEVELS = {
     "subagent_summarizer": "fast",
 }
 
+# Orchestrator (A.6) execute-loop bounds. Iteration cap stops a runaway tool
+# loop; token budget is the sum of `usage.total_tokens` across every internal
+# chat_complete call this request makes (plan + each execute iteration).
+# Either cap being hit appends a "budget exhausted" system nudge and proceeds
+# to final rather than erroring.
+AGENT_MAX_ITERATIONS = 8
+AGENT_MAX_TOKENS = 24000
+
+# Preset subagents (A.7): each delegate_<name> call runs its own bounded tool
+# loop, sharing the parent's AGENT_MAX_TOKENS counter (one budget per request).
+SUBAGENT_MAX_ITERATIONS = 5
+

@@ -17,6 +17,7 @@ Public API:
         rate_limiter: EndpointRateLimiter,
         user_id: str | None = None,
         tools: list | None = None,
+        tool_choice: str = "auto",
     ) -> dict:
 
 Routes and agent nodes call ONLY these functions.
@@ -171,6 +172,7 @@ async def _complete_one_model(
     rate_limiter: EndpointRateLimiter,
     user_id: str | None,
     tools: list | None,
+    tool_choice: str,
 ) -> dict:
     """Complete against ONE model, failing over across that model's keyed endpoints
     (priority order). Raises _ModelExhausted if every endpoint failed, so the caller
@@ -180,7 +182,9 @@ async def _complete_one_model(
     last_error: Exception | None = None
     for url, provider_model_id, headers, endpoint_id, provider in candidates:
         try:
-            message = await _chat_complete_llm(url, provider_model_id, messages, headers, tools=tools)
+            message = await _chat_complete_llm(
+                url, provider_model_id, messages, headers, tools=tools, tool_choice=tool_choice
+            )
             rate_limiter.record_call(endpoint_id)
             rate_limiter.record_success(endpoint_id)
             return message
@@ -206,20 +210,23 @@ async def chat_complete(
     rate_limiter: EndpointRateLimiter,
     user_id: str | None = None,
     tools: list | None = None,
+    tool_choice: str = "auto",
 ) -> dict:
     """Non-streaming completion for the given model_id, with the same two-level
     failover as chat_stream (endpoint-level, then cross-model). Used for
     agent-internal calls (plan, tool decisions) — never for the final streamed
     user-facing answer, which stays on chat_stream.
 
-    Returns the completion message dict ({"role", "content", "tool_calls"}).
+    Returns the completion message dict ({"role", "content", "tool_calls", "usage"}).
     """
     models = resolver.fallback_models(model_id, user_id=user_id)
 
     last_error: Exception | None = None
     for candidate_model in models:
         try:
-            return await _complete_one_model(candidate_model, messages, resolver, rate_limiter, user_id, tools)
+            return await _complete_one_model(
+                candidate_model, messages, resolver, rate_limiter, user_id, tools, tool_choice
+            )
         except _ModelExhausted as me:
             last_error = me.error
             continue

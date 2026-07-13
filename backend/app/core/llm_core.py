@@ -74,9 +74,15 @@ async def chat_complete(
         )
     data = resp.json()
     try:
-        return data["choices"][0]["message"]
+        message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         raise ProviderError(kind="upstream_error", message="Provider returned an unexpected response shape")
+    # Token usage isn't part of the OAI message shape but agent-internal callers
+    # (A.6's execute loop) need it to enforce AGENT_MAX_TOKENS -- attached as an
+    # extra key rather than changing the return shape (non-breaking: existing
+    # callers only ever read message["content"]/["tool_calls"]).
+    message["usage"] = data.get("usage")
+    return message
 
 
 async def stream_llm(

@@ -181,19 +181,22 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         if scope:
             scope_type, scope_id = scope
 
-    # 4. Build inputs and config for LangGraph Agent
+    # 4. Build inputs and config for LangGraph Agent (graph v2 AgentState, A.6)
     inputs = {
-        "conversation_id": req.conversation_id or "stateless",
+        "messages": messages_to_send,
         "user_id": user_id,
-        "history": messages_to_send,
-        "retrieved_memory": [],
-        "scratchpad": [],
-        "next_action": None,
-        "final_answer": None,
+        "conversation_id": req.conversation_id or "stateless",
         "user_model_id": model_id,
-        "step_count": 0,
+        "has_doc": bool(req.doc_id),
         "scope_type": scope_type,
         "scope_id": scope_id,
+        "difficulty": "light",
+        "needs_agent": False,
+        "plan": [],
+        "tool_log": [],
+        "tokens_used": 0,
+        "citations": [],
+        "final_answer": None,
     }
     
     thread_id = f"{user_id}:{req.conversation_id}" if req.conversation_id else f"{user_id}:stateless"
@@ -215,7 +218,7 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                         assistant_text += delta
                         yield events.token_event(delta)
                     elif name == "step":
-                        yield events.step_event(data.get("label", ""), data.get("detail", ""))
+                        yield events.step_event(data.get("label", ""), data.get("detail", ""), data.get("agent", "main"))
                     elif name == "memory_hit":
                         yield events.memory_hit_event(
                             data.get("summary", ""), data.get("scope", ""), data.get("source_conv_id", "")
@@ -224,6 +227,8 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                         yield events.model_call_event(data.get("model", ""), data.get("purpose", ""))
                     elif name == "provider_switch":
                         yield events.provider_switch_event(data.get("from_provider", ""), data.get("to_provider", ""))
+                    elif name == "citation":
+                        yield events.citation_event(data.get("url", ""), data.get("title", ""))
                     elif name == "final_provider":
                         active_provider = data.get("provider", "unknown")
             success = True

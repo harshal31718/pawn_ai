@@ -21,3 +21,15 @@
 - Internal implementation details (private functions, internal state).
 - Docker networking or container startup.
 - Real provider API calls (always mock these).
+
+## Gate Scoping (keep gates proportional to the diff)
+
+- Gates apply to what the step actually changed. Backend-only diff → backend pytest
+  only; frontend-only diff → `tsc` + `npm run build` only. Do NOT run the other
+  stack's gate "just to confirm" — REST+SSE is the only coupling, and the contract
+  is covered by the changed side's tests.
+- During iteration inside a step, run only the affected test files; the FULL backend
+  suite runs once at step completion (before marking `[x]`), not on every edit.
+- A cross-stack gate is required only when the step changed a shared contract
+  surface: SSE event shapes (`events.py` / `client.ts`), request/response models,
+  or route paths.

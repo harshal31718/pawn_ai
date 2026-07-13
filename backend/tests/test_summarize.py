@@ -64,10 +64,11 @@ def test_chat_truncates_context_to_last_10_messages(client, fake_drive):
         ) as resp:
             resp.read()
 
-    # 1 planning prompt + 10 history + 1 user prompt + 1 synthesis prompt = 13
-    assert len(captured_messages) == 13
-    assert captured_messages[1]["content"] == "User prompt 1"
-    assert captured_messages[-2]["content"] == "Latest turn?"
+    # Short/plain text -> classify() routes to direct_answer (Phase A / A.6):
+    # one streaming call, no plan/synthesis prompts. 10 history + 1 new user turn = 11.
+    assert len(captured_messages) == 11
+    assert captured_messages[0]["content"] == "User prompt 1"
+    assert captured_messages[-1]["content"] == "Latest turn?"
 
 
 def test_chat_prepends_summary_context(client, fake_drive):
@@ -95,12 +96,13 @@ def test_chat_prepends_summary_context(client, fake_drive):
         ) as resp:
             resp.read()
 
-    # Messages: 1 planning + summary system + hi + What is my name? + synthesis = 5
-    assert len(captured_messages) == 5
-    assert captured_messages[1]["role"] == "system"
-    assert "Summary text showing user name is Bob." in captured_messages[1]["content"]
-    assert captured_messages[2]["content"] == "hi"
-    assert captured_messages[3]["content"] == "What is my name?"
+    # Short/plain text -> classify() routes to direct_answer (Phase A / A.6):
+    # summary system + hi (history) + new user turn = 3.
+    assert len(captured_messages) == 3
+    assert captured_messages[0]["role"] == "system"
+    assert "Summary text showing user name is Bob." in captured_messages[0]["content"]
+    assert captured_messages[1]["content"] == "hi"
+    assert captured_messages[2]["content"] == "What is my name?"
 
 
 def test_chat_triggers_summarize_background_task_at_20_messages(client, fake_drive):
