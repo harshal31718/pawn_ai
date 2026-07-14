@@ -40,6 +40,25 @@ Full `deployment.md` §7 verification checklist passed on `pawn-temp`: HTTPS hea
 
 ---
 
+## Phase N — Interleaved Agent Streaming (execute+final merge)
+*Plan reference: `workspace/plan/plan_interleaved_agent_streaming.md`*
+*Branch: dev*
+
+- [ ] **N.1 — Merge execute_node + final_node into one streaming tool-loop node** (planned 2026-07-14, not started)
+  User-reported "reply reads as two separate blocks" traced to a real architecture
+  seam: `execute_node` (tool loop) is non-streaming, `final_node` (answer) is a
+  separate streaming call with no tool support, so all tool activity necessarily
+  finishes before any reply text exists. Plan: new `llm_core.stream_chat_with_tools()`
+  + `normalize.chat_stream_with_tools()` (same two-level failover as `chat_stream`)
+  to let one call both stream tokens live and receive tool_calls, so `execute_node`
+  can loop-and-stream instead of handing off to a separate `final_node` (to be
+  deleted). Frontend `Message` gains an ordered `segments` list (text/tool, arrival
+  order) replacing the old "trace block above, content below" split. Full plan +
+  file list in the plan doc. **Deliberately handed to a local Claude Code CLI
+  session to implement and verify** (not built in this Cowork session) — needs
+  real streaming+tools calls against the user's actual BYOK providers to verify
+  at all, which the Cowork build sandbox cannot do.
+
 ## Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents)
 *Plan reference: `workspace/plan/plan_chat_agent_refinement.md`*
 *Branch: dev*
