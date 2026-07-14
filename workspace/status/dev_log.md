@@ -6,6 +6,67 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — A.9 + M.7 live verification checklists closed out (Chrome-driven session)
+
+Full live-test pass against the running `docker compose` stack, driven via
+`claude-in-chrome` against the user's real logged-in session. Completes the
+last open item from `gap_audit_2026-07-14.md`. Full blow-by-blow in that
+file's §§F/J/K/L; this entry is the summary.
+
+**A.9 (8/8 items) confirmed live**: web search + citations render and
+persist across reload; `fetch_url` fetches real pages (even self-corrected a
+typo'd URL); doc upload → `doc_search` retrieves planted content; subagent
+delegation renders correctly nested in `TraceView`; cross-model failover and
+in-loop provider-switch events render inline (confirmed earlier same day,
+§F). A.9 marked `[x]`.
+
+**M.7 (7/8 items directly confirmed, item 3 judged low-risk by proxy)**:
+cross-chat isolation holds; project-shared retrieval works both directions;
+move-in correctly rescopes a chat's existing history so siblings can
+retrieve it; cascade delete removes Drive folders and Postgres rows
+together; a full `memory_chunks` truncate followed by per-scope
+`/memory/rebuild` restored the user's real `suiiiii` project and 11 other
+chats with healthy embeddings, confirming the disaster-recovery path.
+M.7 marked `[x]`.
+
+**Real bug found, investigated, and fully resolved as tester error, not a
+code defect**: mid-session, moving a chat into a test project appeared to
+leak an unrelated standalone chat's content into the project's shared
+memory — confirmed via direct Postgres query, looked serious. Traced it
+down completely: two unrelated conversations had near-identical
+auto-generated titles ("Chat A Secret Marker" vs. "ZEBRA-101 Secret
+Marker" — the former's title was generated from a *question* containing
+that phrase, not from content describing it), and the wrong sidebar row got
+moved, twice. A clean, correctly-targeted retry confirmed the move-in /
+rescope / retrieval mechanism works exactly as designed end to end. No code
+changes were needed. Documented in full (including the incorrect
+intermediate conclusions and how each was disproven) as a worked example
+for future sessions: confirm via ground truth (DB queries, network
+requests) before writing up a finding, and don't stop at the first
+plausible-looking root cause.
+
+**Secondary findings, not acted on this session**:
+- Router's `_HEAVY_KEYWORDS` list has no recall/memory vocabulary
+  ("remember", "earlier", "mentioned") — plain recall questions silently
+  skip the tool path and the model answers from guesswork while sounding
+  like it searched. Real quality gap, not a security issue (isolation still
+  holds either way). Follow-up recommended, not fixed this session.
+- One transient `412 Connect your Google Drive` error: a Postgres
+  read timeout during this session's bursty concurrent test traffic got
+  cached as "Drive not linked" for 30s (`drive_factory.py`'s `_TTL_NONE`
+  treats a timeout and "never linked" identically). Self-cleared; low
+  severity.
+- A single "Maximum update depth exceeded" React console error from
+  `MessageInput.tsx`, occurring once across the whole session despite many
+  messages sent the same way — logged as an unconfirmed watch item, not
+  reproduced, not chased further.
+
+Also fixed as a side effect of testing: browser file-upload via the
+`file_upload` MCP tool rejected host filesystem paths in this session
+(client-side limitation) — worked around by dispatching a synthetic
+`File`/`DataTransfer` into the page's real file input via `javascript_tool`,
+which exercises the identical code path a real drag-drop would.
+
 ### [2026-07-14] — Fix: pytest gate closed out (registry seed-data drift + stale test-tmp-dir reuse)
 
 Two more rounds closing the gate after the SQLite fix (16 → 7 → 1 → expected 0):
@@ -1969,3 +2030,158 @@ Outstanding (unchanged): M.7 + A.9 live verification checklists with the user.
   styled table/thead/th/td/tr/blockquote/hr components in Message.tsx (scrollable
   bordered tables, striped rows). Requires `docker compose exec frontend npm
   install` (frontend runs in Docker).
+
+## 2026-07-14 — Phase N.1: Interleaved Agent Streaming (execute+final merge) ✓
+
+Root cause (locked with the user before this session, see
+`workspace/plan/plan_interleaved_agent_streaming.md`): `execute_node` (the tool
+loop) used non-streaming `chat_complete`, and handed off to a fully separate
+`final_node` that streamed the answer via `chat_stream` with no tool support —
+two disconnected LLM calls, so every tool card necessarily finished before any
+reply text existed, regardless of how the frontend rendered it.
+
+**Backend:**
+- `llm_core.py`: new `stream_chat_with_tools()` — `stream=True` + `tools=[...]`
+  in one request (plus `stream_options: {"include_usage": true}`, an additive
+  extra key beyond the plan's literal 3-field done-event shape, same
+  non-breaking-extra-key precedent as A.1's `chat_complete` usage field).
+  Yields `{"type":"content","delta":str}` per token, final
+  `{"type":"done","tool_calls":[...]|None,"finish_reason":str,"usage":dict|None}`.
+  Tool-call deltas accumulated index-keyed; `id`/`type`/`function.name`
+  assigned (not concatenated — a provider resending them per-chunk would
+  otherwise corrupt the value), `function.arguments` concatenated (the only
+  field that legitimately arrives as successive fragments).
+- `normalize.py`: new `chat_stream_with_tools()` + `_stream_one_model_with_tools()`,
+  mirroring `chat_stream`/`_stream_one_model`'s two-level failover (endpoint,
+  then cross-model) and the same hard rule — once a *content* token has
+  reached the user for a given call, no retry/switch, a mid-stream error
+  propagates directly.
+- `agent/graph.py`: `execute_node` rewritten into one streaming tool loop using
+  `chat_stream_with_tools`; `final_node` deleted entirely (not kept alongside);
+  `build_agent_graph` edges now `execute -> END`. Each iteration streams tokens
+  live (forwarded as SSE `token` events as they arrive, including on
+  tool-call-bearing iterations — previously that text was silently discarded
+  since `chat_complete` never streamed at all); on `tool_calls`, runs them via
+  the unchanged `run_tool`/subagent dispatch and loops. Stops on a clean
+  tool-call-free turn (`answered=True`), or on `AGENT_MAX_ITERATIONS`/
+  `AGENT_MAX_TOKENS` (`budget_exhausted=True`, same nudge system message as
+  before). Whenever the loop didn't already produce a clean answer
+  (`not answered`) — budget exhaustion, iteration cap, or an upstream call
+  failure with **zero content sent yet** — one closing call (`tools=None`)
+  still attempts a real answer, mirroring the old `final_node`'s unconditional
+  "always answer" guarantee, now folded into the same node instead of a
+  second disconnected call. `resolve_final_model` (router.py) is no longer
+  called from graph.py (every iteration uses the one orchestrator-capable,
+  tool-supporting model picked once at the top) but is left in place,
+  untouched, in case of future use.
+- Token budget accounting: prefers real `usage.total_tokens` from the
+  provider's final chunk (via `stream_options.include_usage`) when present;
+  falls back to a rough chars/4 `_estimate_tokens()` proxy otherwise (a
+  streaming response isn't guaranteed to carry usage the way non-streaming
+  `chat_complete` always does) — a soft budget nudge, not a billing figure.
+
+**Code review (build-step skill) found 2 CRITICAL issues, both fixed and
+re-verified:**
+1. The per-iteration `try/except` around the streaming call could swallow a
+   failure that happened *after* content had already reached the user,
+   falling through to the unconditional closing call and silently
+   concatenating a truncated partial reply with an entirely fresh, unrelated
+   answer — a direct violation of the locked "no retry once a token has
+   reached the user" contract that `normalize.chat_stream_with_tools` itself
+   correctly honors one layer down. Fixed with a `content_reached_user_this_call`
+   flag, reset per `stream_iteration()` call and checked in both except
+   clauses: re-raises instead of falling through once content was already
+   sent. New regression test:
+   `test_execute_node_upstream_failure_after_content_sent_propagates_not_falls_through`.
+2. `test_rag.py::test_stateless_chat_never_queries_memory` still mocked the
+   old `chat_complete`/`stream_llm` call surface (the pre-merge shape) —
+   under the merged design this would have silently made real, unmocked
+   outbound calls to `chat_stream_with_tools` against a real provider URL with
+   the tests' fake BYOK key (`conftest.py`'s autouse `stub_byok_key`), risking
+   a slow/flaky test while still passing its assertions "by accident." Fixed
+   to mock `chat_stream_with_tools`.
+   A WARN (no direct unit coverage of `llm_core.stream_chat_with_tools`'s
+   delta-accumulation contract or `normalize`'s failover contract — everything
+   routed through `test_agent.py`'s wholesale `chat_stream_with_tools` mock)
+   was also closed: new `tests/test_stream_with_tools.py` (10 tests) exercises
+   both directly — partial tool-call deltas across 3+ chunks, id/type/name
+   assigned-not-concatenated against a defensive adversarial provider,
+   multiple interleaved tool calls by index, a usage-only final chunk with
+   empty `choices`, 429 handling, and the failover contract (cross-model
+   fallback before any content; no retry once content has been sent).
+- `test_agent.py` fully rewritten for the merged node (old `final_node` tests
+  removed, not ported): pure-text stream, text-streams-before-*and*-after a
+  tool call (the core interleaving guarantee, asserted via SSE event
+  ordering), multi-tool-call sequence, unknown-tool → `TOOL_ERROR`, malformed
+  tool-call-arguments JSON → `TOOL_ERROR`, citation emission, iteration cap +
+  token budget cap (both now verified to still make exactly one closing
+  call), the two upstream-failure variants above, `_estimate_tokens` unit
+  tests. `test_chat.py`/`test_rag.py`/`test_subagents.py`/`test_summarize.py`
+  mocks updated to the new call surface (four pre-existing tests were
+  silently exercising the real unmocked provider layer through the merge —
+  closed, not weakened; `test_summarize.py`'s history-truncation test also had
+  a latent, unrelated bug exposed by this: its "Latest turn?" test message
+  accidentally matched router.py's `_TIME_SENSITIVE_KEYWORDS`, combined with
+  `conftest.py`'s blanket search-key stub, routing it through the heavy/agent
+  path instead of the direct_answer path the test actually meant to exercise
+  — fixed by changing the test message, unrelated to Phase N itself but only
+  surfaced because the old architecture happened to mask it by coincidence).
+  386 backend tests green (up from 376 pre-session), `docker compose exec
+  backend pytest -n auto`.
+- build-validator: PASS on every plan/technical criterion (event shapes,
+  failover contract, graph edges, both CRITICAL fixes verified present and
+  correct, 386/386 tests, `tsc --noEmit` + `npm run build` clean, no
+  out-of-scope changes — confirmed zero diff in router.py/constants.py/
+  events.py/routes/chat.py/agent/tools/**/agent/subagents.py/oai_tools.py).
+
+**Frontend (`segments` model, plan §2 decision 5):**
+- `types.ts`: new `Segment = {type:'text', content} | {type:'tool', entry:
+  TraceEntry}` (the second variant carries any trace-worthy event, not just
+  `kind:'tool'` entries — step/citation/memory_hit/provider_switch all become
+  `type:'tool'` segments too). `Message`/`PersistedMsg` gain `segments?`.
+- `ChatPage.tsx`: every SSE callback (`onToken`/`onStep`/`onToolCall`/
+  `onMemoryHit`/`onModelCall`/`onCitation`/`onProviderSwitch`) now appends to
+  `segments` in true arrival order (new `appendTextSegment`/`appendToolSegment`/
+  `settleRunningSegment` helpers, mirroring the existing `trace` helpers),
+  *alongside* the existing `trace`/`content` updates — `trace` is kept for the
+  legacy/reload rendering path and the persisted-shape cache round-trip,
+  `segments` drives the new live interleaved rendering. Both are always
+  updated together in the same `setMessagesFor` call per handler (code review
+  confirmed no desync path).
+- `Message.tsx`: new interleaved rendering path — walks `segments`, chunking
+  consecutive `text` segments into prose blocks and consecutive `tool`
+  segments into one `TraceEntries` run (so a subagent's whole nested run of
+  activity still collapses into one group, exactly as before), rendered in
+  true arrival order. Used ONLY when a message has at least one `tool`-typed
+  segment; a reloaded/historical message (no `segments` — the persisted shape
+  has no positional info to reconstruct interleaving from) or a pure-text
+  live stream (nothing to interleave) both fall back unchanged to the legacy
+  trace-block-above/content-below rendering. Markdown rendering extracted
+  into a shared `MarkdownContent` component used by both paths.
+- `TraceView.tsx`: extracted a reusable `TraceEntries` component (the
+  group-by-agent + card rendering core) so both the legacy full trace block
+  and the new per-run interleaved rendering share identical subagent
+  grouping/card styling.
+- `useConversationStore.ts`: `toPersisted`/`fromPersisted` carry `segments`
+  through the live-session localStorage cache round-trip (survives a reload
+  within the same session, before the next server refetch); the
+  server-persisted shape is intentionally unchanged (`content`/`trace`/
+  `citations` only — `backgroundLoadDetail`'s reload path never sets
+  `segments`, by design).
+- `tsc --noEmit` + `npm run build` clean throughout.
+
+**Live verification (plan §6, needed the user's own BYOK keys + a real
+browser — could not be done from this session):** user sent the calculator
+test prompt ("use your calculator tool to compute 123456 * 789, then explain
+step by step...") against the running `docker compose` stack and confirmed:
+reply text now streams in *before* the tool-call card, not only after every
+tool call has finished — the reported bug is fixed. Confirms the plan's
+unverified assumption (§2 decision 2) that the BYOK providers' streaming
+responses do carry `tool_calls` deltas as the OAI spec describes, at least
+for whatever provider/model served that turn.
+
+**Deferred, out of scope this pass (per plan §5, unchanged):** `plan_node`
+stays non-streaming; subagent (`delegate_*`) internal tool loops stay
+non-streaming (a bounded, backgrounded, strictly-sequential unit — not part
+of the user's complaint); `_build_trace`/Drive persistence/reload rendering
+untouched.

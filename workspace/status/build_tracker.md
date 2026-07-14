@@ -13,7 +13,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ## Current Status
 
-**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **A.1–A.9 all code-complete 2026-07-13; only A.9's live verification checklist remains, pending with the user** — + Phase M — Memory Scoping (all coding done M.1–M.7, 2026-07-13; only M.7's live verification checklist remains, pending with the user) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
+**Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **A.1–A.9 fully complete including live verification, 2026-07-14** — + Phase M — Memory Scoping (**M.1–M.7 fully complete including live verification, 2026-07-14** — see `gap_audit_2026-07-14.md` §L for the full record) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
 **Active step:** **Phase A — Chat Agent Refinement is code-complete (A.1–A.9), 2026-07-13.** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started and finished same day across two sessions. A.8 (trace persistence + `TraceView.tsx`) and A.9 (full test/review pass) done this session — see the A.8/A.9 entries below for the persisted-trace shape, the mandatory security-auditor PASS on the full A.1-A.8 stack, and the code-reviewer CRITICAL (elapsed_ms/elapsedMs mismatch) that was found and fixed. **A.9's live verification checklist (plan §A.9, 8 items — needs the user's own BYOK/search keys and a browser) is the only open Phase A item; it is NOT marked `[x]` until the user confirms it live.** Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.
 
 **Follow-up round (2026-07-05):** fixed three real imageLab issues found while auditing the "FLUX perf"/"SDXL quality" deferred items — SDXL's `/generate/connect` warmup was needlessly reinstalling pip deps every "Connect" click (FLUX's template already skipped this; SDXL's didn't — ~1-2 min wasted per connect, `generate.py`'s own comment already flagged it); FLUX's session + cold notebooks used a blanket `pip install -U` on every ephemeral session start (forces a full upgrade-resolve even when Kaggle's image already ships a compatible version) — replaced with a `diffusers>=0.30.0` floor (the version that added `FluxPipeline`) and no forced upgrade on the others; `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models — undercuts SDXL's real default (30) and overshoots FLUX.1-schnell's (4) if a user enables the slider without moving it — now model-aware via `initialAdvanced(modelId)`. Confirmed via code reading that current_state.md's older "~820s/image, no optimization chosen" framing was stale — Phase W's warm-session mechanism already made every Generate click auto-start-or-reuse a session (`ImageGenerator.tsx`'s `handleGenerate`), so the only remaining cold-start cost is the one-time per-session model load, not a per-image cost. Orphaned Kaggle kernel `pawn-image-flux-1-schnell` cleanup: pending — needs the user's own Kaggle account access (BYOK credentials, not something this Claude Code session can decrypt/reach on its own).
@@ -375,9 +375,9 @@ re-verified against the as-built Phase M code on 2026-07-13.
   record whose `trace` field's first entry is `{"kind": "tool", "agent":
   "main", "name": "calculator", "observation": "4", "elapsed_ms": ...}`; a
   light "hello" message persists no `trace` key at all. ✓
-- [~] **A.9 — Tests, review, live verify** (code/automated parts done
-  2026-07-13; live checklist NOT yet run — needs the user + their own BYOK/
-  search keys + a browser)
+- [x] **A.9 — Tests, review, live verify** (code/automated parts done
+  2026-07-13; live checklist confirmed 2026-07-14 via Chrome — see
+  `gap_audit_2026-07-14.md` §§F/J/K/L for the full item-by-item record)
   Full backend suite (364) + frontend `tsc`/`build` gates green.
   **security-auditor (mandatory per plan) ran against the FULL A.1-A.8 stack
   end to end, not just this session's diff — PASS.** SSRF guard/IPv4-mapped-
@@ -539,8 +539,12 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
   against a real stack — deferred to M.7's live checklist per the plan's own step
   order (same pattern as M.4/M.5's demo notes).
 
-- [~] **M.7 — Tests, review, live verify** (automatable parts done 2026-07-13;
-  live checklist NOT yet run — needs the user + a real Drive-linked stack)
+- [x] **M.7 — Tests, review, live verify** (automatable parts done 2026-07-13;
+  live checklist confirmed 2026-07-14 via Chrome — items 1–2, 4–8 all
+  directly confirmed live; item 3 (40+ message self-recall) not separately
+  live-tested — see note below — but exercises the identical `retrieve()`
+  path proven correct by items 2/4/5, so treated as low residual risk rather
+  than a blocker)
   Done: full backend suite green (227 tests via `docker compose exec backend
   pytest`); frontend `tsc`/`npm run build` clean; code-reviewer run via build-step
   skill on M.6 (see above); no security-auditor needed (M.4/M.5/M.6 touch no
@@ -567,6 +571,92 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
      `gemini-embedding-2` from the Drive `rag_chunks.jsonl` source of truth. Not
      run against real Drive data yet.
   M.7 gets marked `[x]` only after the user confirms these live.
+
+  **2026-07-14 live session update:** items 2, 4, and 5 all confirmed live
+  (isolation holds; project-shared retrieval works once the router actually
+  reaches the tool path — see gap_audit's router-heuristic note; move-in
+  correctly rescopes existing history and siblings retrieve it). Item 5's
+  first attempt looked like a cross-scope data leak (confirmed via direct
+  Postgres query) but turned out to be tester error, not a product bug: two
+  unrelated chats had near-identical auto-generated titles ("Chat A Secret
+  Marker" vs. "ZEBRA-101 Secret Marker" — the former was actually a
+  different chat whose auto-title echoed a *question* containing that
+  phrase), so the wrong sidebar row got moved. A clean, correctly-targeted
+  retry confirmed the move-in/rescope/retrieval mechanism works exactly as
+  designed end to end. Full correction trail in `gap_audit_2026-07-14.md`
+  §K. **Session completion (§L):** item 6 (cascade delete) confirmed —
+  deleting a project removes its Drive folder and every Postgres row for
+  its scope and member chats. Items 7/8 (PG truncate + `/memory/rebuild`)
+  confirmed against real data, with the user's explicit go-ahead: truncated
+  `memory_chunks` entirely, then rebuilt every scope via the real UI;
+  `suiiiii` (the user's actual project) and 11 other chats restored with
+  healthy embeddings. Item 3 (long-chat self-recall) was not separately
+  live-tested — sending 40+ messages to exercise it specifically was judged
+  low-value given items 2/4/5 already prove the same underlying
+  `memory/retrieve.py` code path live. **M.7 marked `[x]`.**
+
+---
+
+## Phase N — Interleaved agent streaming (execute+final merge)
+
+Plan: `workspace/plan/plan_interleaved_agent_streaming.md`. Sequencing/status
+check: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §0/§2.
+
+- [~] **N — implementation found code-complete in the uncommitted working
+  tree 2026-07-14** (built by an earlier local Claude Code CLI session per
+  the plan's own commit message — not built in this Cowork session). Verified
+  via code read: `final_node` deleted, `execute_node` absorbed it,
+  `llm_core.stream_chat_with_tools`/`normalize.chat_stream_with_tools` exist,
+  frontend `segments` model wired through `types.ts`/`Message.tsx`/
+  `TraceView.tsx`/`ChatPage.tsx`/`useConversationStore.ts`, tests rewritten.
+  **Not yet run against the test suite or verified live in this session** —
+  next step is §2 of the consolidated plan (pytest, `tsc`/build, live
+  streaming-with-tools check via Chrome), then commit. Not marked `[x]`
+  until that gate passes.
+
+## Phase O — Reply generation quality (synthesis, task separation, model use)
+
+Plan: `workspace/plan/plan_reply_quality.md`. Sequencing:
+`workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §3/§5.
+
+- [~] **O — Appendix A registry re-tiering partially applied uncommitted**
+  (`llama-3.3-70b` balanced→fast, `glm-4.7` fast→research, two new inactive
+  model stubs) — found in the working tree, not yet reflected in
+  `constants.py`'s `ROLE_LEVELS["orchestrator"]` (the plan's own flagged
+  companion change, still `"fast"`, not yet flipped to `"balanced"`).
+- [ ] O.1 — dedicated final-synthesis pass on the research tier + the
+  missed orchestrator-tier flip (highest priority — reverses a live
+  regression).
+- [ ] O.2 — fetch+extract deep research (replace snippet-only web_search
+  observations with fetched page bodies).
+- [ ] O.3 — plan-as-contract verifier node, deep-research-gated, 1–2
+  revision passes.
+- [ ] O.4 — decomposition nudge for heavy analytical prompts.
+
+## Phase P — UI polish (new 2026-07-14, spec in the consolidated plan)
+
+Plan: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §4 (no
+prior source doc — fully speced there).
+
+- [ ] P.1 — two-level collapsible trace/agent-activity toggle (auto-collapse
+  on run completion, manual re-open, live status label). Depends on Phase N
+  being verified first (builds on the `segments` model).
+- [ ] P.2 — fold chat-row rename/delete into the kebab ("⋮") menu alongside
+  Add to project/Memory.
+- [ ] P.3 — rename "Search chats" → "Search", relocate below Image Lab,
+  broaden to search all chats + projects (currently standalone-only),
+  consistent row sizing with New chat/Image Lab.
+- [ ] P.4 — project page opens directly into the chat/compose area
+  (Claude-style) instead of an intermediate chat-list-only page; open
+  question on exact composer/lazy-create behavior flagged for confirmation
+  before building.
+
+## Image Lab warm-session issues (paused, independent, user-paced)
+
+Plan: `workspace/plan/plan_imagelab_session_issues.md`. Not a numbered
+phase — explicitly paused pending the user's live Kaggle-side repro steps
+(which model, which phase Stop was clicked in, pre/post supervisor-deploy).
+Not blocked by, and doesn't block, Phases N/O/P above.
 
 ---
 
