@@ -6,6 +6,78 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Bugfix: FLUX CUDA OOM on generate, re-applied a previously-reverted fix
+
+Session context: the user had spent a long stretch believing Image Lab was
+broken end-to-end, both locally and in production, and asked for a lot of
+speculative changes to chase it — it turned out to be a college proxy
+network blocking the local dev Kaggle tunnel the whole time (production was
+never affected). Once clear of that misdiagnosis, this session's ask was
+narrower: verify the dead-session-detection work from earlier today (round
+7) is sound (it is — confirmed via full diff review + 438 green tests +
+clean `tsc`/build, and the local error the user saw was that exact new
+probe correctly firing because the tunnel really was down), then move on to
+other work the network issue doesn't block.
+
+Picked FLUX CUDA OOM next off `plan_imagelab_session_issues.md`'s "separate,
+still outstanding" list. `device_map="balanced"` was packing GPU 0 to the
+brim (12.95/14.56GiB observed) on FLUX model load, OOMing on the very next
+inference call despite the model itself loading fine. A `max_memory` cap
+fix for this was drafted on 2026-07-05 (`84c0a4d`) then reverted same day
+(`d96c1c6`) — but the revert message says "pausing further FLUX iteration
+for now," not that the fix was wrong; it was simply never verified on real
+Kaggle hardware before being backed out, and nothing has touched that code
+path since (confirmed: today's round-7 notebook edits only touched cells
+0/1/3 of the warm-session template, never cell 2's model-load call).
+
+**Fix (re-applied, unchanged in substance):** both FLUX templates
+(`image_flux/notebook.ipynb` cold-job, `image_flux_session/notebook.ipynb`
+warm-session) cell 2's `FluxPipeline.from_pretrained(..., device_map=
+"balanced")` call gained `max_memory={0: "13GiB", 1: "13GiB"}` — forces
+accelerate's dispatcher to leave ~1.5GiB headroom per T4 for inference-time
+activations instead of packing weights to the ~14.56GiB usable edge. Also
+added `local_files_only=True` to both the balanced-path and CPU-offload-
+fallback `from_pretrained` calls (SDXL's templates already had this; FLUX's
+never did — was paying for an unnecessary Hub round-trip every session
+start even though weights are already mounted locally). Note the
+warm-session serve loop's job-generate call was already inside its own
+try/except (unrelated earlier hardening), so this OOM was never crashing
+the kernel — it was silently failing every single generate job forever with
+an `error` status once GPU 0 filled up at load time, for the session's
+entire lifetime.
+
+**Edit mechanics:** same pattern as prior notebook edits this project —
+small Python script (`json.load` → string-replace the cell's `source` →
+`json.dump`), verified valid JSON + every code cell still `compile()`s
+clean afterward, diffed to confirm no incidental metadata/formatting churn
+(caught and fixed one trailing-newline diff-noise issue from `json.dump`
+not preserving the original EOF newline).
+
+**Verification:** both notebooks re-validated (JSON + compile), full
+backend suite 438/438 green (two consecutive runs — one run hit the known
+pre-existing xdist/SQLite-lock flake on two unrelated `test_chat.py` tests,
+gone on retry, consistent with the documented flake, not caused by this
+change since it only touches notebook template files the running
+container's baked image doesn't even see from a worktree checkout).
+`test_kaggle_session_templates.py` doesn't assert on this cell's exact
+source, so no test changes were needed. **Not independently verified on
+real Kaggle hardware** — still needs a live FLUX warm-session generate to
+confirm the OOM is actually gone; blocked on the same local-network issue
+(college proxy) as everything else local this round. Prefer SDXL over FLUX
+when isolating unrelated session-lifecycle issues until this is
+live-confirmed.
+
+**Isolation:** implemented in a git worktree (background-job session),
+committed there, pushed as a branch, opened as a draft PR against `dev`
+rather than committing directly — this session never merged/pushed to
+`dev` itself.
+
+**Files:** `backend/app/kaggle_templates/image_flux/notebook.ipynb`,
+`backend/app/kaggle_templates/image_flux_session/notebook.ipynb`,
+`workspace/plan/plan_imagelab_session_issues.md`.
+
+---
+
 ### [2026-07-14] — Feature: Image Lab dead-session detection (app was stuck on "Warming" forever)
 
 User-reported: a warm image session starts, the Kaggle notebook stops

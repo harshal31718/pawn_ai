@@ -348,12 +348,46 @@ This file (mark fully DONE), `build_tracker.md` Image Lab section,
 
 ---
 
-## Separate, also-outstanding: FLUX CUDA OOM on generate
+## Separate, also-outstanding: FLUX CUDA OOM on generate — FIX RE-APPLIED 2026-07-14
 
 `device_map="balanced"` packs GPU 0 to the brim on model load, then OOMs on
 the next inference call. A `max_memory` cap fix was drafted (`84c0a4d`) then
-reverted (`d96c1c6`) — still unfixed. Confounds FLUX-specific stop/session
-testing; prefer SDXL when isolating unrelated session-lifecycle issues.
+reverted (`d96c1c6`) — the revert message says "pausing further FLUX
+iteration for now," not that the fix was disproven; it was simply never
+verified against real Kaggle hardware before being backed out.
+
+**Re-applied the same fix**, unchanged in substance, to both FLUX templates
+(`image_flux/notebook.ipynb` — cold job, and `image_flux_session/notebook.ipynb`
+— warm session), cell 2's `FluxPipeline.from_pretrained(..., device_map="balanced")`
+call: added `max_memory={0: "13GiB", 1: "13GiB"}` so accelerate's balanced
+dispatcher is forced to leave ~1.5GiB headroom on each T4 for inference-time
+activations instead of packing weights to the ~14.56GiB edge (the observed
+failure: GPU 0 loaded to 12.95/14.56GiB, OOMed on the very next `pipe(...)`
+call even though the model itself loaded fine). Also added
+`local_files_only=True` to both `from_pretrained` calls (the balanced path
+and the CPU-offload fallback) — SDXL's templates already set this; FLUX's
+never did, meaning every session start paid for an unnecessary Hub
+round-trip to check the repo's config/revision even though the weights are
+already mounted locally.
+
+Confirmed this is still the current, unpatched state of both templates
+before applying (the revert in `d96c1c6` was never re-touched by any later
+notebook work, including the 2026-07-14 dead-session-detection pass — that
+pass only edited cell 0/1/3, never cell 2's model-load call). The
+warm-session serve loop (cell 3) already wraps each job's `pipe(...)` call
+in its own try/except, so a CUDA OOM was never crashing the kernel — it was
+silently failing every single generate job with an `error` status forever,
+since GPU 0 stayed packed to the brim for the session's whole lifetime.
+
+Verified: both notebooks re-validated as well-formed JSON, every code cell
+still `compile()`s clean, `test_kaggle_session_templates.py` doesn't assert
+on this cell's exact source so no test changes needed, full backend suite
+(438 tests) green. **Not independently verified on real Kaggle hardware —
+still needs a live FLUX warm-session generate to confirm the OOM is
+actually gone** (no Kaggle access from this session; blocked on the same
+local-network issue as the rest of Image Lab local testing this round).
+Prefer SDXL when isolating unrelated session-lifecycle issues until this is
+live-confirmed.
 
 ---
 
