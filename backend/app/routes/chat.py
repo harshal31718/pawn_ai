@@ -7,7 +7,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.normalize import chat_stream
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
-from app.exceptions import NotConfiguredError, ProviderError
+from app.exceptions import NotConfiguredError, ProviderError, NoEndpointError
 from app import events
 from app.constants import TRACE_MAX_ENTRIES
 from app.core import key_store
@@ -281,6 +281,18 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
             success = True
         except ProviderError as exc:
             yield events.error_event(exc.message)
+        except NoEndpointError:
+            # Genuine full exhaustion: chat_stream already fails over across
+            # every endpoint of every fallback model for this role (see
+            # normalize.chat_stream/resolver.fallback_models) before raising
+            # this -- so if it still escapes, there really is nothing left to
+            # try, not a bug. Distinct from the generic catch-all below so the
+            # user gets an honest message instead of "unexpected error" (F-1,
+            # 2026-07-14 -- this used to fall through to the generic handler
+            # because NoEndpointError isn't a ProviderError subclass).
+            yield events.error_event(
+                "All available models are currently rate-limited. Please try again in a moment."
+            )
         except Exception:
             import traceback
             traceback.print_exc()

@@ -129,8 +129,21 @@ async def direct_answer_node(
     user_id = state.get("user_id")
     model_id = state["user_model_id"]
 
-    candidates = resolver.pick(model_id, user_id=user_id)
-    active_provider = candidates[0][4] if candidates else "unknown"
+    # Best-effort "which provider is about to stream" peek for the UI's initial
+    # badge -- NOT the real availability check. It only looks at model_id's own
+    # endpoints, a strict subset of what chat_stream is about to try (it fails
+    # over across resolver.fallback_models(model_id, ...) too). Found 2026-07-14
+    # (F-1): this used to be unguarded, so a NoEndpointError here (model_id's
+    # endpoints exhausted, even though a fallback model would have worked) killed
+    # the whole turn before chat_stream got a chance to fail over, surfacing as a
+    # generic "unexpected error" in routes/chat.py's broad except. Degrade to
+    # "unknown" instead -- chat_stream's own on_provider_switch/on_model_switch
+    # callbacks correct the badge the moment a real endpoint is chosen.
+    try:
+        candidates = resolver.pick(model_id, user_id=user_id)
+        active_provider = candidates[0][4] if candidates else "unknown"
+    except (ProviderError, NoEndpointError):
+        active_provider = "unknown"
     await adispatch_custom_event("final_provider", {"provider": active_provider})
 
     async def on_model_switch(from_m, to_m):
@@ -419,8 +432,18 @@ async def final_node(
 
     await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
 
-    candidates = resolver.pick(model_id, user_id=user_id)
-    initial_provider = candidates[0][4] if candidates else "unknown"
+    # Same F-1 fix as direct_answer_node above: this peek only checks model_id's
+    # own endpoints (a subset of what chat_stream will try via fallback_models),
+    # so it must never crash the turn on its own -- this was the actual root
+    # cause of the reported "An unexpected error occurred" after heavy failover
+    # (live traceback, 2026-07-14): NoEndpointError('gemini-2.5-flash') escaped
+    # here, uncaught, even though chat_stream right below would likely have
+    # failed over to a working model.
+    try:
+        candidates = resolver.pick(model_id, user_id=user_id)
+        initial_provider = candidates[0][4] if candidates else "unknown"
+    except (ProviderError, NoEndpointError):
+        initial_provider = "unknown"
     await adispatch_custom_event("final_provider", {"provider": initial_provider})
 
     async def on_switch(from_p, to_p):
