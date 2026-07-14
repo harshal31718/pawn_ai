@@ -89,8 +89,8 @@ export default function Sidebar({
     }
   }, [editingId])
 
-  function handleStartRename(conv: CachedConversation, e: React.MouseEvent) {
-    e.stopPropagation()
+  function handleStartRename(conv: CachedConversation, e?: React.MouseEvent) {
+    e?.stopPropagation()
     setEditingId(conv.id)
     setEditValue(conv.title)
   }
@@ -359,7 +359,7 @@ export default function Sidebar({
                           onClick={(e) => e.stopPropagation()}
                         />
                       ) : (
-                        <span className="flex-1 truncate pr-8 select-none" onDoubleClick={(e) => handleStartRename(conv, e)}>
+                        <span className="flex-1 truncate pr-6 select-none" onDoubleClick={(e) => handleStartRename(conv, e)}>
                           {conv.title}
                         </span>
                       )}
@@ -400,30 +400,10 @@ export default function Sidebar({
                           </div>
                         ) : (
                           <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-50 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => handleStartRename(conv, e)}
-                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-theme-text transition-all active:scale-95"
-                              title="Rename"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
-                              </svg>
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setDeleteConfirmId(conv.id)
-                              }}
-                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-red-500 transition-all active:scale-95"
-                              title="Delete"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                              </svg>
-                            </button>
                             <KebabMenu
                               title="More options"
                               items={[
+                                { label: 'Rename', onClick: () => handleStartRename(conv) },
                                 {
                                   label: 'Add to project',
                                   submenu: projects.map((p) => ({
@@ -438,6 +418,7 @@ export default function Sidebar({
                                     { label: 'Rebuild memory index', onClick: () => handleRebuildMemory('chat', conv.id) },
                                   ],
                                 },
+                                { label: 'Delete', danger: true, onClick: () => setDeleteConfirmId(conv.id) },
                               ]}
                             />
                           </div>
