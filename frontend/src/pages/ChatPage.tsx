@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams, useOutletContext, useNavigate } from 'react-router-dom'
+import { useParams, useOutletContext, useNavigate, useLocation } from 'react-router-dom'
 import type { Message, Segment, TraceEntry } from '../types'
 import ChatWindow from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
@@ -72,6 +72,7 @@ function appendToolSegment(segments: Segment[] | undefined, entry: TraceEntry): 
 export default function ChatPage() {
   const { id: urlConvId, projectId: urlProjectId } = useParams<{ id: string; projectId?: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const { isSidebarOpen, setIsSidebarOpen, store } = useOutletContext<LayoutContext>()
   const {
     isDark,
@@ -125,6 +126,34 @@ export default function ChatPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlConvId])
+
+  // P.4 — ProjectPage's landing composer creates this draft chat and hands
+  // off a pending message/upload via router state instead of duplicating
+  // ChatPage's own streaming logic. Fire it once on arrival, then clear the
+  // state so a refresh/back-navigation never resends it. `pendingHandledRef`
+  // is a synchronous, same-mount-persistent guard against React 18
+  // StrictMode's intentional dev-only double-invocation of effects (mount →
+  // effect → cleanup → effect again) -- without it, this real side effect
+  // (sending a message / promoting the draft) fires twice, double-sends,
+  // and the second, corrupted call can race with the first's project-scope
+  // promotion.
+  const pendingHandledRef = useRef(false)
+  useEffect(() => {
+    if (pendingHandledRef.current) return
+    const pendingMessage = (location.state as { pendingMessage?: string } | null)?.pendingMessage
+    const pendingUploadFile = (location.state as { pendingUploadFile?: File } | null)?.pendingUploadFile
+    if (!pendingMessage && !pendingUploadFile) return
+    pendingHandledRef.current = true
+    navigate(location.pathname, { replace: true, state: {} })
+    if (pendingUploadFile) {
+      handleUpload(pendingUploadFile).then(() => {
+        if (pendingMessage) handleSend(pendingMessage)
+      })
+    } else if (pendingMessage) {
+      handleSend(pendingMessage)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state])
 
   // Sync store → URL: when the active conversation changes in the store (e.g.
   // user clicks a sidebar item, or a chat's scope changes), update the URL to
