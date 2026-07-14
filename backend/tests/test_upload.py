@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 from starlette.testclient import TestClient
 
 from app.main import app
-from app.storage import documents_drive
+from app.storage import conversations_drive, documents_drive
 from tests.fake_drive import FakeDriveStorage
 
 # Must match conftest.TEST_USER_ID
@@ -93,12 +93,10 @@ def test_upload_requires_drive_when_unavailable():
     assert resp.json()["code"] == "not_configured"
 
 
-def test_chat_injects_document_as_system_message(client, fake_drive):
-    """If a valid doc_id is sent to /chat, the document text must be prepended as a system message."""
-    doc_id = "test-doc-123"
-    doc_text = "Secrets of the universe are here."
-    documents_drive.store_doc(doc_id, doc_text, fake_drive)
-
+def test_chat_no_longer_injects_document_as_system_message(client, fake_drive):
+    """Phase A / A.4: doc_id no longer triggers whole-doc injection — content
+    reaches the model only via the doc_search tool. A doc_id that doesn't
+    even exist must NOT 404 (the field is now inert in /chat)."""
     captured_messages = []
 
     async def capturing_stream(url, model, messages, headers):
@@ -111,27 +109,45 @@ def test_chat_injects_document_as_system_message(client, fake_drive):
             "/chat",
             json={
                 "messages": [{"role": "user", "content": "summarize the doc"}],
-                "doc_id": doc_id,
+                "doc_id": "nonexistent-doc-id",
             },
         ) as resp:
             assert resp.status_code == 200
             resp.read()
 
-    # 1 planning prompt + 1 document context + 1 user prompt + 1 synthesis prompt = 4 messages
-    assert len(captured_messages) == 4
-    assert captured_messages[1]["role"] == "system"
-    assert doc_text in captured_messages[1]["content"]
-    assert captured_messages[2]["role"] == "user"
-    assert captured_messages[2]["content"] == "summarize the doc"
+    assert not any(m["role"] == "system" and "uploaded document" in m.get("content", "") for m in captured_messages)
 
 
-def test_chat_with_invalid_doc_id_returns_404(client):
-    response = client.post(
-        "/chat",
-        json={
-            "messages": [{"role": "user", "content": "hi"}],
-            "doc_id": "nonexistent-doc-id",
-        },
-    )
-    assert response.status_code == 404
-    assert "not found" in response.json()["detail"]
+def test_upload_with_conversation_id_lazy_creates_and_schedules_indexing(client, fake_drive):
+    """Draft-chat edge (locked rule): uploading with a conversation_id that
+    doesn't exist yet on Drive must lazy-create it, exactly as /chat does,
+    so the doc always ends up with a scope."""
+    conv_id = "draft-conv-1"
+    assert conversations_drive.get_conversation_meta(fake_drive, conv_id) is None
+
+    with patch("app.routes.upload.index_document_task") as mock_index_task:
+        response = client.post(
+            "/upload",
+            files={"file": ("test.txt", b"some doc content", "text/plain")},
+            data={"conversation_id": conv_id},
+        )
+    assert response.status_code == 200
+    assert conversations_drive.get_conversation_meta(fake_drive, conv_id) is not None
+    # Scheduled (and, under TestClient, run) via BackgroundTasks with the right args.
+    mock_index_task.assert_called_once()
+    call_args = mock_index_task.call_args[0]
+    assert call_args[0] == TEST_USER_ID
+    assert call_args[1] == conv_id
+    assert call_args[4] == "some doc content"
+
+
+def test_upload_without_conversation_id_does_not_index(client):
+    """No conversation_id (e.g. a doc dropped before any chat exists) — the
+    doc is stored but not scoped/indexed anywhere."""
+    with patch("app.routes.upload.index_document_task") as mock_index_task:
+        response = client.post(
+            "/upload",
+            files={"file": ("test.txt", b"some doc content", "text/plain")},
+        )
+    assert response.status_code == 200
+    mock_index_task.assert_not_called()

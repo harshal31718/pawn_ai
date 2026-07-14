@@ -16,15 +16,21 @@ def _resolve_gemini_key(user_id: str | None) -> str:
 async def _gemini_embed(text: str, api_key: str) -> list[float]:
     if not api_key:
         raise ValueError("No Google API key configured for embeddings.")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={api_key}"
+    # text-embedding-004 was shut down by Google 2026-01-14 (gemini-embedding-001
+    # follows 2026-07-14) -- gemini-embedding-2 is the current model. It defaults
+    # to 3072-dim output but supports the Matryoshka-truncated 768 the schema
+    # expects (a Google-recommended dimension, auto-normalized) via
+    # output_dimensionality. See plan_memory_scoping.md M.1.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent?key={api_key}"
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             url,
             json={
-                "model": "models/text-embedding-004",
+                "model": "models/gemini-embedding-2",
                 "content": {
                     "parts": [{"text": text}]
-                }
+                },
+                "outputDimensionality": 768,
             },
             headers={"Content-Type": "application/json"}
         )

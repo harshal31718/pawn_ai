@@ -1,17 +1,28 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import type { ConversationMeta } from '../api/client'
-import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon } from './icons'
+import { useLocation, useNavigate } from 'react-router-dom'
+import type { CachedConversation, CachedProject } from '../types'
+import { clearMemory, rebuildMemory } from '../api/client'
+import ConfirmDialog from './ConfirmDialog'
+import KebabMenu from './KebabMenu'
+import ProjectSection from './ProjectSection'
+import SearchResults from './SearchResults'
+import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, FolderIcon } from './icons'
 
 interface Props {
-  conversations: ConversationMeta[]
+  conversations: CachedConversation[]
+  projects: CachedProject[]
   activeId: string | null
   pendingIds?: Set<string>
   syncError?: string | null
   onSelect: (id: string) => void
-  onCreate: () => string
+  onCreate: (targetProjectId?: string) => string
   onDelete: (id: string) => void
   onRename: (id: string, newTitle: string) => void
+  onCreateProject: (name: string) => void
+  onRenameProject: (id: string, name: string) => void
+  onDeleteProject: (id: string) => void
+  onMoveChatToProject: (convId: string, projectId: string) => void
+  onRemoveChatFromProject: (convId: string) => void
   isOpen: boolean
   onClose: () => void
   onOpen: () => void
@@ -19,8 +30,15 @@ interface Props {
   email?: string
 }
 
+type PendingDialog =
+  | { kind: 'addToProject'; convId: string; convTitle: string; projectId: string; projectName: string }
+  | { kind: 'removeFromProject'; convId: string; convTitle: string; projectName: string }
+  | { kind: 'deleteProject'; project: CachedProject; chats: CachedConversation[] }
+  | { kind: 'clearMemory'; scopeType: 'chat' | 'project'; scopeId: string; label: string }
+
 export default function Sidebar({
   conversations,
+  projects,
   activeId,
   pendingIds,
   syncError,
@@ -28,6 +46,11 @@ export default function Sidebar({
   onCreate,
   onDelete,
   onRename,
+  onCreateProject,
+  onRenameProject,
+  onDeleteProject,
+  onMoveChatToProject,
+  onRemoveChatFromProject,
   isOpen,
   onClose,
   onOpen,
@@ -35,17 +58,37 @@ export default function Sidebar({
   email,
 }: Props) {
   const navigate = useNavigate()
+  const location = useLocation()
+  // /project/:projectId or /project/:projectId/chat/:id → highlight that project's row
+  const activeProjectId = location.pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [dialog, setDialog] = useState<PendingDialog | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const filteredConversations = query.trim()
-    ? conversations.filter((c) =>
-        (c.title || '').toLowerCase().includes(query.trim().toLowerCase())
-      )
-    : conversations
+  const standaloneConversations = conversations.filter((c) => !c.project_id)
+
+  // P.3: search spans everything (standalone + project-scoped chats, and
+  // project names themselves) -- it used to only filter standaloneConversations,
+  // so a match inside a project was invisible to search entirely.
+  const trimmedQuery = query.trim().toLowerCase()
+  const isSearching = trimmedQuery.length > 0
+  const matchedProjects = isSearching
+    ? projects.filter((p) => p.name.toLowerCase().includes(trimmedQuery))
+    : []
+  const matchedConversations = isSearching
+    ? conversations.filter((c) => (c.title || '').toLowerCase().includes(trimmedQuery))
+    : []
+
+  function handleRequestClearMemory(scopeType: 'chat' | 'project', scopeId: string, label: string) {
+    setDialog({ kind: 'clearMemory', scopeType, scopeId, label })
+  }
+
+  function handleRebuildMemory(scopeType: 'chat' | 'project', scopeId: string) {
+    rebuildMemory(scopeType, scopeId).catch((err) => alert(`Failed to rebuild memory: ${err.message}`))
+  }
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -54,8 +97,8 @@ export default function Sidebar({
     }
   }, [editingId])
 
-  function handleStartRename(conv: ConversationMeta, e: React.MouseEvent) {
-    e.stopPropagation()
+  function handleStartRename(conv: CachedConversation, e?: React.MouseEvent) {
+    e?.stopPropagation()
     setEditingId(conv.id)
     setEditValue(conv.title)
   }
@@ -84,6 +127,12 @@ export default function Sidebar({
     onClose()
   }
 
+  const handleNewChatInProject = (projectId: string) => {
+    const newId = onCreate(projectId)
+    navigate(`/project/${projectId}/chat/${newId}`)
+    onClose()
+  }
+
   const handleImageLab = () => {
     navigate('/imagelab')
     onClose()
@@ -94,9 +143,46 @@ export default function Sidebar({
     navigate(`/chat/${id}`)
   }
 
+  const handleSelectProjectChat = (id: string, projectId: string) => {
+    onSelect(id)
+    navigate(`/project/${projectId}/chat/${id}`)
+  }
+
+  const handleOpenProject = (projectId: string) => {
+    navigate(`/project/${projectId}`)
+  }
+
   const handleOpenSettings = () => {
     navigate('/settings')
     onClose()
+  }
+
+  function handleRequestRemoveChatFromProject(convId: string, convTitle: string, projectName: string) {
+    setDialog({ kind: 'removeFromProject', convId, convTitle, projectName })
+  }
+
+  function handleRequestDeleteProject(project: CachedProject, chats: CachedConversation[]) {
+    setDialog({ kind: 'deleteProject', project, chats })
+  }
+
+  function handleAddToProject(convId: string, convTitle: string, projectId: string, projectName: string) {
+    setDialog({ kind: 'addToProject', convId, convTitle, projectId, projectName })
+  }
+
+  function handleConfirmDialog() {
+    if (!dialog) return
+    if (dialog.kind === 'addToProject') {
+      onMoveChatToProject(dialog.convId, dialog.projectId)
+    } else if (dialog.kind === 'removeFromProject') {
+      onRemoveChatFromProject(dialog.convId)
+    } else if (dialog.kind === 'deleteProject') {
+      onDeleteProject(dialog.project.id)
+    } else {
+      clearMemory(dialog.scopeType, dialog.scopeId).catch((err) =>
+        alert(`Failed to clear memory: ${err.message}`),
+      )
+    }
+    setDialog(null)
   }
 
   return (
@@ -144,14 +230,14 @@ export default function Sidebar({
               <button
                 onClick={handleNewChat}
                 className="
-                  w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold
+                  w-full h-9 flex items-center gap-3 px-3 rounded-xl text-xs font-semibold
                   text-theme-text bg-theme-bg border border-theme-border/50 hover:bg-theme-surface-hover
                   transition-all active:scale-98 cursor-pointer select-none shadow-sm
                 "
                 id="new-chat-button"
               >
                 <PencilIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
-                <span className="py-1">New chat</span>
+                <span>New chat</span>
               </button>
             </div>
 
@@ -160,7 +246,7 @@ export default function Sidebar({
               <button
                 onClick={handleImageLab}
                 className="
-                  w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold
+                  w-full h-9 flex items-center gap-3 px-3 rounded-xl text-xs font-semibold
                   text-theme-text bg-theme-bg border border-theme-border/50 hover:bg-theme-surface-hover
                   transition-all active:scale-98 cursor-pointer select-none shadow-sm
                 "
@@ -168,8 +254,26 @@ export default function Sidebar({
                 title="Image Lab (experimental)"
               >
                 <BeakerIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
-                <span className="py-1">Image Lab</span>
+                <span>Image Lab</span>
               </button>
+            </div>
+
+            {/* Search — same size/style as New chat/Image Lab, sits directly below them */}
+            <div className="px-3 pb-2 shrink-0">
+              <div className="relative flex items-center">
+                <MagnifierIcon className="w-4 h-4 text-theme-text-muted absolute left-3 pointer-events-none select-none" />
+                <input
+                  type="text"
+                  placeholder="Search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="
+                    w-full h-9 pl-9 pr-3 rounded-xl text-xs font-semibold bg-theme-bg border border-theme-border/50
+                    text-theme-text placeholder-theme-text-muted shadow-sm
+                    focus:outline-none focus:border-theme-text-muted transition-colors
+                  "
+                />
+              </div>
             </div>
 
             {/* Offline / unsynced changes banner */}
@@ -182,39 +286,59 @@ export default function Sidebar({
               </div>
             )}
 
-            {/* Search Option */}
-            <div className="px-3 pb-2 shrink-0">
-              <div className="relative flex items-center">
-                <MagnifierIcon className="w-3.5 h-3.5 text-theme-text-muted absolute left-3 pointer-events-none select-none" />
-                <input
-                  type="text"
-                  placeholder="Search chats"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="
-                    w-full pl-9 pr-3 py-1.5 rounded-xl text-xs bg-theme-bg border border-theme-border/50 text-theme-text placeholder-theme-text-muted
-                    focus:outline-none focus:border-theme-text-muted transition-colors
-                  "
+            {isSearching ? (
+              <SearchResults
+                matchedProjects={matchedProjects}
+                matchedConversations={matchedConversations}
+                projects={projects}
+                activeId={activeId}
+                onOpenProject={handleOpenProject}
+                onSelectChat={(id, projectId) => {
+                  if (projectId) handleSelectProjectChat(id, projectId)
+                  else handleSelectConversation(id)
+                }}
+              />
+            ) : (
+              <>
+                {/* Projects section — above the flat chat list */}
+                <ProjectSection
+                  projects={projects}
+                  conversations={conversations}
+                  activeId={activeId}
+                  activeProjectId={activeProjectId}
+                  pendingIds={pendingIds}
+                  onOpenProject={handleOpenProject}
+                  onSelectChat={(id) => {
+                    const projectId = conversations.find((c) => c.id === id)?.project_id
+                    if (projectId) handleSelectProjectChat(id, projectId)
+                    else handleSelectConversation(id)
+                  }}
+                  onCreateProject={onCreateProject}
+                  onNewChatInProject={handleNewChatInProject}
+                  onRenameProject={onRenameProject}
+                  onRequestDeleteProject={handleRequestDeleteProject}
+                  onRequestRemoveChatFromProject={handleRequestRemoveChatFromProject}
+                  onClearMemory={handleRequestClearMemory}
+                  onRebuildMemory={handleRebuildMemory}
                 />
-              </div>
-            </div>
 
-            {/* Conversations List */}
-            <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
-              {filteredConversations.length === 0 ? (
+                {/* Chats section header — mirrors Projects' muted label styling */}
+                <div className="px-3 pt-1 pb-1 shrink-0">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted select-none">
+                    Chats
+                  </span>
+                </div>
+
+                {/* Conversations List */}
+                <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+              {standaloneConversations.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
                   <ChatBubbleIcon className="w-6 h-6 opacity-40" />
-                  {query.trim() ? (
-                    <span className="text-xs">No matching chats</span>
-                  ) : (
-                    <>
-                      <span className="text-xs">No conversations yet</span>
-                      <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
-                    </>
-                  )}
+                  <span className="text-xs">No conversations yet</span>
+                  <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
                 </div>
               ) : (
-                filteredConversations.map((conv) => {
+                standaloneConversations.map((conv) => {
                   const isActive = conv.id === activeId
                   const isEditing = conv.id === editingId
 
@@ -252,7 +376,7 @@ export default function Sidebar({
                           onClick={(e) => e.stopPropagation()}
                         />
                       ) : (
-                        <span className="flex-1 truncate pr-8 select-none" onDoubleClick={(e) => handleStartRename(conv, e)}>
+                        <span className="flex-1 truncate pr-6 select-none" onDoubleClick={(e) => handleStartRename(conv, e)}>
                           {conv.title}
                         </span>
                       )}
@@ -292,28 +416,28 @@ export default function Sidebar({
                             </button>
                           </div>
                         ) : (
-                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => handleStartRename(conv, e)}
-                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-theme-text transition-all active:scale-95"
-                              title="Rename"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
-                              </svg>
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setDeleteConfirmId(conv.id)
-                              }}
-                              className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-red-500 transition-all active:scale-95"
-                              title="Delete"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                              </svg>
-                            </button>
+                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-50 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <KebabMenu
+                              title="More options"
+                              items={[
+                                { label: 'Rename', onClick: () => handleStartRename(conv) },
+                                {
+                                  label: 'Add to project',
+                                  submenu: projects.map((p) => ({
+                                    label: p.name,
+                                    onClick: () => handleAddToProject(conv.id, conv.title, p.id, p.name),
+                                  })),
+                                },
+                                {
+                                  label: 'Memory',
+                                  submenu: [
+                                    { label: 'Clear memory', onClick: () => handleRequestClearMemory('chat', conv.id, conv.title) },
+                                    { label: 'Rebuild memory index', onClick: () => handleRebuildMemory('chat', conv.id) },
+                                  ],
+                                },
+                                { label: 'Delete', danger: true, onClick: () => setDeleteConfirmId(conv.id) },
+                              ]}
+                            />
                           </div>
                         )
                       )}
@@ -321,7 +445,9 @@ export default function Sidebar({
                   )
                 })
               )}
-            </div>
+                </div>
+              </>
+            )}
 
             {/* User Profile Card */}
             <div className="p-3 border-t border-theme-border/40 bg-theme-surface/30 flex items-center gap-3 shrink-0 select-none">
@@ -380,7 +506,22 @@ export default function Sidebar({
                 <PencilIcon className="w-4.5 h-4.5" />
               </button>
 
-              {/* 3. Image Lab Button (Milestone A.0 — throwaway) */}
+              {/* 3. Projects Button — expands sidebar with Projects section visible */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpen()
+                }}
+                className="
+                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
+                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
+                "
+                title="Projects"
+              >
+                <FolderIcon className="w-4.5 h-4.5" />
+              </button>
+
+              {/* 4. Image Lab Button (Milestone A.0 — throwaway) */}
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -395,7 +536,7 @@ export default function Sidebar({
                 <BeakerIcon className="w-4.5 h-4.5" />
               </button>
 
-              {/* 4. Search Chat Option */}
+              {/* 5. Search Chat Option */}
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -411,7 +552,7 @@ export default function Sidebar({
               </button>
             </div>
  
-            {/* 5. Bottom Settings & Profile Avatar */}
+            {/* 6. Bottom Settings & Profile Avatar */}
             <div className="w-full flex flex-col items-center gap-3.5 border-t border-theme-border/40 pt-4 pb-1 px-1 shrink-0">
               {/* Settings Button */}
               <button
@@ -446,6 +587,80 @@ export default function Sidebar({
           onClick={() => setDeleteConfirmId(null)}
         />
       )}
+
+      {/* Blocking confirm dialogs — add-to-project / remove-from-project / delete-project */}
+      <ConfirmDialog
+        open={dialog?.kind === 'addToProject'}
+        title="Add to project"
+        message={
+          dialog?.kind === 'addToProject' ? (
+            <>
+              This chat's history becomes part of <strong>{dialog.projectName}</strong>'s shared memory
+              — other chats in the project can use it.
+            </>
+          ) : null
+        }
+        confirmLabel="Add"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
+      <ConfirmDialog
+        open={dialog?.kind === 'removeFromProject'}
+        title="Remove from project"
+        message={
+          dialog?.kind === 'removeFromProject' ? (
+            <>
+              This chat's memory leaves <strong>{dialog.projectName}</strong>. Note: anything other
+              chats already wrote using this chat's info stays in those chats.
+            </>
+          ) : null
+        }
+        confirmLabel="Remove"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
+      <ConfirmDialog
+        open={dialog?.kind === 'deleteProject'}
+        title="Delete project"
+        destructive
+        message={
+          dialog?.kind === 'deleteProject' ? (
+            <>
+              <p className="mb-2">
+                Deletes the project <strong>and all {dialog.chats.length} chat{dialog.chats.length === 1 ? '' : 's'} inside it</strong>,
+                including their memory. This cannot be undone.
+              </p>
+              {dialog.chats.length > 0 && (
+                <ul className="list-disc pl-4 space-y-0.5 max-h-32 overflow-y-auto">
+                  {dialog.chats.map((c) => (
+                    <li key={c.id} className="truncate">{c.title}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : null
+        }
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
+      <ConfirmDialog
+        open={dialog?.kind === 'clearMemory'}
+        title="Clear memory"
+        destructive
+        message={
+          dialog?.kind === 'clearMemory' ? (
+            <>
+              Deletes all indexed memory for <strong>{dialog.label}</strong>
+              {dialog.scopeType === 'project' ? ' and every chat inside it' : ''}, both the search index
+              and the underlying record it rebuilds from. This cannot be undone.
+            </>
+          ) : null
+        }
+        confirmLabel="Clear"
+        onConfirm={handleConfirmDialog}
+        onCancel={() => setDialog(null)}
+      />
     </>
   )
 }

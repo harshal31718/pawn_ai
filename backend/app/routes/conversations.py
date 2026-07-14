@@ -28,7 +28,7 @@ class ConversationUpdate(BaseModel):
 #     executes on the event loop) ───────────────────────────────────────────
 
 def _list(drive, user_id):
-    return drive_storage.list_conversations(drive)
+    return drive_storage.list_all_conversations(drive)
 
 
 def _create(drive, user_id, conv_id, title, model_id):
@@ -59,6 +59,24 @@ def _update(drive, user_id, conv_id, title):
     if not drive_storage.get_conversation_meta(drive, conv_id):
         return "missing"
     return drive_storage.update_conversation_title(drive, conv_id, title)
+
+
+def _delete_chunks(user_id, conv_id):
+    """Best-effort: delete this chat's Postgres memory_chunks rows (works in
+    either scope via the conv_id provenance column). The Drive folder is
+    already gone by the time this runs, so a Postgres failure here is logged,
+    not surfaced — it's a derived index and can be cleaned up by a rebuild
+    once the underlying chat no longer exists on Drive anyway."""
+    import sys
+    from app.db.postgres_client import execute
+
+    try:
+        execute(
+            "delete from memory_chunks where user_id = %s and conv_id = %s",
+            (user_id, conv_id),
+        )
+    except Exception as e:
+        print(f"Failed to delete memory chunks for {conv_id}: {e}", file=sys.stderr)
 
 
 @router.get("")
@@ -92,6 +110,7 @@ async def delete_conversation(conv_id: str, request: Request):
     ok = await run_in_threadpool(call_drive, _delete, drive, user_id, conv_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Conversation {conv_id} not found.")
+    await run_in_threadpool(_delete_chunks, user_id, conv_id)
     return {"status": "ok"}
 
 

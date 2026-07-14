@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams, useOutletContext, useNavigate } from 'react-router-dom'
-import type { Message } from '../types'
+import { useParams, useOutletContext, useNavigate, useLocation } from 'react-router-dom'
+import type { Message, Segment, TraceEntry } from '../types'
 import ChatWindow from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
 import InteractiveGridBackground from '../components/InteractiveGridBackground'
@@ -12,9 +12,67 @@ import {
 import { mid } from '../store/ids'
 import type { LayoutContext } from './Layout'
 
+// Phase A / A.8 — a "step" event whose label announces an outbound action
+// (a tool call or a subagent delegation) becomes a "running" trace entry that
+// later flips to "done" + elapsed ms once the next trace-worthy event lands.
+// Must stay in lockstep with client.ts's _TOOL_CALL_LABEL_RE (same two
+// prefixes) so onToolCall can resolve a `name` for both tool calls and
+// delegations -- a code-reviewer WARN from the A.9 pass caught these drifting.
+//
+// Known limitation (accepted, live-only, self-corrects on reload): settling
+// only the LAST entry assumes at most one is ever "running" at a time. That
+// holds for the main agent's own loop, but a "Delegating to X" entry stays
+// "running" only until the subagent's own first nested step arrives (tagged
+// with the subagent's name, not "main") -- that nested step's settle call
+// closes the *outer* delegation entry early, understating its live elapsed
+// time for the rest of that turn. The persisted trace is unaffected: the
+// backend times the whole delegate_<name> call server-side via
+// time.monotonic(), so a reload shows the correct duration.
+const TOOL_STEP_RE = /^(Calling|Delegating to) /
+
+function settleRunningTrace(trace: TraceEntry[]): TraceEntry[] {
+  if (trace.length === 0) return trace
+  const last = trace[trace.length - 1]
+  if (last.kind !== 'tool' || last.status !== 'running') return trace
+  const elapsedMs = last.startedAt ? Date.now() - last.startedAt : undefined
+  return [...trace.slice(0, -1), { ...last, status: 'done', elapsedMs }]
+}
+
+function appendTraceEntry(trace: TraceEntry[] | undefined, entry: TraceEntry): TraceEntry[] {
+  return [...settleRunningTrace(trace || []), entry]
+}
+
+// Phase N — segments mirror of the trace helpers above: an ordered,
+// arrival-order list of text/tool-entry segments so Message.tsx can render
+// "text, then a tool card, then more text" instead of trace-always-above-
+// content. A running tool segment settles (status: 'done' + elapsed) the
+// moment the next segment of either kind arrives, exactly like trace's own
+// settle-on-next-entry rule.
+function settleRunningSegment(segments: Segment[]): Segment[] {
+  if (segments.length === 0) return segments
+  const last = segments[segments.length - 1]
+  if (last.type !== 'tool' || last.entry.status !== 'running') return segments
+  const elapsedMs = last.entry.startedAt ? Date.now() - last.entry.startedAt : undefined
+  return [...segments.slice(0, -1), { type: 'tool', entry: { ...last.entry, status: 'done', elapsedMs } }]
+}
+
+function appendTextSegment(segments: Segment[] | undefined, delta: string): Segment[] {
+  const settled = settleRunningSegment(segments || [])
+  const last = settled[settled.length - 1]
+  if (last && last.type === 'text') {
+    return [...settled.slice(0, -1), { type: 'text', content: last.content + delta }]
+  }
+  return [...settled, { type: 'text', content: delta }]
+}
+
+function appendToolSegment(segments: Segment[] | undefined, entry: TraceEntry): Segment[] {
+  return [...settleRunningSegment(segments || []), { type: 'tool', entry }]
+}
+
 export default function ChatPage() {
-  const { id: urlConvId } = useParams<{ id: string }>()
+  const { id: urlConvId, projectId: urlProjectId } = useParams<{ id: string; projectId?: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const { isSidebarOpen, setIsSidebarOpen, store } = useOutletContext<LayoutContext>()
   const {
     isDark,
@@ -69,14 +127,58 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlConvId])
 
-  // Sync store → URL: when the active conversation changes in the store
-  // (e.g. user clicks a sidebar item), update the URL to match.
+  // P.4 — ProjectPage's landing composer creates this draft chat and hands
+  // off a pending message/upload via router state instead of duplicating
+  // ChatPage's own streaming logic. Fire it once on arrival, then clear the
+  // state so a refresh/back-navigation never resends it. `pendingHandledRef`
+  // is a synchronous, same-mount-persistent guard against React 18
+  // StrictMode's intentional dev-only double-invocation of effects (mount →
+  // effect → cleanup → effect again) -- without it, this real side effect
+  // (sending a message / promoting the draft) fires twice, double-sends,
+  // and the second, corrupted call can race with the first's project-scope
+  // promotion.
+  const pendingHandledRef = useRef(false)
   useEffect(() => {
-    if (activeConvId && activeConvId !== urlConvId) {
-      navigate(`/chat/${activeConvId}`, { replace: true })
+    if (pendingHandledRef.current) return
+    const pendingMessage = (location.state as { pendingMessage?: string } | null)?.pendingMessage
+    const pendingUploadFile = (location.state as { pendingUploadFile?: File } | null)?.pendingUploadFile
+    if (!pendingMessage && !pendingUploadFile) return
+    pendingHandledRef.current = true
+    navigate(location.pathname, { replace: true, state: {} })
+    if (pendingUploadFile) {
+      handleUpload(pendingUploadFile).then(() => {
+        if (pendingMessage) handleSend(pendingMessage)
+      })
+    } else if (pendingMessage) {
+      handleSend(pendingMessage)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConvId])
+  }, [location.state])
+
+  // Sync store → URL: when the active conversation changes in the store (e.g.
+  // user clicks a sidebar item, or a chat's scope changes), update the URL to
+  // match — routing to /project/:projectId/chat/:id for chats inside a
+  // project, /chat/:id for standalone ones.
+  useEffect(() => {
+    if (!activeConvId) return
+    const conv = conversations.find((c) => c.id === activeConvId)
+    // An unpromoted draft isn't in `conversations` yet and has no known scope —
+    // trust whatever URL got us here (the New Chat / New-chat-in-project
+    // handlers already navigate explicitly) rather than bouncing back to
+    // /chat/:id before the first send resolves its real scope.
+    if (!conv) return
+    const targetPath = conv.project_id
+      ? `/project/${conv.project_id}/chat/${activeConvId}`
+      : `/chat/${activeConvId}`
+    const currentPath =
+      activeConvId === urlConvId
+        ? urlProjectId
+          ? `/project/${urlProjectId}/chat/${urlConvId}`
+          : `/chat/${urlConvId}`
+        : null
+    if (targetPath !== currentPath) navigate(targetPath, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConvId, conversations])
 
   // When the active conversation changes, sync the model picker to its model
   // and drop any attached document.
@@ -178,14 +280,23 @@ export default function ChatPage() {
         onToken: (delta) => {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + delta } : m,
+              m.id === assistantId
+                ? { ...m, content: m.content + delta, segments: appendTextSegment(m.segments, delta) }
+                : m,
             ),
           )
         },
         onDone: (viaProvider) => {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, viaProvider } : m,
+              m.id === assistantId
+                ? {
+                  ...m,
+                  viaProvider,
+                  trace: settleRunningTrace(m.trace || []),
+                  segments: settleRunningSegment(m.segments || []),
+                }
+                : m,
             ),
           )
           setStreaming(convId, false)
@@ -197,100 +308,108 @@ export default function ChatPage() {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? { ...m, content: `Error: ${err}` }
+                ? {
+                  ...m,
+                  content: `Error: ${err}`,
+                  trace: settleRunningTrace(m.trace || []),
+                  segments: settleRunningSegment(m.segments || []),
+                }
                 : m,
             ),
           )
           setStreaming(convId, false)
           streamsRef.current.delete(convId)
         },
-        onStep: (label, detail) => {
+        onStep: (label, detail, agent) => {
           setMessagesFor(convId, (prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                  ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'step',
-                      label,
-                      detail,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
-                }
-                : m,
-            ),
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = TOOL_STEP_RE.test(label)
+                ? { kind: 'tool', agent, label, detail, status: 'running', startedAt: Date.now() }
+                : { kind: 'step', agent, label, detail }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
+            }),
           )
         },
-        onMemoryHit: (summary) => {
+        onToolCall: (name, agent) => {
+          // Enriches the tool entry onStep just pushed with its resolved
+          // tool/subagent name (client.ts fires this right after onStep for
+          // the same event) -- TraceView otherwise falls back to the raw label.
           setMessagesFor(convId, (prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                  ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'memory_hit',
-                      summary,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              let next = m
+              if (m.trace && m.trace.length > 0) {
+                const last = m.trace[m.trace.length - 1]
+                if (last.kind === 'tool' && last.status === 'running' && last.agent === agent) {
+                  next = { ...next, trace: [...m.trace.slice(0, -1), { ...last, name }] }
                 }
-                : m,
-            ),
+              }
+              if (m.segments && m.segments.length > 0) {
+                const last = m.segments[m.segments.length - 1]
+                if (last.type === 'tool' && last.entry.kind === 'tool' && last.entry.status === 'running' && last.entry.agent === agent) {
+                  next = { ...next, segments: [...m.segments.slice(0, -1), { type: 'tool', entry: { ...last.entry, name } }] }
+                }
+              }
+              return next
+            }),
+          )
+        },
+        onMemoryHit: (summary, scope, sourceConvId) => {
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = {
+                kind: 'memory_hit',
+                agent: 'main',
+                summary,
+                scope: scope === 'project' ? 'project' : scope === 'chat' ? 'chat' : undefined,
+                sourceConvId,
+              }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
+            }),
           )
         },
         onModelCall: (model, purpose) => {
           setMessagesFor(convId, (prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                  ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'model_call',
-                      model,
-                      purpose,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
-                }
-                : m,
-            ),
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = { kind: 'model_call', agent: 'main', model, purpose }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
+            }),
+          )
+        },
+        onCitation: (url, title) => {
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const existing = m.citations || []
+              if (existing.some((c) => c.url === url)) return m // de-dup by URL
+              const entry: TraceEntry = { kind: 'citation', agent: 'main', url, title }
+              return {
+                ...m,
+                citations: [...existing, { url, title }],
+                trace: appendTraceEntry(m.trace, entry),
+                segments: appendToolSegment(m.segments, entry),
+              }
+            }),
           )
         },
         onProviderSwitch: (from, to) => {
-          const noticeMsg: Message = {
-            id: mid(),
-            role: 'notice',
-            content: `Failing over: ${from} → ${to}`,
-          }
-          setMessagesFor(convId, (prev) => {
-            const idx = prev.findIndex((m) => m.id === assistantId)
-            const withNotice = idx !== -1
-              ? [...prev.slice(0, idx), noticeMsg, ...prev.slice(idx)]
-              : [...prev, noticeMsg]
-            return withNotice.map((m) =>
-              m.id === assistantId
-                ? {
-                  ...m,
-                  trace: [
-                    ...(m.trace || []),
-                    {
-                      type: 'provider_switch',
-                      from,
-                      to,
-                      timestamp: new Date().toLocaleTimeString(),
-                    },
-                  ],
-                }
-                : m,
-            )
-          })
+          // Renders solely inside the assistant bubble's trace (TraceView's
+          // provider_switch StepRow) — no standalone notice message. A
+          // separate role:'notice' pill used to be spliced in here too
+          // (pre-Phase-A / Step R4 era), which duplicated this same event as
+          // a floating bubble ABOVE the reply, breaking the "one continuous
+          // flow" the agent trace (A.8) was built to guarantee. Removed
+          // 2026-07-14.
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = { kind: 'provider_switch', agent: 'main', from, to }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
+            }),
+          )
         },
       },
       selectedProvider,
@@ -303,7 +422,15 @@ export default function ChatPage() {
   async function handleUpload(file: File) {
     setIsUploading(true)
     try {
-      const docId = await uploadDoc(file)
+      // Draft-chat edge (locked rule): promote the draft first, exactly as
+      // sending a first message does, so the upload always has a chat to
+      // scope its RAG indexing into — no unscoped document rows can exist.
+      const convId = activeConvId ?? createConversation()
+      promoteDraft(convId)
+      if (!activeConvId) {
+        navigate(`/chat/${convId}`, { replace: true })
+      }
+      const docId = await uploadDoc(file, convId)
       setAttachedDoc({ id: docId, name: file.name })
     } catch (err: any) {
       alert(`Upload failed: ${err.message}`)
@@ -374,29 +501,10 @@ export default function ChatPage() {
             </p>
             {/* Input area */}
             <div className="w-full flex flex-col gap-2">
-              {attachedDoc && (
-                <div className="flex items-center gap-1.5 bg-theme-surface border border-theme-border rounded-xl px-2.5 py-1 text-xs text-theme-text select-none self-start shadow-md animate-in fade-in zoom-in duration-200">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted shrink-0">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                  </svg>
-                  <span className="font-medium truncate max-w-[200px]">{attachedDoc.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => setAttachedDoc(null)}
-                    disabled={isActiveStreaming}
-                    className="ml-1 text-theme-text-muted hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
-                    title="Remove attachment"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
-                      <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-                    </svg>
-                  </button>
-                </div>
-              )}
               {rateLimitCountdown !== null && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-medium animate-in fade-in">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
                   </svg>
                   Rate limited — retrying in {rateLimitCountdown}s
                 </div>
@@ -408,7 +516,7 @@ export default function ChatPage() {
                   className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-medium hover:opacity-90 transition-opacity text-left"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
                   </svg>
                   No provider keys yet — add one in Settings to choose a model.
                 </button>
@@ -424,6 +532,8 @@ export default function ChatPage() {
                 selectedProvider={selectedProvider}
                 onChangeProvider={setSelectedProvider}
                 models={availableModels}
+                attachment={attachedDoc}
+                onRemoveAttachment={() => setAttachedDoc(null)}
               />
             </div>
           </div>
@@ -434,30 +544,10 @@ export default function ChatPage() {
       {messages.length > 0 && (
       <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none flex flex-col items-center bg-gradient-to-t from-theme-bg via-theme-bg/85 to-transparent">
         <div className="w-full max-w-3xl flex flex-col gap-2 pointer-events-auto pb-4 px-4">
-          {attachedDoc && (
-            <div className="flex items-center gap-1.5 bg-theme-surface border border-theme-border rounded-xl px-2.5 py-1 text-xs text-theme-text select-none self-start shadow-md animate-in fade-in zoom-in duration-200">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted shrink-0">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-              </svg>
-              <span className="font-medium truncate max-w-[200px]">{attachedDoc.name}</span>
-              <button
-                type="button"
-                onClick={() => setAttachedDoc(null)}
-                disabled={isActiveStreaming}
-                className="ml-1 text-theme-text-muted hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
-                title="Remove attachment"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
-                  <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-                </svg>
-              </button>
-            </div>
-          )}
-
           {rateLimitCountdown !== null && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-medium animate-in fade-in">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
               </svg>
               Rate limited — retrying in {rateLimitCountdown}s
             </div>
@@ -473,6 +563,8 @@ export default function ChatPage() {
             selectedProvider={selectedProvider}
             onChangeProvider={setSelectedProvider}
             models={availableModels}
+            attachment={attachedDoc}
+            onRemoveAttachment={() => setAttachedDoc(null)}
           />
         </div>
       </div>

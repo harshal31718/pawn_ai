@@ -3,20 +3,31 @@
 DriveStorage wraps the Drive v3 API for PAWN's per-user file operations.
 All paths are relative to a user's PAWN/ root folder in Drive.
 
-Folder structure created on first use:
+Folder structure created on first use (Phase M — memory scoping):
   PAWN/
     conversations/
-      {conv_id}/
-        meta.json
-        messages.jsonl
-        summary.md
+      chats/
+        {conv_id}/
+          meta.json
+          messages.jsonl
+          summary.md
+          rag_chunks.jsonl
+      projects/
+        {project_id}/
+          project.json
+          {conv_id}/            # same shape as a standalone chat
     uploads/
       {doc_id}.txt
+
+Folder placement alone determines a chat's scope (chats/ = standalone,
+projects/{pid}/ = that project) — see storage/conversations_drive.py and
+storage/projects_drive.py, and workspace/plan/plan_memory_scoping.md §3.
 """
 
 from __future__ import annotations
 
 import io
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import Optional
@@ -162,18 +173,50 @@ class DriveStorage:
             self._file_ids[cache_key] = fid
             return fid
 
+    # How many candidate "PAWN" root folders to fetch when resolving the root.
+    # 1 would suffice for the happy path; fetching a few more lets us both
+    # pick deterministically (oldest first) and detect+log a pre-existing
+    # duplicate-root condition (see the concurrent-cache-miss race fixed in
+    # drive_factory, commit 2146b07) instead of silently ignoring it.
+    _ROOT_LOOKUP_PAGE_SIZE = 10
+
     def get_or_create_root(self) -> str:
-        """Return (or create) the PAWN/ root folder in the user's Drive."""
+        """Return (or create) the PAWN/ root folder in the user's Drive.
+
+        Deterministic root selection: orders by createdTime ascending and
+        always picks the OLDEST matching folder. Without an explicit
+        orderBy, Drive's files.list has no guaranteed, stable ordering --
+        for a user with more than one "PAWN" root folder (a pre-existing,
+        already-fixed-going-forward race could create one), two separate
+        DriveStorage instances (e.g. across a cache eviction) could silently
+        resolve to DIFFERENT roots and each see a different subset of that
+        user's chats/projects. Oldest-first is deterministic (stable across
+        every call, every instance) and favors the root more likely to hold
+        the most existing content, minimizing that "missing content"
+        symptom -- it does not merge or delete anything, so it's safe to
+        apply automatically; an actual multi-root merge still needs manual
+        review (see workspace/plan/plan_imagelab_session_issues.md's sibling
+        doc, plan_open_issues_2026-07-14.md §2.2)."""
         with self._lock:
             if self._root_id:
                 return self._root_id
 
             # Search in root
             q = "name = 'PAWN' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-            result = self._files().list(q=q, fields="files(id)", pageSize=1).execute()
+            result = self._files().list(
+                q=q, fields="files(id)", pageSize=self._ROOT_LOOKUP_PAGE_SIZE, orderBy="createdTime",
+            ).execute()
             files = result.get("files", [])
 
             if files:
+                if len(files) > 1:
+                    ids = ", ".join(f["id"] for f in files)
+                    print(
+                        f"Drive: user {self._user_id} has {len(files)} duplicate 'PAWN' root "
+                        f"folders ({ids}) -- using the oldest ({files[0]['id']}) deterministically. "
+                        "Manual merge recommended (see plan_open_issues_2026-07-14.md §2.2).",
+                        file=sys.stderr,
+                    )
                 self._root_id = files[0]["id"]
             else:
                 meta = {"name": "PAWN", "mimeType": self._MIME_FOLDER}
@@ -252,3 +295,22 @@ class DriveStorage:
         fid = self.find_file(name, parent_id)
         if fid:
             self.delete_file(fid)
+
+    def move_item(self, item_id: str, new_parent_id: str, old_parent_id: str) -> None:
+        """Relocate a file or folder to a new parent (single Drive metadata
+        call — used for chat moves standalone<->project and the one-time
+        legacy-layout migration, Phase M). Drive items can have multiple
+        parents, so both adding the new parent and removing the old one are
+        required, not just adding."""
+        with self._lock:
+            self._files().update(
+                fileId=item_id,
+                addParents=new_parent_id,
+                removeParents=old_parent_id,
+                fields="id, parents",
+            ).execute()
+            # Cached path->ID maps may reference the old parent path; drop
+            # them all (cheap to rebuild) rather than track reverse keys,
+            # mirroring delete_file's cache invalidation.
+            self._folders.clear()
+            self._file_ids.clear()

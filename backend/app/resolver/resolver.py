@@ -6,16 +6,15 @@ from app.core.rate_limiter import EndpointRateLimiter
 from app.core.llm_core import _detect_provider, _provider_headers
 
 class Resolver:
-    def __init__(self, registry: Registry, rate_limiter: EndpointRateLimiter, secrets: Dict[str, str]):
+    def __init__(self, registry: Registry, rate_limiter: EndpointRateLimiter):
         self._registry = registry
         self._rate_limiter = rate_limiter
-        self._secrets = secrets
 
     def _resolve_key(self, ep, user_id: Optional[str]) -> str:
         """Resolve the API key for an endpoint from the user's BYOK keys (Settings).
 
         Only per-user keys configured in Settings are used — there is no shared
-        Docker-secret fallback. Returns "" when the user has no key for the provider.
+        fallback of any kind. Returns "" when the user has no key for the provider.
         """
         if not user_id:
             return ""
@@ -104,11 +103,19 @@ class Resolver:
                 continue
         raise NoEndpointError(f"No available endpoint at capability level '{level}'")
 
-    def pick_model_by_capability(self, level: str, visibility: str = "user", user_id: Optional[str] = None) -> str:
+    def pick_model_by_capability(
+        self,
+        level: str,
+        visibility: str = "user",
+        user_id: Optional[str] = None,
+        require_tools: bool = False,
+    ) -> str:
         """
         Selects the first canonical model_id matching the capability level that has
         available endpoints. When user_id is given, the model must have ≥1 endpoint
-        whose provider the user has configured a key for.
+        whose provider the user has configured a key for. When require_tools is True,
+        models with supports_tools=False are excluded (used for orchestrator/agent
+        picks that need native tool calling).
         """
         matching = (
             self._registry.internal_models(level)
@@ -116,6 +123,8 @@ class Resolver:
             else [m for m in self._registry.user_models() if m.capability_level == level]
         )
         for model in matching:
+            if require_tools and not model.supports_tools:
+                continue
             if self._has_usable_endpoint(model.id, user_id):
                 return model.id
         raise NoEndpointError(f"No available model at capability level '{level}'")

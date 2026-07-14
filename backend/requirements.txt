@@ -5,6 +5,7 @@ httpx
 httpx2
 pytest
 pytest-asyncio
+pytest-xdist  # parallel test runs: pytest -n auto (full-suite gate)
 pdfplumber
 python-multipart
 numpy
@@ -19,3 +20,5 @@ google-auth-oauthlib
 google-api-python-client
 google-auth-httplib2
 PyJWT
+# Chat agent refinement (Phase A / A.3): fetch_url's readable-text extraction.
+trafilatura

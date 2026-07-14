@@ -3,11 +3,13 @@ import sys
 import uuid
 
 import pdfplumber
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 
 from app.core.drive_factory import call_drive, require_drive_for_user
-from app.storage import documents_drive
+from app.exceptions import NotConfiguredError
+from app.memory.indexer import index_document_task, resolve_scope
+from app.storage import conversations_drive, documents_drive
 
 router = APIRouter()
 
@@ -22,8 +24,27 @@ def _store(drive, doc_id, text, user_id):
     documents_drive.store_doc(doc_id, text, drive)
 
 
+def _ensure_conversation(drive, conv_id: str, user_id: str | None):
+    """Blocking: lazy-create the conversation if it doesn't exist yet — the
+    exact same pattern chat.py's `/chat` uses for a client-owned draft
+    conversation id, so uploading from a draft chat (no server-side
+    conversation yet) always ends up with a scope to index into, per the
+    plan's locked draft-chat rule (a doc upload therefore always has a
+    scope; no unscoped document rows can exist)."""
+    meta = conversations_drive.get_conversation_meta(drive, conv_id)
+    if not meta:
+        conversations_drive.create_conversation(
+            drive, user_id=user_id, conv_id=conv_id, title="New Chat", model_id="gemini-2.5-flash"
+        )
+
+
 @router.post("/upload")
-async def upload_document(request: Request, file: UploadFile = File(...)):
+async def upload_document(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    conversation_id: str | None = Form(None),
+):
     user_id = request.state.user_id
     filename = file.filename or ""
     content_type = file.content_type or ""
@@ -78,5 +99,19 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     doc_id = str(uuid.uuid4())
     drive = await run_in_threadpool(require_drive_for_user, user_id)
     await run_in_threadpool(call_drive, _store, drive, doc_id, text, user_id)
+
+    # Chunk + index into the uploading chat's scope (Phase A / A.4) — content
+    # reaches the model only via the doc_search tool, never whole-doc-injected.
+    # No conversation_id means no chat to scope into (e.g. a doc dropped
+    # before any chat exists at all); the doc is stored but not indexed.
+    if conversation_id:
+        await run_in_threadpool(call_drive, _ensure_conversation, drive, conversation_id, user_id)
+        try:
+            scope = await run_in_threadpool(resolve_scope, user_id, conversation_id, drive)
+        except NotConfiguredError:
+            scope = None
+        background_tasks.add_task(
+            index_document_task, user_id, conversation_id, scope, doc_id, text, filename,
+        )
 
     return {"doc_id": doc_id, "filename": filename, "char_count": len(text)}

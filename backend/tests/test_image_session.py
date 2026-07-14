@@ -72,6 +72,17 @@ def _patch_db(db):
     )
 
 
+@pytest.fixture(autouse=True)
+def _clear_kernel_probe_cache():
+    """_probe_cache is module-level state keyed by session_id, and most tests
+    in this file reuse the same fake id ("s1") -- without clearing it, a
+    probe result cached by one test could leak into the next (well within
+    the 30s throttle window between fast-running tests)."""
+    image_session._probe_cache.clear()
+    yield
+    image_session._probe_cache.clear()
+
+
 @pytest.fixture()
 def client():
     with TestClient(app) as c:
@@ -452,7 +463,10 @@ def test_get_session_status_warmup_fresh_heartbeat_stays_loading():
 
 def test_get_session_status_warmup_no_heartbeat_falls_back_to_timeout():
     """Before the first heartbeat lands (or an old notebook), warmup death is
-    detected via the wall-clock startup timeout, not heartbeat staleness."""
+    detected via the wall-clock startup timeout, not heartbeat staleness --
+    the age here (20min) is past the probe-eligible window too, so the probe
+    is mocked returning None (no info, e.g. no Kaggle creds) to prove the
+    900s backstop still fires on its own when the probe can't help."""
     now = datetime.now(timezone.utc)
     row = {
         "id": "s1",
@@ -464,7 +478,7 @@ def test_get_session_status_warmup_no_heartbeat_falls_back_to_timeout():
     }
     db = _FakeDB(rows={"image_sessions": [row]})
     p1, p2, p3, p4 = _patch_db(db)
-    with p1, p2, p3, p4:
+    with p1, p2, p3, p4, patch("app.core.image_session.key_store.get_kaggle", return_value=None):
         out = image_session.get_session_status("user-1", "flux")
     assert out["status"] == "error"
     assert out["error"] and "starting up" in out["error"]
@@ -488,6 +502,170 @@ def test_get_session_status_warmup_no_heartbeat_recent_stays_starting():
         out = image_session.get_session_status("user-1", "flux")
     assert out["status"] == "starting"
     assert not any(kind == "execute" for kind, _, _ in db.calls)
+
+
+# --- Kaggle kernel-status probe (dead-session detection) ---------------------
+
+_KAGGLE_CFG = {"username": "alice", "api_token": "tok"}
+
+
+def _row_no_heartbeat(now, age_seconds, **overrides):
+    row = {
+        "id": "s1",
+        "status": "loading_model",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": None,
+        "created_at": _iso(now - timedelta(seconds=age_seconds)),
+        "images_done": 0,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_get_session_status_probe_terminal_status_flips_early():
+    """Kaggle reporting the kernel already 'error'd/completed is a much faster,
+    more precise signal than waiting out the full 900s wall-clock timeout."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 120)  # past the 60s probe-eligible age, well under 900s
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="error") as mock_probe:
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "no longer running" in out["error"] and "'error'" in out["error"]
+    mock_probe.assert_called_once_with("alice", "tok", "pawn-flux-session")
+
+
+def test_get_session_status_probe_complete_status_also_flips():
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 120)
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="complete"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "no longer running" in out["error"]
+
+
+def test_get_session_status_probe_queued_stays_warming_and_suppresses_900s_backstop():
+    """A kernel that's still queued on Kaggle (GPU queue) is legitimately not
+    up yet -- the probe reporting 'queued' must suppress even the 900s
+    wall-clock backstop, not just the fast-path checks."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 1000)  # past the old 900s backstop
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="queued"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "loading_model"
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
+
+
+def test_get_session_status_probe_running_recent_stays_warming():
+    """Kaggle says the kernel is running and it just hasn't had time to reach
+    PAWN's database yet -- must not be flagged before the rendezvous-broken
+    window (180s) elapses."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 90)  # past 60s probe-eligible, under 180s rendezvous window
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="running"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "loading_model"
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
+
+
+def test_get_session_status_probe_running_no_heartbeat_past_180s_flips_with_rendezvous_message():
+    """Kaggle says running, but PAWN has never heard from it -- the kernel is
+    alive but can't reach PostgREST at all (tunnel down, RLS mismatch)."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 200)  # past the 180s rendezvous-broken window
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="running"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "never reached PAWN's database" in out["error"]
+
+
+def test_get_session_status_probe_no_creds_skips_probe_entirely():
+    """No Kaggle creds configured -- _kernel_probe must return None without
+    ever calling kaggle.kernel_status, falling back to the old timeout path."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 120)
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=None), \
+         patch("app.core.image_session.kaggle.kernel_status") as mock_probe:
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "loading_model"  # not yet past the 900s backstop
+    mock_probe.assert_not_called()
+
+
+def test_get_session_status_probe_throttled_within_window():
+    """Two get_session_status calls in quick succession must only hit Kaggle's
+    API once -- the frontend polls every 3s, Kaggle shouldn't be hammered."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 120)
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="running") as mock_probe:
+        image_session.get_session_status("user-1", "flux")
+        image_session.get_session_status("user-1", "flux")
+    assert mock_probe.call_count == 1
+
+
+def test_get_session_status_probe_early_check_on_half_stale_heartbeat():
+    """A heartbeat that's gone stale past half the 90s window (but not the
+    full window yet) triggers an early probe check rather than waiting out
+    the remaining time when Kaggle can already confirm the kernel is over."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "loading_model",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now - timedelta(seconds=50)),  # > 45s half-window, < 90s full window
+        "created_at": _iso(now - timedelta(minutes=3)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="error"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "no longer running" in out["error"]
+
+
+def test_get_session_status_includes_created_at():
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+        "created_at": _iso(now - timedelta(minutes=2)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "sdxl")
+    assert out["created_at"] == row["created_at"]
 
 
 def test_get_session_status_stopping_within_grace_period_untouched():

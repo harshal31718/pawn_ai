@@ -11,6 +11,7 @@ class ModelEntry(BaseModel):
     capability_tags: List[str]
     context_window: int
     active: bool
+    supports_tools: bool = True
 
 class EndpointEntry(BaseModel):
     id: str
@@ -18,7 +19,6 @@ class EndpointEntry(BaseModel):
     provider: Literal["google", "cerebras", "groq", "huggingface", "github", "openrouter"]
     provider_model_id: str
     base_url: str
-    secret: str
     priority: int
     rpm_limit: Optional[int] = None
     rpd_limit: Optional[int] = None

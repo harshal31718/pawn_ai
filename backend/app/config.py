@@ -9,14 +9,6 @@ def read_secret(name: str) -> str | None:
     return os.getenv(name.upper())
 
 
-# Provider API keys (shared app keys; users can override via BYOK)
-GEMINI_API_KEY      = read_secret("gemini_api_key")
-CEREBRAS_API_KEY    = read_secret("cerebras_api_key")
-GROQ_API_KEY        = read_secret("groq_api_key")
-HUGGINGFACE_API_KEY = read_secret("huggingface_api_key")
-GITHUB_API_KEY      = read_secret("github_api_key")
-OPENROUTER_API_KEY  = read_secret("openrouter_api_key")
-
 # Self-hosted Postgres (application database) — replaces Supabase.
 POSTGRES_DSN = read_secret("postgres_dsn")
 

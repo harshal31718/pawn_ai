@@ -14,6 +14,7 @@ corrected in one place once exercised against real credentials.
 import base64
 import json
 import time
+from typing import Optional
 
 import httpx
 
@@ -29,6 +30,11 @@ from app.exceptions import KaggleError
 # Kernel statuses (lower-cased) that mean "stop polling".
 _DONE = {"complete", "completed"}
 _FAILED = {"error", "cancelacknowledged", "cancelrequested", "cancelled", "canceled"}
+
+# Public union of the two: any status meaning "this kernel run is over" — used by
+# image_session's warm-session dead-kernel probe to tell a genuinely-finished run
+# apart from one that's still queued/running on Kaggle's side.
+TERMINAL_KERNEL_STATUSES = frozenset(_DONE | _FAILED)
 
 _PLACEHOLDER = "__PAWN_PAYLOAD_B64__"
 
@@ -319,6 +325,34 @@ def deploy_kernel(
             # A run/version is in flight on this slug — it already exists, so for a
             # warmup/verify deploy we're done. Never block waiting for it to idle.
             return
+
+
+def kernel_status(username: str, api_token: str, kernel_name: str) -> Optional[str]:
+    """Best-effort probe of a warm-session kernel's real state on Kaggle.
+
+    Used by image_session's dead-kernel detection to get an independent signal
+    when the notebook itself has stopped heartbeating over PostgREST (the normal
+    liveness channel) — without this, a kernel that died silently (network
+    failure, OOM, uncaught exception before the first heartbeat) is only caught
+    by a long wall-clock timeout. One GET /kernels/status call, same endpoint
+    _wait_until_complete already polls on the cold-run path.
+
+    Returns Kaggle's lowercased status ("queued"/"running"/"complete"/"error"/...)
+    or None when it can't be determined (any HTTP/network failure, non-200,
+    missing field) — None always means "no information," never "kernel is gone."
+    Callers must fall back to their own timeout-based detection on None. Never
+    raises. Blocking — invoke via run_in_threadpool."""
+    try:
+        with _client(username, api_token) as client:
+            resp = client.get(
+                "/kernels/status",
+                params={"userName": username, "kernelSlug": kernel_name},
+            )
+            if resp.status_code != 200:
+                return None
+            return (resp.json().get("status") or "").lower() or None
+    except Exception:
+        return None
 
 
 def run_kernel(

@@ -36,69 +36,106 @@ create table if not exists user_api_keys (
   primary key (user_id, provider)
 );
 
+-- Phase M (memory scoping) — redefined from the original cross-chat-visible
+-- design (Step 15 / SM-1). scope_type/scope_id give hard isolation: a chunk
+-- is only ever visible to queries within its own scope ('chat', scope_id =
+-- conv_id) or ('project', scope_id = project_id). conv_id is retained as
+-- provenance (which chat actually wrote the chunk) even inside a project
+-- scope. kind/doc_id are pre-provisioned for the follow-on
+-- plan_chat_agent_refinement.md's document indexing — Phase M itself only
+-- ever writes kind='message'.
+drop function if exists match_memory_chunks(vector, text, text, int);
+drop function if exists search_memory_chunks(text, text, text, int);
+drop table if exists memory_chunks;
+
 create table if not exists memory_chunks (
   id         bigserial primary key,
+  chunk_id   uuid not null,              -- matches the Drive rag_chunks.jsonl record; idempotency key
   user_id    text references users(user_id) on delete cascade,
-  conv_id    text not null,
+  scope_type text not null,              -- 'chat' | 'project'
+  scope_id   text not null,              -- conv_id when 'chat', project_id when 'project'
+  conv_id    text not null,              -- originating chat (provenance; = scope_id for 'chat')
+  kind       text not null default 'message',  -- 'message' | 'document'
+  doc_id     text,                       -- set only when kind='document'
+  msg_index  int,
   text       text not null,
-  embedding  vector(768),               -- text-embedding-004 dimensionality
+  embedding  vector(768),               -- gemini-embedding-2, output_dimensionality=768
   fts_doc    tsvector generated always as (to_tsvector('english', text)) stored,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  unique (user_id, chunk_id)
 );
 
 create index if not exists memory_chunks_embedding_idx
   on memory_chunks using ivfflat (embedding vector_cosine_ops) with (lists = 10);
 create index if not exists memory_chunks_fts_idx
   on memory_chunks using gin (fts_doc);
-create index if not exists memory_chunks_user_conv_idx
-  on memory_chunks (user_id, conv_id);
+create index if not exists memory_chunks_scope_idx
+  on memory_chunks (user_id, scope_type, scope_id);
 
 -- ---------------------------------------------------------------------------
 -- RPC functions used by backend/app/memory/retrieve.py
 -- ---------------------------------------------------------------------------
 
--- Vector similarity search (pgvector cosine), scoped by user, excluding the
--- active conversation. Returns cosine similarity as `score` (1 = identical).
-create or replace function match_memory_chunks(
+-- Vector similarity search (pgvector cosine), scoped strictly to one
+-- (user, scope_type, scope_id) — the inverse of the old exclude-based
+-- semantics. No query can ever reach another scope. Returns cosine
+-- similarity as `score` (1 = identical). `doc_id`/`kind` returned so callers
+-- (Phase A / A.4's doc_search) can label document hits by their source
+-- upload — null/`'message'` for chat-turn chunks.
+drop function if exists match_scoped_chunks(vector, text, text, text, text, int);
+create function match_scoped_chunks(
   query_embedding vector(768),
   match_user_id   text,
-  exclude_conv_id text,
+  match_scope_type text,
+  match_scope_id  text,
+  match_kind      text,
   match_count     int
 )
-returns table (id bigint, conv_id text, text text, score float)
+returns table (id bigint, conv_id text, text text, score float, kind text, doc_id text)
 language sql stable
 as $$
   select
     mc.id,
     mc.conv_id,
     mc.text,
-    1 - (mc.embedding <=> query_embedding) as score
+    1 - (mc.embedding <=> query_embedding) as score,
+    mc.kind,
+    mc.doc_id
   from memory_chunks mc
   where mc.user_id = match_user_id
-    and (exclude_conv_id is null or mc.conv_id <> exclude_conv_id)
+    and mc.scope_type = match_scope_type
+    and mc.scope_id = match_scope_id
+    and (match_kind is null or mc.kind = match_kind)
     and mc.embedding is not null
   order by mc.embedding <=> query_embedding
   limit match_count;
 $$;
 
--- Full-text keyword search (Postgres FTS), scoped by user, excluding the
--- active conversation.
-create or replace function search_memory_chunks(
+-- Full-text keyword search (Postgres FTS), scoped strictly to one
+-- (user, scope_type, scope_id).
+drop function if exists search_scoped_chunks(text, text, text, text, text, int);
+create function search_scoped_chunks(
   query_text      text,
   match_user_id   text,
-  exclude_conv_id text,
+  match_scope_type text,
+  match_scope_id  text,
+  match_kind      text,
   match_count     int
 )
-returns table (id bigint, conv_id text, text text)
+returns table (id bigint, conv_id text, text text, kind text, doc_id text)
 language sql stable
 as $$
   select
     mc.id,
     mc.conv_id,
-    mc.text
+    mc.text,
+    mc.kind,
+    mc.doc_id
   from memory_chunks mc
   where mc.user_id = match_user_id
-    and (exclude_conv_id is null or mc.conv_id <> exclude_conv_id)
+    and mc.scope_type = match_scope_type
+    and mc.scope_id = match_scope_id
+    and (match_kind is null or mc.kind = match_kind)
     and mc.fts_doc @@ plainto_tsquery('english', query_text)
   limit match_count;
 $$;

@@ -4,12 +4,6 @@ services:
     ports:
       - "8001:8000"
     secrets:
-      - gemini_api_key
-      - cerebras_api_key
-      - groq_api_key
-      - huggingface_api_key
-      - github_api_key
-      - openrouter_api_key
       - postgres_dsn
       - encryption_secret
       - google_client_id
@@ -17,10 +11,13 @@ services:
       - jwt_secret
     environment:
       # Public URL for the self-hosted PostgREST instance (D.4) — non-secret,
-      # injected into warm Kaggle-session payloads. Blank locally (dev has no
-      # publicly reachable PostgREST for a remote Kaggle kernel to call —
-      # warm-session live testing has always required a real deployed
-      # rendezvous endpoint, same as it did under Supabase).
+      # injected into warm Kaggle-session payloads. Blank by default: the
+      # D.3/D.4 migration off Supabase (whose REST URL was always public,
+      # so local warm-session testing worked before that migration with no
+      # extra setup) moved PostgREST to a local-only Docker container with no
+      # public URL. To test warm sessions locally, use the `cloudflared`
+      # tunnel service below (see its comment) instead of editing this line —
+      # a docker-compose.override.yml supplies the real value.
       - POSTGREST_PUBLIC_URL=
     volumes:
       - ./backend/data:/app/data
@@ -76,6 +73,30 @@ services:
     # proxy set up in D.7 (production). Not usable from a local dev compose up
     # alone — see the POSTGREST_PUBLIC_URL note on the backend service above.
 
+  # Dev-only tunnel so a remote Kaggle warm-session kernel can reach the local
+  # `postgrest` container (regression from the D.3/D.4 Supabase -> self-hosted
+  # Postgres+PostgREST migration: Supabase's URL was always public, so local
+  # warm-session testing worked before that migration without this). Not part
+  # of the default `docker compose up` -- gated behind the `tunnel` profile so
+  # nothing changes for anyone not testing Image Lab locally. Usage:
+  #   docker compose --profile tunnel up -d cloudflared
+  #   docker compose logs cloudflared   # grab the printed https://*.trycloudflare.com URL
+  #   copy docker-compose.override.yml.example to docker-compose.override.yml,
+  #   paste the URL into POSTGREST_PUBLIC_URL, then `docker compose up -d backend`
+  # to restart the backend so it picks up the new env var.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    # --protocol http2: QUIC (the default transport) dials over UDP, which
+    # this host's Docker Desktop network setup repeatedly fails to establish
+    # ("failed to dial to edge with quic: timeout: no recent network
+    # activity", retried with exponential backoff, never connects). HTTP/2
+    # runs over plain TCP 443, which isn't blocked the same way.
+    command: tunnel --no-autoupdate --protocol http2 --url http://postgrest:3000
+    depends_on:
+      - postgrest
+    profiles:
+      - tunnel
+
   frontend:
     build: ./frontend
     ports:
@@ -97,18 +118,6 @@ volumes:
   pawn_postgres_data:
 
 secrets:
-  gemini_api_key:
-    file: ./secrets/gemini_api_key
-  cerebras_api_key:
-    file: ./secrets/cerebras_api_key
-  groq_api_key:
-    file: ./secrets/groq_api_key
-  huggingface_api_key:
-    file: ./secrets/huggingface_api_key
-  github_api_key:
-    file: ./secrets/github_api_key
-  openrouter_api_key:
-    file: ./secrets/openrouter_api_key
   postgres_password:
     file: ./secrets/postgres_password
   postgres_dsn:

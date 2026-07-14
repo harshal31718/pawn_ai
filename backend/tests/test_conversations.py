@@ -1,6 +1,6 @@
 import json
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from starlette.testclient import TestClient
 
 from app.main import app
@@ -70,6 +70,48 @@ def test_crud_endpoints(client):
     # 8. Fetch returns 404
     resp = client.get(f"/conversations/{conv_id}")
     assert resp.status_code == 404
+
+
+def test_delete_conversation_also_deletes_its_memory_chunks(client, fake_drive):
+    """Phase M, M.3: DELETE /conversations/{id} must delete that chat's
+    Postgres memory_chunks rows too (a pre-existing gap Phase M closes)."""
+    meta = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="Doomed Chat")
+    conv_id = meta["id"]
+
+    fake_execute = MagicMock()
+    with patch("app.db.postgres_client.execute", fake_execute):
+        resp = client.delete(f"/conversations/{conv_id}")
+    assert resp.status_code == 200
+
+    fake_execute.assert_called_once()
+    sql, params = fake_execute.call_args[0]
+    assert "delete from memory_chunks" in sql
+    assert params == (TEST_USER_ID, conv_id)
+
+
+def test_list_conversations_tags_project_scoped_chats(client, fake_drive):
+    """Phase M, M.6: GET /conversations must surface every chat, standalone
+    and project-scoped, each tagged with its current project_id (None for
+    standalone) — the sidebar's Projects section renders from this single
+    list rather than a per-project round trip."""
+    from app.storage import projects_drive
+
+    standalone = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="Standalone")
+    resp = client.post("/projects", json={"name": "Proj"})
+    project_id = resp.json()["id"]
+    in_project = storage.create_conversation(fake_drive, user_id=TEST_USER_ID, title="In Project")
+    projects_drive.move_chat(
+        fake_drive,
+        in_project["id"],
+        storage._chats_folder(fake_drive),
+        projects_drive._project_folder(fake_drive, project_id),
+    )
+
+    resp = client.get("/conversations")
+    assert resp.status_code == 200
+    by_id = {m["id"]: m for m in resp.json()}
+    assert by_id[standalone["id"]]["project_id"] is None
+    assert by_id[in_project["id"]]["project_id"] == project_id
 
 
 def test_conversations_require_drive_when_unavailable():

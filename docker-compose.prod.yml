@@ -1,4 +1,4 @@
-# PAWN — production / staging compose (second isolated app on the shared Enma VM)
+# PAWN — production compose, deployed to its own dedicated VM (see deployment.md)
 #
 # ONE file drives BOTH environments; an env file selects which:
 #   Staging:  docker compose --env-file .env.staging -f docker-compose.prod.yml up -d --build
@@ -10,11 +10,10 @@
 # fully isolated on the same host — the `postgres_data` volume below becomes
 # `pawn_postgres_data` vs `pawn-dev_postgres_data` automatically.
 #
-# HARD RULES (see deployment.md): never bind 80/443, never touch /opt/enma or
-# Enma's volumes/secrets, never publish a port without a 127.0.0.1: prefix.
-# The host's system Nginx terminates TLS and reverse-proxies to these loopback
-# ports. The frontend is NOT a service here — Nginx serves the static build
-# from frontend/dist (built during deploy).
+# HARD RULES (see deployment.md): never bind 80/443 directly (the host's
+# system Nginx owns them and terminates TLS), never publish a port without a
+# 127.0.0.1: prefix. The frontend is NOT a service here — Nginx serves the
+# static build from frontend/dist (built during deploy).
 
 services:
   backend:
@@ -24,12 +23,6 @@ services:
       # Loopback only — Nginx reverse-proxies https://<domain>/ -> here.
       - "127.0.0.1:${BACKEND_PORT}:8000"
     secrets:
-      - gemini_api_key
-      - cerebras_api_key
-      - groq_api_key
-      - huggingface_api_key
-      - github_api_key
-      - openrouter_api_key
       - postgres_dsn
       - encryption_secret
       - google_client_id
@@ -108,18 +101,6 @@ volumes:
   postgres_data:
 
 secrets:
-  gemini_api_key:
-    file: ./secrets/gemini_api_key
-  cerebras_api_key:
-    file: ./secrets/cerebras_api_key
-  groq_api_key:
-    file: ./secrets/groq_api_key
-  huggingface_api_key:
-    file: ./secrets/huggingface_api_key
-  github_api_key:
-    file: ./secrets/github_api_key
-  openrouter_api_key:
-    file: ./secrets/openrouter_api_key
   postgres_password:
     file: ./secrets/postgres_password
   postgres_dsn:

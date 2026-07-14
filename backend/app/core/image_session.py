@@ -28,6 +28,7 @@ run_in_threadpool so the event loop is never stalled.
 
 import secrets as _secrets
 import sys
+import time as _time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -38,7 +39,10 @@ from app import config
 from app.constants import (
     COLD_JOB_MAX_WALLCLOCK_SECONDS,
     IMAGE_SESSION_HEARTBEAT_STALE_SECONDS,
+    IMAGE_SESSION_KAGGLE_PROBE_INTERVAL_SECONDS,
     IMAGE_SESSION_MAX_DURATION_MINUTES,
+    IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS,
+    IMAGE_SESSION_STARTUP_PROBE_AFTER_SECONDS,
     IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS,
     KAGGLE_SESSION_POLL_INTERVAL_SECONDS,
 )
@@ -245,6 +249,47 @@ def _is_alive(s: dict) -> bool:
     return True
 
 
+# In-process, per-session cache of the last Kaggle kernel-status probe result
+# (monotonic timestamp, status). Single-process uvicorn -- module-level state
+# is fine, no cross-process sync needed. Keyed by session_id so unrelated
+# sessions/users never share a throttle window.
+_probe_cache: dict[str, tuple[float, Optional[str]]] = {}
+
+
+def _kernel_probe(user_id: str, model: str, session_id: str) -> Optional[str]:
+    """Best-effort, throttled GET /kernels/status for a warmup session's real
+    Kaggle kernel state -- the independent signal get_session_status uses to
+    detect a dead kernel fast instead of waiting on IMAGE_SESSION_STARTUP_
+    TIMEOUT_SECONDS (900s) alone. Returns Kaggle's lowercased status or None
+    (no information: no Kaggle creds, an API failure, or malformed data) --
+    None is never itself evidence the kernel is dead, just that this probe
+    can't help this time; callers fall back to their own timeout logic.
+    Never raises. Throttled to IMAGE_SESSION_KAGGLE_PROBE_INTERVAL_SECONDS per
+    session_id so the frontend's 3s status poll doesn't hammer Kaggle's API."""
+    now = _time.monotonic()
+    cached = _probe_cache.get(session_id)
+    if cached is not None and now - cached[0] < IMAGE_SESSION_KAGGLE_PROBE_INTERVAL_SECONDS:
+        return cached[1]
+
+    status: Optional[str] = None
+    try:
+        cfg = key_store.get_kaggle(user_id)
+        if cfg and cfg.get("username") and cfg.get("api_token"):
+            slug = get_image_model(model).session_slug
+            if slug:
+                status = kaggle.kernel_status(cfg["username"], cfg["api_token"], slug)
+    except Exception:
+        status = None
+
+    _probe_cache[session_id] = (now, status)
+    if len(_probe_cache) > 64:
+        # Simple, single-process safeguard against unbounded growth over a
+        # long backend uptime -- not a real LRU, just a periodic reset. Live
+        # sessions re-populate their entry on the very next poll either way.
+        _probe_cache.clear()
+    return status
+
+
 def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
     s = _latest_session(user_id, model)
     if s is None:
@@ -256,23 +301,55 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
     if status in ("starting", "installing", "loading_model"):
         # The notebook's supervisor thread heartbeats during warmup too, so a
         # stale heartbeat here means the kernel died mid-startup (crash / OOM /
-        # externally killed). Before the first heartbeat lands (the first few
-        # seconds), or for an older notebook that doesn't heartbeat during
-        # warmup, fall back to the wall-clock startup timeout.
+        # externally killed). Before the first heartbeat lands, or for an
+        # older notebook that doesn't heartbeat during warmup, an independent
+        # Kaggle kernel-status probe (_kernel_probe) gives a much faster
+        # signal than the wall-clock startup timeout alone -- that timeout is
+        # now only the backstop for when the probe itself has no information
+        # (no Kaggle creds configured, or the Kaggle API is unreachable).
         hb = _parse_ts(s.get("heartbeat_at"))
         created = _parse_ts(s.get("created_at"))
         dead_reason = None
         if hb is not None:
-            if (_now() - hb).total_seconds() > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS:
+            staleness = (_now() - hb).total_seconds()
+            if staleness > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS:
                 dead_reason = (
                     "Session died during startup -- the Kaggle kernel stopped "
                     "sending heartbeats (crash, resource limit, or killed)."
                 )
-        elif created is not None and (_now() - created).total_seconds() > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
-            dead_reason = (
-                "Session never finished starting up in time -- the Kaggle kernel "
-                "may have failed to install dependencies or load the model."
-            )
+            elif staleness > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS / 2:
+                # Heartbeat going stale but not stale enough yet to be sure --
+                # worth an early independent check rather than waiting out the
+                # full window when Kaggle can already tell us it's over.
+                probe = _kernel_probe(user_id, model, s["id"])
+                if probe in kaggle.TERMINAL_KERNEL_STATUSES:
+                    dead_reason = (
+                        f"The Kaggle kernel is no longer running (Kaggle reports "
+                        f"'{probe}') -- it exited or failed before the session "
+                        "came up. Check the kernel log on kaggle.com/code."
+                    )
+        elif created is not None:
+            age = (_now() - created).total_seconds()
+            if age > IMAGE_SESSION_STARTUP_PROBE_AFTER_SECONDS:
+                probe = _kernel_probe(user_id, model, s["id"])
+                if probe in kaggle.TERMINAL_KERNEL_STATUSES:
+                    dead_reason = (
+                        f"The Kaggle kernel is no longer running (Kaggle reports "
+                        f"'{probe}') -- it exited or failed before the session "
+                        "came up. Check the kernel log on kaggle.com/code."
+                    )
+                elif probe == "running" and age > IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS:
+                    dead_reason = (
+                        "The Kaggle kernel is running, but it has never reached "
+                        "PAWN's database -- the PostgREST connection may be down "
+                        "or misconfigured (tunnel, RLS token). Check the kernel "
+                        "log on kaggle.com/code for '[pawn]' error lines."
+                    )
+                elif probe != "queued" and age > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
+                    dead_reason = (
+                        "Session never finished starting up in time -- the Kaggle kernel "
+                        "may have failed to install dependencies or load the model."
+                    )
         if dead_reason is not None:
             try:
                 execute(
@@ -283,6 +360,7 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
                 pass
             s["status"] = "error"
             s["error"] = dead_reason
+            _probe_cache.pop(s["id"], None)
 
     elif status == "stopping":
         # Cooperative stop only: Kaggle has no "cancel a running kernel" API,
@@ -345,6 +423,7 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
         "status": s["status"],
         "error": s.get("error"),
         "expires_at": s.get("expires_at"),
+        "created_at": s.get("created_at"),
         "images_done": s.get("images_done", 0),
         "max_images": s.get("max_images"),
         "alive": _is_alive(s),

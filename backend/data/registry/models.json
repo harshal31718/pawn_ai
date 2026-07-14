@@ -1,0 +1,174 @@
+[
+  {
+    "id": "gemini-2.5-flash",
+    "display_name": "Gemini 2.5 Flash",
+    "type": "chat",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "balanced",
+    "capability_tags": [
+      "general",
+      "summarization",
+      "instruction-following",
+      "coding"
+    ],
+    "context_window": 1048576,
+    "active": true,
+    "supports_tools": true
+  },
+  {
+    "id": "gemini-2.5-flash-lite",
+    "display_name": "Gemini 2.5 Flash Lite",
+    "type": "chat",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "fast",
+    "capability_tags": [
+      "general",
+      "summarization"
+    ],
+    "context_window": 1048576,
+    "active": true,
+    "supports_tools": true
+  },
+  {
+    "id": "llama-3.3-70b",
+    "display_name": "Llama 3.3 70B",
+    "type": "chat",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "fast",
+    "capability_tags": [
+      "coding",
+      "general"
+    ],
+    "context_window": 128000,
+    "active": true,
+    "supports_tools": true
+  },
+  {
+    "id": "deepseek-r1",
+    "display_name": "DeepSeek R1",
+    "type": "reasoning",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "research",
+    "capability_tags": [
+      "reasoning",
+      "math",
+      "research",
+      "coding"
+    ],
+    "context_window": 65536,
+    "active": true,
+    "supports_tools": true
+  },
+  {
+    "id": "gpt-oss-120b",
+    "display_name": "GPT-OSS 120B",
+    "type": "chat",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "balanced",
+    "capability_tags": [
+      "general",
+      "coding",
+      "instruction-following"
+    ],
+    "context_window": 8192,
+    "active": true,
+    "supports_tools": true
+  },
+  {
+    "id": "qwen-3-32b",
+    "display_name": "Qwen3 32B",
+    "type": "chat",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "balanced",
+    "capability_tags": [
+      "general",
+      "coding",
+      "reasoning"
+    ],
+    "context_window": 32768,
+    "active": false,
+    "supports_tools": true
+  },
+  {
+    "id": "glm-4.7",
+    "display_name": "GLM 4.7",
+    "type": "chat",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "research",
+    "capability_tags": [
+      "general",
+      "instruction-following",
+      "reasoning",
+      "research",
+      "coding"
+    ],
+    "context_window": 8192,
+    "active": true,
+    "supports_tools": true
+  },
+  {
+    "id": "gemini-3-flash",
+    "display_name": "Gemini 3 Flash",
+    "type": "chat",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "balanced",
+    "capability_tags": [
+      "general",
+      "summarization",
+      "instruction-following",
+      "coding",
+      "reasoning"
+    ],
+    "context_window": 1048576,
+    "active": false,
+    "supports_tools": true
+  },
+  {
+    "id": "deepseek-r1-distill",
+    "display_name": "DeepSeek R1 Distill (Llama 70B)",
+    "type": "reasoning",
+    "visibility": "user",
+    "tier": "free",
+    "capability_level": "balanced",
+    "capability_tags": [
+      "reasoning",
+      "math",
+      "coding"
+    ],
+    "context_window": 128000,
+    "active": false,
+    "supports_tools": true
+  },
+  {
+    "id": "text-embedding-004",
+    "display_name": "Text Embedding 004",
+    "type": "embedding",
+    "visibility": "internal",
+    "tier": "free",
+    "capability_level": null,
+    "capability_tags": [],
+    "context_window": 2048,
+    "active": false,
+    "supports_tools": true
+  },
+  {
+    "id": "gemini-embedding-2",
+    "display_name": "Gemini Embedding 2",
+    "type": "embedding",
+    "visibility": "internal",
+    "tier": "free",
+    "capability_level": null,
+    "capability_tags": [],
+    "context_window": 8192,
+    "active": true,
+    "supports_tools": true
+  }
+]

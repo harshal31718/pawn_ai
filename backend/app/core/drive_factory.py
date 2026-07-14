@@ -39,11 +39,41 @@ _CACHE_LOCK = threading.Lock()
 _TTL_OK = 600.0   # cache a live DriveStorage for 10 minutes
 _TTL_NONE = 30.0  # cache a "not linked / unavailable" result briefly to avoid hammering Postgres
 
+# Per-user build locks. Several requests can miss the cache at once (e.g. the
+# frontend firing multiple API calls right after Drive linking, when
+# evict_user() just cleared the entry) — without serializing the build, each
+# would construct its own DriveStorage and independently race
+# get_or_create_root()'s check-then-create, each finding no "PAWN" folder yet
+# and each creating one, producing duplicate root folders in Drive.
+_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_BUILD_LOCKS_LOCK = threading.Lock()
+
 
 def evict_user(user_id: str) -> None:
     """Drop any cached DriveStorage for a user (e.g. after they (re)link Drive)."""
     with _CACHE_LOCK:
         _CACHE.pop(user_id, None)
+
+
+def _get_build_lock(user_id: str) -> threading.Lock:
+    with _BUILD_LOCKS_LOCK:
+        lock = _BUILD_LOCKS.get(user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _BUILD_LOCKS[user_id] = lock
+        return lock
+
+
+def _cached(user_id: str, now: float) -> Optional[tuple[bool, Optional[DriveStorage]]]:
+    """Return (True, drive) if a fresh cache entry exists, else None."""
+    with _CACHE_LOCK:
+        entry = _CACHE.get(user_id)
+        if entry is not None:
+            ts, drive = entry
+            ttl = _TTL_OK if drive is not None else _TTL_NONE
+            if now - ts < ttl:
+                return True, drive
+    return None
 
 
 def get_drive_for_user(user_id: str) -> Optional[DriveStorage]:
@@ -57,19 +87,22 @@ def get_drive_for_user(user_id: str) -> Optional[DriveStorage]:
     if not user_id:
         return None
 
-    now = time.time()
-    with _CACHE_LOCK:
-        entry = _CACHE.get(user_id)
-        if entry is not None:
-            ts, drive = entry
-            ttl = _TTL_OK if drive is not None else _TTL_NONE
-            if now - ts < ttl:
-                return drive
+    hit = _cached(user_id, time.time())
+    if hit is not None:
+        return hit[1]
 
-    drive = _build_drive_for_user(user_id)
-    with _CACHE_LOCK:
-        _CACHE[user_id] = (time.time(), drive)
-    return drive
+    # Serialize the build per-user: only one thread actually constructs
+    # DriveStorage (and thus can create the root folder for the first time);
+    # everyone else blocks here and then reuses the cached result below.
+    with _get_build_lock(user_id):
+        hit = _cached(user_id, time.time())
+        if hit is not None:
+            return hit[1]
+
+        drive = _build_drive_for_user(user_id)
+        with _CACHE_LOCK:
+            _CACHE[user_id] = (time.time(), drive)
+        return drive
 
 
 def require_drive_for_user(user_id: str) -> DriveStorage:

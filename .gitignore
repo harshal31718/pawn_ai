@@ -9,8 +9,13 @@ backups/
 # SSH keypairs (Oracle instance access, etc.) — never commit
 keys/
 
-# data — personal conversation and memory files
-data/
+# data — personal conversation/memory runtime files (registry/ is committed
+# data per CLAUDE.md, not runtime state — deliberately NOT ignored)
+backend/data/conversations/
+backend/data/memory/
+backend/data/checkpoints.db
+backend/data/checkpoints.db-shm
+backend/data/checkpoints.db-wal
 
 # python
 __pycache__/
@@ -31,6 +36,10 @@ dist/
 
 # claude local settings
 .claude/settings.local.json
+
+# local-only compose override (e.g. Image Lab tunnel POSTGREST_PUBLIC_URL) --
+# keep only docker-compose.override.yml.example in git
+docker-compose.override.yml
 
 # os
 .DS_Store

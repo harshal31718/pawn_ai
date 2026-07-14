@@ -1,3 +1,5 @@
+import type { Citation, TraceEntry } from '../types'
+
 // Fallback to localhost for local dev without a .env file
 export const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -184,6 +186,7 @@ export interface SessionStatus {
   error?: string | null // set when status === 'error': model-load failure, heartbeat lost, or stop unconfirmed
   session_id?: string
   expires_at?: string | null
+  created_at?: string | null // used to show elapsed time in the warming pill
   images_done?: number
   max_images?: number | null
 }
@@ -307,11 +310,22 @@ export interface StreamChatCallbacks {
   onDone: (viaProvider: string) => void
   onError: (message: string) => void
   onRateLimit?: (retryAfterSeconds: number) => void
-  onStep?: (label: string, detail: string) => void
-  onMemoryHit?: (summary: string) => void
+  onStep?: (label: string, detail: string, agent: string) => void
+  /** Phase A / A.8 — fires alongside onStep whenever a 'step' event's label
+   *  is shaped like a tool-call announcement ("Calling <name>"), so callers
+   *  get a clean tool name instead of parsing the human-readable label. */
+  onToolCall?: (name: string, agent: string) => void
+  onMemoryHit?: (summary: string, scope?: string, sourceConvId?: string) => void
   onModelCall?: (model: string, purpose: string) => void
   onProviderSwitch?: (from: string, to: string) => void
+  onCitation?: (url: string, title: string) => void
 }
+
+// Matches ChatPage.tsx's TOOL_STEP_RE -- both must agree on what counts as a
+// tool-shaped step, or delegation labels ("Delegating to X") get flagged as
+// tool entries there but never get a resolved `name` here (a code-reviewer
+// WARN from the A.9 pass, fixed by keeping these in lockstep).
+const _TOOL_CALL_LABEL_RE = /^(?:Calling|Delegating to) (.+)$/
 
 export async function streamChat(
   messages: Array<{ role: string; content: string }>,
@@ -321,7 +335,7 @@ export async function streamChat(
   conversationId?: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { onToken, onDone, onError, onRateLimit, onStep, onMemoryHit, onModelCall, onProviderSwitch } =
+  const { onToken, onDone, onError, onRateLimit, onStep, onToolCall, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
     callbacks
 
   let res: Response
@@ -396,17 +410,29 @@ export async function streamChat(
             }
             onError(String(event.message ?? 'Unknown error'))
             return
-          case 'step':
-            onStep?.(String(event.label ?? ''), String(event.detail ?? ''))
+          case 'step': {
+            const label = String(event.label ?? '')
+            const agent = String(event.agent ?? 'main')
+            onStep?.(label, String(event.detail ?? ''), agent)
+            const toolMatch = _TOOL_CALL_LABEL_RE.exec(label)
+            if (toolMatch) onToolCall?.(toolMatch[1], agent)
             break
+          }
           case 'memory_hit':
-            onMemoryHit?.(String(event.summary ?? ''))
+            onMemoryHit?.(
+              String(event.summary ?? ''),
+              event.scope ? String(event.scope) : undefined,
+              event.source_conv_id ? String(event.source_conv_id) : undefined,
+            )
             break
           case 'model_call':
             onModelCall?.(String(event.model ?? ''), String(event.purpose ?? ''))
             break
           case 'provider_switch':
             onProviderSwitch?.(String(event.from ?? ''), String(event.to ?? ''))
+            break
+          case 'citation':
+            onCitation?.(String(event.url ?? ''), String(event.title ?? ''))
             break
           default:
             break
@@ -425,9 +451,10 @@ export async function streamChat(
   onDone('')
 }
 
-export async function uploadDoc(file: File): Promise<string> {
+export async function uploadDoc(file: File, conversationId?: string): Promise<string> {
   const formData = new FormData()
   formData.append('file', file)
+  if (conversationId) formData.append('conversation_id', conversationId)
 
   const res = await fetch(`${BASE_URL}/upload`, {
     method: 'POST',
@@ -455,11 +482,27 @@ export interface ConversationMeta {
   updated_at: string
   model_id: string
   message_count: number
+  project_id?: string | null
+}
+
+// The backend's persisted trace entries (routes/chat.py's `_build_trace`) use
+// snake_case (`elapsed_ms`, matching AgentState.tool_log's own field name) --
+// everywhere else in this client, wire payloads get mapped to the app's
+// camelCase shape (e.g. `source_conv_id` -> `sourceConvId` in streamChat's
+// dispatch below), so this normalizes the same way for the reload path.
+type WireTraceEntry = Omit<TraceEntry, 'elapsedMs'> & { elapsed_ms?: number }
+
+function normalizeTraceEntry(entry: WireTraceEntry): TraceEntry {
+  const { elapsed_ms, ...rest } = entry
+  return elapsed_ms !== undefined ? { ...rest, elapsedMs: elapsed_ms } : rest
 }
 
 export interface ConversationDetail {
   meta: ConversationMeta
-  messages: Array<{ role: string; content: string }>
+  // trace/citations are optional and only ever present on assistant records
+  // (Phase A / A.8) — absent field, not an empty array, when there's nothing
+  // to show (e.g. the direct-answer fast path never populated a tool_log).
+  messages: Array<{ role: string; content: string; trace?: TraceEntry[]; citations?: Citation[] }>
 }
 
 export async function fetchConversations(): Promise<ConversationMeta[]> {
@@ -488,7 +531,17 @@ export async function fetchConversation(convId: string): Promise<ConversationDet
   const res = await fetch(`${BASE_URL}/conversations/${convId}`, { headers: authHeaders() })
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
-  return res.json()
+  const data = (await res.json()) as {
+    meta: ConversationMeta
+    messages: Array<{ role: string; content: string; trace?: WireTraceEntry[]; citations?: Citation[] }>
+  }
+  return {
+    meta: data.meta,
+    messages: data.messages.map((m) => ({
+      ...m,
+      trace: m.trace?.map(normalizeTraceEntry),
+    })),
+  }
 }
 
 export async function deleteConversation(convId: string): Promise<void> {
@@ -511,6 +564,100 @@ export async function updateConversationTitle(convId: string, title: string): Pr
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
+}
+
+// ─── Projects (Phase M — memory scoping) ───────────────────────────────────
+
+export interface Project {
+  id: string
+  name: string
+  created_at: string
+  updated_at?: string
+  chat_count?: number
+}
+
+export async function getProjects(): Promise<Project[]> {
+  const res = await fetch(`${BASE_URL}/projects`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function createProject(name?: string, id?: string): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      ...(id ? { id } : {}),
+      ...(name ? { name } : {}),
+    }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function renameProject(projectId: string, name: string): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ name }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (res.status === 404) return
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function moveChatToProject(projectId: string, convId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}/chats/${convId}`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function removeChatFromProject(projectId: string, convId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}/chats/${convId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (res.status === 404) return
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+// ─── Memory management (Phase M — memory scoping) ──────────────────────────
+
+export async function rebuildMemory(scopeType: 'chat' | 'project', scopeId: string): Promise<{ chunks_indexed: number }> {
+  const res = await fetch(`${BASE_URL}/memory/rebuild`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ scope_type: scopeType, scope_id: scopeId }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function clearMemory(scopeType: 'chat' | 'project', scopeId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/memory/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ scope_type: scopeType, scope_id: scopeId }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
 }
 
 export interface RegistryModel {

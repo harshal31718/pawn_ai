@@ -1,20 +1,26 @@
-"""Per-user hybrid memory retrieval backed by self-hosted Postgres (pgvector + FTS).
+"""Per-user hybrid memory retrieval, scoped strictly within one scope
+(Phase M — memory scoping).
 
 Combines vector similarity search (pgvector `<=>`) and full-text search
-(`tsvector @@ plainto_tsquery`) via two Postgres SQL functions, then fuses the
-two ranked lists with Reciprocal Rank Fusion (RRF) in Python.
+(`tsvector @@ plainto_tsquery`) via two Postgres SQL functions
+(`match_scoped_chunks`/`search_scoped_chunks`, defined in
+postgres/schema.sql), then fuses the two ranked lists with Reciprocal Rank
+Fusion (RRF) in Python.
 
-SQL functions (defined in postgres/schema.sql):
-  - match_memory_chunks(query_embedding, match_user_id, exclude_conv_id, match_count)
-  - search_memory_chunks(query_text, match_user_id, exclude_conv_id, match_count)
+Retrieval never crosses a scope boundary: a query against `('chat', conv_id)`
+can only ever surface chunks written under that exact scope, and likewise for
+`('project', project_id)`. This equality filter (the inverse of the old
+exclude-active-conv semantics) is the isolation guarantee this plan exists
+for — see workspace/plan/plan_memory_scoping.md §5 M.4.
 
-Graceful degradation: if embedding fails, falls back to FTS only. If Postgres is
-unreachable, returns []. Memory is always scoped by user_id.
+Graceful degradation: if embedding fails, falls back to FTS only. If Postgres
+is unreachable, returns [].
 """
 
 import asyncio
 from typing import Any, Dict, List, Optional
 
+from app.constants import MEMORY_TOP_K
 from app.db.postgres_client import fetchall
 from app.memory.embed import embed
 
@@ -22,15 +28,19 @@ from app.memory.embed import embed
 async def retrieve(
     query: str,
     user_id: str,
-    active_conv_id: Optional[str] = None,
-    top_k: int = 3,
+    scope_type: str,
+    scope_id: str,
+    top_k: int = MEMORY_TOP_K,
+    match_kind: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve the top_k most relevant past memory chunks for a user using hybrid
-    search (pgvector + Postgres FTS) fused with Reciprocal Rank Fusion (RRF).
-    The active conversation is excluded to avoid surfacing the current context.
+    Retrieve the top_k most relevant memory chunks within exactly one scope
+    using hybrid search (pgvector + Postgres FTS) fused with RRF.
+
+    `match_kind` filters by chunk kind ('message' or 'document', per Phase A's
+    `kind`/`doc_id` columns): pass 'message' for chat-history recall,
+    'document' for doc_search, or leave None to search both kinds at once.
     """
-    # 1. Generate query embedding (graceful fallback to FTS-only on failure)
     try:
         query_vector = await embed(query, user_id=user_id)
     except Exception:
@@ -40,7 +50,7 @@ async def retrieve(
     fts_results: List[Dict[str, Any]] = []
     candidate_k = max(20, top_k * 4)
 
-    # 2. Vector search candidates (pgvector cosine via SQL function)
+    # 1. Vector search candidates (pgvector cosine via SQL function)
     if query_vector:
         try:
             rows = await asyncio.to_thread(
@@ -48,31 +58,31 @@ async def retrieve(
                 # Explicit ::vector cast — Postgres won't implicitly cast a
                 # plain array parameter to match the function's vector(768)
                 # argument, so an untyped call fails to resolve the overload.
-                "select * from match_memory_chunks(%s::vector, %s, %s, %s::int)",
-                (query_vector, user_id, active_conv_id, candidate_k),
+                "select * from match_scoped_chunks(%s::vector, %s, %s, %s, %s, %s::int)",
+                (query_vector, user_id, scope_type, scope_id, match_kind, candidate_k),
             )
             for r in rows:
                 vec_results.append(
-                    {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}
+                    {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"], "doc_id": r.get("doc_id")}
                 )
         except Exception:
             pass
 
-    # 3. Full-text search candidates (Postgres FTS via SQL function)
+    # 2. Full-text search candidates (Postgres FTS via SQL function)
     try:
         rows = await asyncio.to_thread(
             fetchall,
-            "select * from search_memory_chunks(%s, %s, %s, %s::int)",
-            (query, user_id, active_conv_id, candidate_k),
+            "select * from search_scoped_chunks(%s, %s, %s, %s, %s, %s::int)",
+            (query, user_id, scope_type, scope_id, match_kind, candidate_k),
         )
         for r in rows:
             fts_results.append(
-                {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"]}
+                {"id": r["id"], "conv_id": r["conv_id"], "text": r["text"], "doc_id": r.get("doc_id")}
             )
     except Exception:
         pass
 
-    # 4. Reciprocal Rank Fusion: score = sum(1 / (60 + rank)) across both lists
+    # 3. Reciprocal Rank Fusion: score = sum(1 / (60 + rank)) across both lists
     scores: Dict[int, float] = {}
     docs_map: Dict[int, Dict[str, Any]] = {}
 
