@@ -6,6 +6,74 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Deployment: dev -> main promoted, live on the pawn Oracle VM
+
+User approved the plan in workspace/plan/deployment.md and said to proceed
+end-to-end, including: no real users yet so the destructive memory_chunks
+wipe is fine, exclude the FLUX OOM fix from this round (document, don't
+ship), and re-run the pre-flight gate fresh before promoting.
+
+Found the VM deploy key: user pointed at the top-level secrets directory
+(empty of SSH material, only Docker secret files), the actual key lives
+under keys (keys/pawn_oci.key, gitignored, a distinct pattern in
+.gitignore from the secrets one). SSH as ubuntu@144.24.119.184 confirmed
+working once located.
+
+Sequence executed:
+1. git push origin dev -- closed a 27-commit local-only gap that existed
+   independent of this deploy (found while planning; real risk on its own).
+2. Fresh pre-flight: 438 backend tests, tsc --noEmit, npm run build, both
+   docker compose configs -- all clean, re-run rather than trusted from an
+   earlier session.
+3. scripts/promote-to-main.sh -- clean run (typical for a promotion this
+   size to hit doc-path modify/delete and rename/delete conflicts against
+   the last promotion's doc-stripped tree; all resolved automatically since
+   every conflict was inside .claude/ or workspace/, the script's own
+   strip targets). Commit f7263f5, 122 files, verified zero doc leakage
+   onto main. Pushed to origin/main.
+4. On the VM: pg_dump backup first (86MB). Applied the 3 pending manual
+   migrations in dependency order (memory_scoping's DROP FUNCTION targets
+   match what the next migration expects) -- memory_scoping destructively
+   drops/recreates memory_chunks (approved, no real user data at stake
+   yet); doc_search_kind_return applied clean; image_sessions_stop_
+   requested_at was already applied from an earlier ad-hoc fix, no-op.
+5. Real snag: git pull partially failed -- backend/data/registry/*.json
+   are root-owned on disk (written via the backend container's bind mount,
+   which runs as root inside the container), so the ubuntu user couldn't
+   unlink them to apply the new versions. Fixed with sudo chown. Retrying
+   the pull then failed differently: the FIRST (failed) pull attempt had
+   already written most of the new file contents to disk before erroring,
+   without advancing HEAD -- git then saw those as uncommitted local
+   changes blocking a clean merge. Resolved with git reset --hard
+   origin/main, which in this specific case only discarded that
+   self-inflicted inconsistent state, not real work (verified first: this
+   is a deploy-only checkout, every changed file matched the already-
+   reviewed promotion diff exactly). This is normally a genuinely
+   destructive command -- an auto-mode safety classifier correctly
+   intercepted the first attempt and required explicit user confirmation
+   before it ran, which is the right behavior for a command like this
+   against a production host.
+6. Rebuilt frontend (npm ci && npm run build) and backend (docker compose
+   --env-file .env.prod -f docker-compose.prod.yml up -d --build). Clean
+   startup log (Application startup complete, no errors), /health OK both
+   over loopback and public HTTPS, live site confirmed serving the exact
+   freshly-built JS bundle hash (index-CKI2ePAE.js) -- no stale-cache risk,
+   nginx needed no reload since no routes/config changed this round.
+
+**Not done this session (flagged, not silently skipped):** the deeper
+feature-level verification checklist (deployment.md section 8/section 6)
+needs a real login -- OAuth round-trip, Drive link, a live Kaggle
+image-gen job, tool-calling/doc_search/project-scoping smoke tests against
+prod. Only infra-level checks (health, HTTPS, clean logs, correct bundle)
+were run from this session. FLUX OOM fix (PR #2) deliberately stayed off
+dev and off this promotion -- still needs a live Kaggle verification the
+user will do once off their current restricted network.
+
+**Files:** workspace/current_state.md, workspace/status/build_tracker.md
+(this entry + the current_state.md round-9 entry).
+
+---
+
 ### [2026-07-14] — Feature: Image Lab dead-session detection (app was stuck on "Warming" forever)
 
 User-reported: a warm image session starts, the Kaggle notebook stops

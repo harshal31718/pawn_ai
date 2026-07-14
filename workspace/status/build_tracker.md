@@ -11,6 +11,23 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
+## Deployment: dev -> main promoted, live on the pawn Oracle VM (2026-07-14) -- DONE
+
+Plan reference: workspace/plan/deployment.md (drafted on a not-yet-merged
+branch; the plan itself is unaffected by that -- it was followed directly).
+User approved proceeding end-to-end: no real users yet, so the destructive
+memory_chunks wipe was accepted; the FLUX OOM fix (separate, PR #2) was
+kept out of this round. Promoted as commit f7263f5, pushed to origin/main,
+deployed to the pawn VM (ubuntu@144.24.119.184, key at keys/pawn_oci.key).
+All 3 manual migrations applied in dependency order, backend/frontend
+rebuilt, infra-level checks (health, HTTPS, clean logs, correct bundle
+hash) all green. Full record in workspace/status/dev_log.md's 2026-07-14
+Deployment entry and workspace/current_state.md's round-9 entry.
+**Still open:** the feature-level verification checklist (deployment.md
+section 6) needs a real login -- not yet done this session.
+
+---
+
 ## Current Status
 
 **Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **A.1–A.9 fully complete including live verification, 2026-07-14** — + Phase M — Memory Scoping (**M.1–M.7 fully complete including live verification, 2026-07-14** — see `gap_audit_2026-07-14.md` §L for the full record) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
