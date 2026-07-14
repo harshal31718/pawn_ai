@@ -631,7 +631,8 @@ completion). Sequencing: `workspace/implemented_phases/plan_consolidated_next_ph
   researcher → calculator → buffered synthesis → verify pass → draft
   emitted). Also surfaced a real, separate O.1 gap (mid-loop text can
   already fully answer, then the mandatory closing synthesis redundantly
-  re-answers) — documented in `plan_reply_quality.md`, deferred, not fixed.
+  re-answers) — documented in `plan_reply_quality.md`, deferred, not fixed
+  at the time. **Fixed later this session, see O.5 below.**
   Committed `a4e2584`.
 - [x] O.4 — decomposition nudge for heavy analytical prompts. `_PLAN_SYSTEM_
   PROMPT` and `execute_node`'s injected plan system message (heavy-only)
@@ -641,6 +642,22 @@ completion). Sequencing: `workspace/implemented_phases/plan_consolidated_next_ph
   separate `delegate_researcher` calls instead of raw `web_search` calls,
   landing a correctly-sourced comparison. 2 new tests, 395 backend tests
   green. Committed `0a9a9a8`.
+- [x] O.5 — fix the O.1/O.3-surfaced mid-loop double-answer gap (from
+  `workspace/plan/plan_open_issues_2026-07-14.md` §2.1). `execute_node`'s
+  tool loop now defers (buffers) every iteration's content on heavy turns
+  (`defer_loop_content`), flushing it as one chunk only if a further tool
+  call follows (preserves Phase N's pre-tool-call "thinking" interleaving)
+  and discarding it entirely on a clean stop — the mandatory closing
+  synthesis is now the sole user-visible answer for heavy turns, as O.1
+  intended, with no redundant second answer ever dispatched. Light (agentic)
+  turns unaffected. Side benefit: a mid-stream failure during a heavy-turn
+  loop iteration now safely falls through to a fresh closing-synthesis
+  attempt instead of hard-failing the turn, since its buffered content was
+  never shown. 5 tests updated, 1 recontextualized to light difficulty, 2
+  new regression tests added. 409 backend tests green (`pytest -n auto`,
+  confirmed twice). Live-verified: a calculator-triggering heavy prompt
+  produced exactly one tool call and exactly one answer, no leaked text.
+  Full record in `dev_log.md`'s matching entry.
 
 ## Phase P — UI polish (new 2026-07-14, spec in the consolidated plan) — DONE
 

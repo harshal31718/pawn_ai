@@ -435,6 +435,26 @@ async def execute_node(
                 tokens_used += real_total if real_total is not None else _estimate_tokens(content, tool_calls)
         return content, tool_calls
 
+    # O.1 residual fix (found live during O.3 verification, documented under
+    # O.1 in implemented_phases/plan_reply_quality.md): on a heavy turn, a
+    # clean stop's content used to stream live via `token` events same as any
+    # other iteration, and the mandatory closing-synthesis call below then
+    # independently re-answered the same question -- both ended up
+    # concatenated in one message as two similar-but-differently-worded
+    # answers. Fix: defer (buffer, don't dispatch) every loop iteration's
+    # content on heavy turns. If a further tool call follows, flush the
+    # buffered content as one chunk right before that tool's `step` event --
+    # this is the genuine Phase N "thinking before a tool call" case and
+    # stays visible, just as a single flash instead of token-by-token. If the
+    # iteration cleanly stops with no more tool_calls, the buffered content
+    # is discarded entirely (never dispatched) -- the closing synthesis below
+    # is the sole, authoritative, user-visible answer for heavy turns, as
+    # O.1 always intended. Light (but agentic) turns are unaffected: they
+    # have no mandatory closing call to conflict with, so a clean stop's
+    # content is still the real, final, live-streamed answer (unchanged
+    # pre-O.1 behavior) -- see the `elif not answered:` branch below.
+    defer_loop_content = state["difficulty"] == "heavy"
+
     answered = False
     budget_exhausted = False
     for _ in range(AGENT_MAX_ITERATIONS):
@@ -443,7 +463,7 @@ async def execute_node(
             break
 
         try:
-            content, tool_calls = await stream_iteration(use_tools=True)
+            content, tool_calls = await stream_iteration(use_tools=True, emit_tokens=not defer_loop_content)
         except (ProviderError, NoEndpointError) as e:
             if content_reached_user_this_call:
                 raise  # a token already reached the user this call -- no fallback, surface directly
@@ -456,9 +476,18 @@ async def execute_node(
             break
 
         if not tool_calls:
+            # Heavy turns: `content` here was never dispatched (see
+            # defer_loop_content above) -- intentionally discarded, the
+            # closing synthesis is the real answer. Still recorded in
+            # working_messages so that call sees the orchestrator's own
+            # attempt as context, same as before.
             working_messages.append({"role": "assistant", "content": content})
             answered = True
             break
+
+        if defer_loop_content and content:
+            full_response += content
+            await adispatch_custom_event("token", {"delta": content})
 
         working_messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
 

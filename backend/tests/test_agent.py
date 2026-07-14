@@ -241,7 +241,10 @@ async def test_execute_node_heavy_pure_text_stream_still_gets_closing_synthesis(
     """difficulty='heavy': O.1 fix (RC-1) -- even a clean stop with no
     tool_calls at all does NOT let the cheap orchestrator model's own text
     serve as the final answer directly; a dedicated closing-synthesis call
-    always follows."""
+    always follows. O.1-residual fix: the orchestrator's own clean-stop text
+    must never reach the user at all (not just get followed by a second
+    call) -- only the closing synthesis is dispatched, so the two can't be
+    seen concatenated as two different-worded answers to the same question."""
     state = _state(difficulty="heavy", needs_agent=True)
     dispatched = []
 
@@ -255,8 +258,10 @@ async def test_execute_node_heavy_pure_text_stream_still_gets_closing_synthesis(
             res = await execute_node(state)
 
     assert res["tool_log"] == []
-    assert res["final_answer"] == "no tools neededPolished final answer."
+    assert res["final_answer"] == "Polished final answer."  # NOT "no tools needed" + closing text
     assert fake.call_count() == 2  # orchestrator's own text, then the O.1 closing call
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert token_deltas == ["Polished final answer."]  # the orchestrator's own text was never dispatched
     assert any(name == "step" and data.get("label") == "Composing final answer" for name, data in dispatched)
 
 
@@ -304,10 +309,15 @@ async def test_execute_node_light_plan_omits_delegation_nudge():
 
 
 @pytest.mark.asyncio
-async def test_execute_node_streams_text_before_and_after_a_tool_call():
-    """The core Phase N guarantee: text the model produces before a tool call
-    streams live (as `token` events), interleaved around the tool's `step`
-    event -- not withheld until every tool call has finished."""
+async def test_execute_node_streams_text_before_a_tool_call_and_final_synthesis_after():
+    """The Phase N guarantee, as refined by the O.1-residual fix: text the
+    model produces BEFORE a tool call still streams live (flushed as one
+    chunk right before the tool's `step` event) -- but a heavy turn's own
+    clean-stop text AFTER the last tool call resolves ("The answer is 4.")
+    is now intentionally never dispatched, since the mandatory closing
+    synthesis ("(verified)") is the sole authoritative answer. This replaces
+    the pre-fix test that asserted both the orchestrator's own post-tool text
+    AND the closing synthesis were both visible -- that was the bug."""
     state = _state(difficulty="heavy", needs_agent=True)
     dispatched = []
 
@@ -316,7 +326,7 @@ async def test_execute_node_streams_text_before_and_after_a_tool_call():
 
     fake = _fake_stream_with_tools([
         ("Let me check that. ", [_tool_call("call_1", "calculator", '{"expression": "2+2"}')]),
-        ("The answer is 4.", None),
+        ("The answer is 4.", None),  # orchestrator's own clean-stop text -- must be suppressed
         (" (verified)", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
     ])
 
@@ -324,12 +334,15 @@ async def test_execute_node_streams_text_before_and_after_a_tool_call():
         with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
             res = await execute_node(state)
 
-    assert res["final_answer"] == "Let me check that. The answer is 4. (verified)"
+    assert res["final_answer"] == "Let me check that.  (verified)"  # NOT "...The answer is 4. (verified)"
     assert len(res["tool_log"]) == 1
     assert res["tool_log"][0]["name"] == "calculator"
     assert res["tool_log"][0]["args"] == {"expression": "2+2"}
     assert res["tool_log"][0]["observation"] == "4"
     assert res["tool_log"][0]["agent"] == "main"
+
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert token_deltas == ["Let me check that. ", " (verified)"]  # "The answer is 4." never dispatched
 
     idx_first_token = next(i for i, (n, _) in enumerate(dispatched) if n == "token")
     idx_calling_step = next(
@@ -337,7 +350,7 @@ async def test_execute_node_streams_text_before_and_after_a_tool_call():
     )
     idx_last_token = max(i for i, (n, _) in enumerate(dispatched) if n == "token")
     assert idx_first_token < idx_calling_step < idx_last_token, (
-        "text must stream both before and after the tool card, not only after every tool call resolves"
+        "pre-tool-call text must still stream before the tool card; the closing synthesis after"
     )
 
 
@@ -352,8 +365,8 @@ async def test_execute_node_multi_tool_call_sequence():
             _tool_call("call_1", "calculator", '{"expression": "2+2"}'),
             _tool_call("call_2", "get_datetime", "{}"),
         ]),
-        ("done", None),
-        ("", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
+        ("done", None),  # orchestrator's own clean-stop text -- suppressed, see O.1-residual fix
+        ("closing synthesis answer", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
     ])
 
     with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
@@ -361,7 +374,7 @@ async def test_execute_node_multi_tool_call_sequence():
             res = await execute_node(state)
 
     assert [t["name"] for t in res["tool_log"]] == ["calculator", "get_datetime"]
-    assert res["final_answer"] == "done"
+    assert res["final_answer"] == "closing synthesis answer"  # NOT "done" -- that text is never shown
 
 
 @pytest.mark.asyncio
@@ -449,17 +462,77 @@ async def test_execute_node_upstream_failure_falls_through_to_closing_call():
 
 
 @pytest.mark.asyncio
-async def test_execute_node_upstream_failure_after_content_sent_propagates_not_falls_through():
+async def test_execute_node_light_loop_failure_after_content_sent_propagates_not_falls_through():
     """The locked contract (mirrored from _stream_one_model): once a content
     token has reached the user for a given call, a mid-stream failure must
     surface directly -- NOT be swallowed and papered over with a fresh
     closing call, which would silently concatenate an unrelated second answer
-    onto the truncated partial text the user already saw."""
-    state = _state(difficulty="heavy", needs_agent=True)
+    onto the truncated partial text the user already saw. Light (but
+    agentic) turns are the only path where the tool loop's OWN content still
+    streams live (heavy turns defer it -- see the O.1-residual fix and the
+    heavy-closing-synthesis variant of this test below), so this is tested
+    here on a light turn specifically."""
+    state = _state(difficulty="light", needs_agent=True)
 
     async def fake(*args, **kwargs):
         yield {"type": "content", "delta": "partial answer, then it breaks"}
         raise ProviderError(kind="upstream_error", message="mid-stream failure")
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            with pytest.raises(ProviderError):
+                await execute_node(state)
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_loop_failure_after_content_buffered_falls_through_to_closing_call():
+    """The flip side of the O.1-residual fix: on a heavy turn, the loop's own
+    content is deferred (never dispatched -- see defer_loop_content), so a
+    mid-stream failure there is always safe to fall through to a fresh
+    closing-synthesis attempt, even after the failing call had already
+    generated (but not shown) partial text. This is new, intentionally more
+    resilient behavior versus the pre-fix contract, which used to hard-fail
+    the whole turn in this exact scenario."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    call_count = {"n": 0}
+
+    async def fake(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            yield {"type": "content", "delta": "buffered partial answer, then it breaks"}
+            raise ProviderError(kind="upstream_error", message="mid-stream failure")
+        yield {"type": "content", "delta": "recovered closing answer"}
+        yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)  # must NOT raise -- the buffered content was never shown
+
+    assert res["final_answer"] == "recovered closing answer"
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert token_deltas == ["recovered closing answer"]  # the buffered, failed attempt never appears
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_closing_synthesis_failure_after_content_sent_propagates():
+    """The O.1-residual fix moves the "once shown, must propagate" contract
+    onto the closing-synthesis call for heavy turns, since that's now the
+    only call whose content reaches the user directly (loop iterations are
+    deferred). A mid-stream failure there, after real content was already
+    dispatched, must still surface directly -- not be silently swallowed."""
+    state = _state(difficulty="heavy", needs_agent=True)
+
+    async def fake(*args, **kwargs):
+        if kwargs.get("tools"):
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+        else:
+            yield {"type": "content", "delta": "closing synthesis partial, then it breaks"}
+            raise ProviderError(kind="upstream_error", message="mid-stream failure")
 
     with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
         with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
@@ -616,7 +689,9 @@ async def test_execute_node_buffers_closing_synthesis_when_research_tools_used()
     """O.3: a heavy turn that used web_search must NOT have its closing
     synthesis dispatched as `token` events (chat.py builds the persisted
     message purely from those) -- it's held in verify_draft for verify_node
-    to check first."""
+    to check first. Combined with the O.1-residual fix, NOTHING is dispatched
+    at all in this scenario: the loop's own clean-stop text is suppressed
+    (see the multi-answer fix) and the closing synthesis is buffered (O.3)."""
     state = _state(
         difficulty="heavy", needs_agent=True,
         tool_log=[{"name": "web_search", "args": {}, "observation": "...", "elapsed_ms": 1, "agent": "main"}],
@@ -626,8 +701,9 @@ async def test_execute_node_buffers_closing_synthesis_when_research_tools_used()
     async def fake_dispatch(name, data):
         dispatched.append((name, data))
 
-    # Turn 1: the loop's own iteration (clean stop, no tool_calls). Turn 2:
-    # the mandatory O.1 closing synthesis -- this is what must be buffered.
+    # Turn 1: the loop's own iteration (clean stop, no tool_calls) -- content
+    # suppressed by the O.1-residual fix. Turn 2: the mandatory O.1 closing
+    # synthesis -- buffered by O.3's verify gate.
     fake = _fake_stream_with_tools([("no tools needed", None), ("Draft answer text.", None)])
 
     with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
@@ -636,8 +712,7 @@ async def test_execute_node_buffers_closing_synthesis_when_research_tools_used()
 
     assert res["verify_draft"] == "Draft answer text."
     token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
-    assert "Draft answer text." not in token_deltas  # the buffered draft, never dispatched
-    assert token_deltas == ["no tools needed"]  # only the main loop's own text streamed live
+    assert token_deltas == []  # neither the suppressed loop text nor the buffered draft is dispatched
     assert res["messages"][-1] == {"role": "assistant", "content": "Draft answer text."}
 
 
@@ -645,7 +720,9 @@ async def test_execute_node_buffers_closing_synthesis_when_research_tools_used()
 async def test_execute_node_streams_live_when_no_research_tools_used():
     """Regression guard: a heavy turn that did NOT use research tools (e.g. a
     code task) keeps pre-O.3 behavior -- closing synthesis streams live,
-    verify_draft stays None."""
+    verify_draft stays None. The loop's own clean-stop text ("no tools
+    needed") is still suppressed by the O.1-residual fix regardless -- only
+    the closing synthesis is ever user-visible for heavy turns."""
     state = _state(difficulty="heavy", needs_agent=True)
     dispatched = []
 
@@ -660,7 +737,7 @@ async def test_execute_node_streams_live_when_no_research_tools_used():
 
     assert res["verify_draft"] is None
     token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
-    assert "".join(token_deltas) == "no tools neededLive answer."
+    assert "".join(token_deltas) == "Live answer."  # NOT "no tools needed" + "Live answer."
 
 
 @pytest.mark.asyncio

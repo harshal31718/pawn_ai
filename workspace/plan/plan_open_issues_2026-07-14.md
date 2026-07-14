@@ -1,6 +1,7 @@
 # Plan: Open Issues & Improvements (post Phase A/M/N/O/P audit)
 
-*Branch: dev. Status: NOT STARTED — planning only.*
+*Branch: dev. Status: IN PROGRESS — §2.1 (O.1 mid-loop double-answer) DONE
+2026-07-14, committed and live-verified. Everything else still NOT STARTED.*
 *Written 2026-07-14 after auditing `build_tracker.md`, `current_state.md`,
 `dev_log.md`, `workspace/implemented_phases/gap_audit_2026-07-14.md`, and
 `workspace/plan/plan_imagelab_session_issues.md`, then cross-checked each
@@ -110,27 +111,76 @@ that session happens, this is ready to execute directly from steps 1-5 above.
 
 ## 2. Backend/agent correctness gaps
 
-### 2.1 — Mid-loop answer + closing synthesis can both fire, producing two answers
+### 2.1 — Mid-loop answer + closing synthesis can both fire, producing two answers — DONE 2026-07-14
 
 **Found:** during O.3 live verification (2026-07-14), a heavy/research turn
 where the mid-loop model had already streamed a complete answer (after a
 calculator tool call) still went through the mandatory closing synthesis,
 which independently re-answered the same question — producing two
 similar-but-differently-worded answers in one message. Documented under O.1
-in `workspace/implemented_phases/plan_reply_quality.md` with a fix sketch;
-confirmed via `git log` that no later commit addressed it — still open.
+in `workspace/implemented_phases/plan_reply_quality.md` with a fix sketch.
 
-**Fix sketch (from that doc):** detect when the execute loop's own last
-assistant turn already reads as a complete answer (no trailing
-tool-call-seeking phrasing, sufficient length) and skip the closing synthesis
-in that case; or restructure so mid-loop text before the designated final
-step is never itself streamed/treated as answer-shaped (suppress its live
-streaming, always route the actual reply through one designated synthesis
-step). Needs its own investigation before picking an approach — not a
-one-line fix.
+**Fix applied (chose the "restructure" branch of the original sketch):**
+`execute_node`'s tool loop now defers (buffers, never dispatches as `token`
+events) every iteration's content on heavy turns via a new
+`defer_loop_content` flag, instead of streaming it live as before. If a
+further tool call follows in the same iteration, the buffered text is
+flushed as one chunk right before that tool's `step` event — preserving
+Phase N's "thinking before a tool call" interleaving, just as a single flash
+instead of token-by-token. If the iteration cleanly stops with no more
+tool_calls, the buffered content is discarded entirely — the mandatory
+closing synthesis becomes the sole, authoritative, user-visible answer for
+heavy turns, exactly as O.1 always intended. Light (but agentic) turns are
+completely unaffected (`defer_loop_content` is heavy-only) — their own
+clean-stop content remains the real, final, live-streamed answer, since they
+have no mandatory closing call to conflict with.
 
-**Files:** `backend/app/agent/graph.py` (`execute_node`, the
-plan → execute → final flow).
+The rejected alternative (heuristically detecting "already a complete
+answer" and skipping the closing synthesis) was not used — it would have
+reintroduced the original O.1 regression (a cheap orchestrator model's own
+text serving as the final answer for a heavy/deep-research turn) and relies
+on a fragile heuristic ("no trailing tool-call-seeking phrasing, sufficient
+length").
+
+**Side effect (net positive, not just neutral):** since heavy-turn loop
+iterations no longer dispatch content live, a mid-stream failure during one
+of them is now always safe to fall through to a fresh closing-synthesis
+attempt (nothing was shown to the user yet), rather than hard-failing the
+whole turn — more resilient than before, not just bug-neutral. The "once a
+token has reached the user this call, a failure must propagate" contract
+still holds, but now applies to the closing-synthesis call itself (the only
+place content reaches the user directly on a heavy turn) instead of the
+loop's own iterations.
+
+**Tests:** `backend/tests/test_agent.py` — 5 existing tests updated to
+assert the fixed behavior (`test_execute_node_heavy_pure_text_stream_still_gets_closing_synthesis`,
+`test_execute_node_streams_text_before_a_tool_call_and_final_synthesis_after`
+[renamed], `test_execute_node_multi_tool_call_sequence`,
+`test_execute_node_buffers_closing_synthesis_when_research_tools_used`,
+`test_execute_node_streams_live_when_no_research_tools_used`); 1 test
+recontextualized to light difficulty (`test_execute_node_light_loop_failure_after_content_sent_propagates_not_falls_through`,
+renamed from a heavy-turn variant that no longer applies); 2 new tests added
+(`test_execute_node_heavy_loop_failure_after_content_buffered_falls_through_to_closing_call`,
+`test_execute_node_heavy_closing_synthesis_failure_after_content_sent_propagates`).
+409 backend tests green (`docker compose exec backend pytest -n auto`, run
+twice to rule out flake — one unrelated single-run SQLite/xdist lock flake
+seen once, gone on retry, matches the known pre-existing xdist-on-Windows
+issue, not caused by this change).
+
+**Live-verified** against the real running dev stack: "Analyze this: use the
+calculator tool to compute 340 divided by 8, then explain in one short
+sentence what that result could represent in everyday life" (heavy via the
+"Analyze" keyword trigger, no research tools so streams live, not buffered
+by O.3) → exactly one tool call (calculator) → exactly one answer dispatched
+("Dividing a $340 bill among eight friends means each person would pay
+$42.50.") — no leaked/duplicate mid-loop text anywhere in the expanded
+trace. Also incidentally observed, via an earlier (accidentally interrupted)
+test on a research-gated prompt: a full verify-reject-revise cycle (with an
+extra calculator call) produced zero stray answer text anywhere in the
+persisted trace before the final verified draft — consistent with the fix.
+
+**Files:** `backend/app/agent/graph.py` (`execute_node`'s tool loop),
+`backend/tests/test_agent.py`.
 
 ### 2.2 — Duplicate "PAWN" Drive root folders (pre-existing, from before the concurrency fix)
 

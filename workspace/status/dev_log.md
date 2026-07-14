@@ -6,6 +6,98 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Fix: O.1 mid-loop double-answer (plan_open_issues §2.1)
+
+First item picked off `workspace/plan/plan_open_issues_2026-07-14.md` (the
+consolidated audit written earlier this session). Root cause, re-confirmed
+by reading `agent/graph.py`'s current (post-Phase-N) `execute_node`: for a
+heavy turn, the tool loop's OWN iterations stream their content live via
+`token` events same as any other call. When an iteration cleanly stops with
+no more `tool_calls` (`answered=True`), that content is a complete answer,
+already fully visible to the user. Then O.1's mandatory closing-synthesis
+call runs unconditionally right after (added specifically so a cheap
+orchestrator model's own text never serves as the final answer on a heavy
+turn) — producing a SECOND, independently-generated answer, which gets
+concatenated onto the first in the same message. This is exactly what the
+O.3 live-verification session caught: a population/percentage prompt showed
+two similar-but-differently-worded answers back to back.
+
+**Two options existed** (documented in the original gap sketch,
+`implemented_phases/plan_reply_quality.md`'s O.1 section):
+1. Heuristically detect "the loop's own text already reads as a complete
+   answer" and skip the closing synthesis in that case.
+2. Restructure so the loop's own content is never treated as answer-shaped
+   in the first place — always route the real answer through the closing
+   synthesis.
+
+Went with (2) — (1) would have reintroduced the exact regression O.1 was
+built to fix (a weak model's own text becoming the final answer on a heavy/
+deep-research turn) and relies on a fragile heuristic with no hard signal.
+
+**Implementation:** `execute_node` gained a `defer_loop_content` bool (True
+iff `difficulty == "heavy"`), passed as `emit_tokens=not defer_loop_content`
+into each loop iteration's `stream_iteration` call (that parameter already
+existed, built for O.3's verify-buffering — just needed a new caller).
+Two outcomes per iteration:
+- **Tool calls follow:** the buffered content (if any) is flushed as one
+  `token` event right before the tool's own `step` event -- still visible,
+  still ordered correctly relative to the tool card, just delivered as one
+  flash instead of character-by-character. This is the genuine Phase N
+  "thinking before a tool call" case and is fully preserved.
+- **Clean stop, no more tool calls:** the buffered content is discarded
+  outright, never dispatched. Still appended to `working_messages` so the
+  closing-synthesis call sees the orchestrator's own attempt as context, but
+  the user never sees it -- only the closing synthesis (which always runs
+  unconditionally for heavy turns per O.1) is user-visible.
+
+Light (but agentic) turns are completely untouched — `defer_loop_content` is
+False for them, so their own clean-stop content remains the real, final,
+live-streamed answer exactly as before (they have no mandatory closing call
+to conflict with in the first place).
+
+**Nice side effect, not just neutral:** since heavy-turn loop content is no
+longer shown live, a mid-stream failure during one of those iterations no
+longer needs to hard-fail the turn (the pre-fix "once shown, must propagate"
+contract doesn't apply, since nothing was shown) — it now safely falls
+through to a fresh closing-synthesis attempt instead. Added a dedicated test
+for this (`test_execute_node_heavy_loop_failure_after_content_buffered_falls_through_to_closing_call`).
+The analogous "must propagate" contract still exists, just relocated to the
+closing-synthesis call itself (now the only call whose content reaches the
+user directly on a heavy turn) — covered by a new
+`test_execute_node_heavy_closing_synthesis_failure_after_content_sent_propagates`.
+The original version of this contract test (which exercised the LOOP's own
+mid-stream failure on a heavy turn) no longer applies as written, since loop
+content is never shown on heavy turns anymore -- recontextualized to light
+difficulty instead (`test_execute_node_light_loop_failure_after_content_sent_propagates_not_falls_through`),
+where the original scenario is still exactly valid.
+
+**Tests:** 5 existing `test_agent.py` tests updated to assert the new,
+correct behavior (no more `"no tools needed" + "Polished final answer."`
+concatenation-style assertions); 44/44 in `test_agent.py`, 409/409 full
+suite (`docker compose exec backend pytest -n auto`, run twice — one
+single-run SQLite/xdist lock failure on the first pass, gone on the
+immediate re-run, matches the known pre-existing Windows-bind-mount xdist
+contention issue, unrelated to this change).
+
+**Live-verified** against the real running dev stack (backend rebuilt via
+`docker compose build backend` + `up -d backend` first, since
+`backend/tests/` and `backend/app/` are both baked into the image, not
+bind-mounted — only `./backend/data` is): a calculator-triggering heavy
+prompt ("Analyze this: use the calculator tool to compute 340 divided by 8,
+then explain...") produced exactly one tool call and exactly one dispatched
+answer ("Dividing a $340 bill among eight friends means each person would
+pay $42.50."), confirmed by expanding the full trace — no leaked mid-loop
+text anywhere. A separate, accidentally-interrupted test on a
+research-gated prompt (my own navigation mid-stream broke that one
+conversation's turn, not a product bug) still incidentally showed a full
+verify-reject-revise cycle with zero stray answer text in the persisted
+trace before the final draft, consistent with the fix.
+
+Updated `workspace/plan/plan_open_issues_2026-07-14.md` §2.1 to DONE with
+the full record; `current_state.md`/`build_tracker.md` updated.
+
+---
+
 ### [2026-07-14] — UI polish: citation links render as an icon, not a raw URL
 
 Closes a queued user request (noted in the O.3/O.4 session's dev_log entry:
