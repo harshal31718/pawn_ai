@@ -318,22 +318,20 @@ export default function ChatPage() {
           )
         },
         onProviderSwitch: (from, to) => {
-          const noticeMsg: Message = {
-            id: mid(),
-            role: 'notice',
-            content: `Failing over: ${from} → ${to}`,
-          }
-          setMessagesFor(convId, (prev) => {
-            const idx = prev.findIndex((m) => m.id === assistantId)
-            const withNotice = idx !== -1
-              ? [...prev.slice(0, idx), noticeMsg, ...prev.slice(idx)]
-              : [...prev, noticeMsg]
-            return withNotice.map((m) =>
+          // Renders solely inside the assistant bubble's trace (TraceView's
+          // provider_switch StepRow) — no standalone notice message. A
+          // separate role:'notice' pill used to be spliced in here too
+          // (pre-Phase-A / Step R4 era), which duplicated this same event as
+          // a floating bubble ABOVE the reply, breaking the "one continuous
+          // flow" the agent trace (A.8) was built to guarantee. Removed
+          // 2026-07-14.
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) =>
               m.id === assistantId
                 ? { ...m, trace: appendTraceEntry(m.trace, { kind: 'provider_switch', agent: 'main', from, to }) }
                 : m,
-            )
-          })
+            ),
+          )
         },
       },
       selectedProvider,

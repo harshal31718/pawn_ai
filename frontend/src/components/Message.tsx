@@ -55,7 +55,7 @@ export default function MessageBubble({ message, isStreaming }: Props) {
       <div className={`flex flex-col w-fit ${isUser ? 'max-w-[70%] sm:max-w-[50%] ml-auto' : 'max-w-[85%] md:max-w-[75%] mr-auto'}`}>
         <div
           ref={contentRef}
-          className={`rounded-2xl px-4 py-2 text-sm leading-relaxed relative break-words break-all ${
+          className={`rounded-2xl px-4 py-2 text-sm leading-relaxed relative break-words ${
             isUser
               ? 'bg-theme-user-bubble text-theme-user-bubble-text whitespace-pre-wrap'
               : 'bg-theme-ai-bubble text-theme-ai-bubble-text border border-theme-border/40'
