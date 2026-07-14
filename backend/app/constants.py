@@ -86,7 +86,7 @@ ROUTER_LIGHT_CHAR_THRESHOLD = 200
 # regardless of this table; every internal call (orchestrator, subagents,
 # summarizer, titler) goes through it.
 ROLE_LEVELS = {
-    "orchestrator": "fast",
+    "orchestrator": "balanced",
     "final_light": "fast",
     "final_heavy": "research",
     "summarizer": "fast",

@@ -37,7 +37,7 @@ from app.agent.tools.execute import run_tool
 from app.agent.tools.registry import get_tools
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS
 from app.core import normalize
-from app.core.router import classify as router_classify
+from app.core.router import classify as router_classify, resolve_final_model
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import NoEndpointError, ProviderError
@@ -347,20 +347,27 @@ async def execute_node(
     # closing call, producing partial-text-then-unrelated-answer garbage).
     content_reached_user_this_call = False
 
-    async def stream_iteration(use_tools: bool):
+    async def stream_iteration(
+        use_tools: bool,
+        override_model_id: Optional[str] = None,
+        override_on_model_switch=None,
+    ):
         """Runs one streaming call, forwarding content live as SSE `token`
         events and accumulating tokens_used from real usage when the provider
         honors stream_options.include_usage, estimated otherwise. Returns
-        (content, tool_calls)."""
+        (content, tool_calls). `override_model_id`/`override_on_model_switch`
+        let the O.1 closing-synthesis call run on a different (upgraded)
+        model with its own switch-detection hook, without duplicating the
+        rest of this bookkeeping."""
         nonlocal tokens_used, full_response, content_reached_user_this_call
         content_reached_user_this_call = False
         content = ""
         tool_calls: Optional[List[Dict[str, Any]]] = None
         async for event in normalize.chat_stream_with_tools(
-            model_id, working_messages, resolver, rate_limiter, user_id=user_id,
+            override_model_id or model_id, working_messages, resolver, rate_limiter, user_id=user_id,
             tools=tool_specs if use_tools else None,
             on_provider_switch=on_switch,
-            on_model_switch=on_model_switch,
+            on_model_switch=override_on_model_switch or on_model_switch,
         ):
             if event["type"] == "content":
                 content_reached_user_this_call = True
@@ -481,15 +488,55 @@ async def execute_node(
     if budget_exhausted:
         working_messages.append({"role": "system", "content": "budget exhausted — answer with what you have"})
 
-    if not answered:
-        # Mirrors the old final_node's unconditional close-out call -- reached
-        # after budget exhaustion, the iteration cap, or an upstream failure in
-        # the loop above (never after a clean tool-call-free stop, which
-        # already produced the real answer above). tools=None so the model
-        # can't extend the loop again. A failure here is NOT swallowed (same
-        # as the old final_node's un-guarded chat_stream call) -- it propagates
-        # to routes/chat.py's own exception handling as a real error event,
-        # rather than silently returning a blank reply.
+    if state["difficulty"] == "heavy":
+        # O.1 (reply-quality plan, RC-1 fix): heavy/deep-research turns always
+        # get a dedicated closing-synthesis pass on the upgraded research
+        # tier, run unconditionally after the tool loop resolves (clean stop,
+        # budget exhaustion, or iteration cap) -- not just the old "not
+        # answered" cases. Before this fix, a clean stop let the cheap
+        # orchestrator model's own tool-call-free response serve as the final
+        # user-facing answer directly; that's the exact regression the
+        # green-hydrogen benchmark caught (`llama-3.3-70b` synthesizing a
+        # feasibility report meant for a research-tier model). Mid-loop
+        # "thinking" text above (if any) already reached the user live via
+        # its own token events (Phase N behavior preserved) -- this call's
+        # text is the authoritative closing answer. tools=None so the model
+        # can't extend the loop again.
+        try:
+            final_model_id = resolve_final_model(state["difficulty"], state.get("user_model_id"), resolver, user_id)
+        except NoEndpointError:
+            final_model_id = model_id
+
+        synthesis_switched_away = False
+
+        async def on_synthesis_model_switch(from_m, to_m):
+            nonlocal synthesis_switched_away
+            synthesis_switched_away = True
+            await on_model_switch(from_m, to_m)
+
+        await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
+        content, _ = await stream_iteration(
+            use_tools=False, override_model_id=final_model_id, override_on_model_switch=on_synthesis_model_switch,
+        )
+        working_messages.append({"role": "assistant", "content": content})
+
+        if synthesis_switched_away:
+            await adispatch_custom_event(
+                "step",
+                {
+                    "label": "Synthesis quality may be degraded",
+                    "detail": f"{final_model_id} was unavailable; failed over for the final answer",
+                    "agent": "main",
+                },
+            )
+    elif not answered:
+        # Light (but agentic) turns: unchanged pre-O.1 behavior. A clean stop
+        # already produced the real answer above; only budget/iteration-cap
+        # exhaustion needs this closing call. Not upgraded to a dedicated
+        # synthesis tier -- ROLE_LEVELS["final_light"] ("fast") is now weaker
+        # than the orchestrator's own "balanced" tier (Appendix A re-tiering),
+        # so forcing every light+agentic turn through an extra, weaker-model
+        # call would be a net regression for that path, not a fix.
         await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
         content, _ = await stream_iteration(use_tools=False)
         working_messages.append({"role": "assistant", "content": content})

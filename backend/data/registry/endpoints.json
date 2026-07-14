@@ -12,7 +12,7 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
   },
   {
     "id": "ep-gemini-2.5-flash-lite-google",
@@ -27,7 +27,7 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
   },
   {
     "id": "ep-llama-3.3-70b-groq",
@@ -42,7 +42,7 @@
     "tpm_limit": 12000,
     "tpd_limit": null,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
   },
   {
     "id": "ep-llama-3.3-70b-cerebras",
@@ -72,7 +72,7 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
   },
   {
     "id": "ep-llama-3.3-70b-github",
@@ -117,7 +117,7 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
   },
   {
     "id": "ep-deepseek-r1-github",
@@ -162,7 +162,22 @@
     "tpm_limit": null,
     "tpd_limit": 1000000,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
+  },
+  {
+    "id": "ep-gpt-oss-120b-groq",
+    "model_id": "gpt-oss-120b",
+    "provider": "groq",
+    "provider_model_id": "openai/gpt-oss-120b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "secret": "groq_api_key",
+    "priority": 2,
+    "rpm_limit": 30,
+    "rpd_limit": 1000,
+    "tpm_limit": null,
+    "tpd_limit": 200000,
+    "active": true,
+    "last_verified": "2026-07-14"
   },
   {
     "id": "ep-qwen-3-32b-cerebras",
@@ -192,7 +207,37 @@
     "tpm_limit": null,
     "tpd_limit": 1000000,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
+  },
+  {
+    "id": "ep-gemini-3-flash-google",
+    "model_id": "gemini-3-flash",
+    "provider": "google",
+    "provider_model_id": "gemini-3-flash",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "secret": "gemini_api_key",
+    "priority": 1,
+    "rpm_limit": 10,
+    "rpd_limit": 1500,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": false,
+    "last_verified": "2026-07-14"
+  },
+  {
+    "id": "ep-deepseek-r1-distill-groq",
+    "model_id": "deepseek-r1-distill",
+    "provider": "groq",
+    "provider_model_id": "deepseek-r1-distill-llama-70b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "secret": "groq_api_key",
+    "priority": 1,
+    "rpm_limit": 30,
+    "rpd_limit": 1000,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": false,
+    "last_verified": "2026-07-14"
   },
   {
     "id": "ep-text-embedding-004-google",
@@ -222,6 +267,6 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": true,
-    "last_verified": "2026-07-13"
+    "last_verified": "2026-07-14"
   }
 ]

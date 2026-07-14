@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.agent.graph import (
+    DummyResolver,
     _estimate_tokens,
     _memory_hit_lines,
     classify_node,
@@ -202,10 +203,13 @@ def test_estimate_tokens_scales_with_content_and_tool_calls():
 # ── execute_node: the merged streaming tool loop (Phase N) ─────────────────
 
 @pytest.mark.asyncio
-async def test_execute_node_pure_text_stream_no_tool_calls():
-    """A response with no tool_calls streams straight through as the final
-    answer -- one call, no closing call, no tool_log."""
-    state = _state(difficulty="heavy", needs_agent=True)
+async def test_execute_node_light_agentic_pure_text_stream_no_closing_call():
+    """difficulty='light' (but needs_agent=True, e.g. a URL in the message):
+    O.1's mandatory closing-synthesis pass is heavy-only, so a response with
+    no tool_calls still streams straight through as the final answer here --
+    one call, no closing call, no tool_log. This preserves Phase N's original
+    "no wasted extra call" behavior for the light+agentic path."""
+    state = _state(difficulty="light", needs_agent=True)
     dispatched = []
 
     async def fake_dispatch(name, data):
@@ -226,6 +230,30 @@ async def test_execute_node_pure_text_stream_no_tool_calls():
 
 
 @pytest.mark.asyncio
+async def test_execute_node_heavy_pure_text_stream_still_gets_closing_synthesis():
+    """difficulty='heavy': O.1 fix (RC-1) -- even a clean stop with no
+    tool_calls at all does NOT let the cheap orchestrator model's own text
+    serve as the final answer directly; a dedicated closing-synthesis call
+    always follows."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    fake = _fake_stream_with_tools([("no tools needed", None), ("Polished final answer.", None)])
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)
+
+    assert res["tool_log"] == []
+    assert res["final_answer"] == "no tools neededPolished final answer."
+    assert fake.call_count() == 2  # orchestrator's own text, then the O.1 closing call
+    assert any(name == "step" and data.get("label") == "Composing final answer" for name, data in dispatched)
+
+
+@pytest.mark.asyncio
 async def test_execute_node_streams_text_before_and_after_a_tool_call():
     """The core Phase N guarantee: text the model produces before a tool call
     streams live (as `token` events), interleaved around the tool's `step`
@@ -239,13 +267,14 @@ async def test_execute_node_streams_text_before_and_after_a_tool_call():
     fake = _fake_stream_with_tools([
         ("Let me check that. ", [_tool_call("call_1", "calculator", '{"expression": "2+2"}')]),
         ("The answer is 4.", None),
+        (" (verified)", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
     ])
 
     with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
         with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
             res = await execute_node(state)
 
-    assert res["final_answer"] == "Let me check that. The answer is 4."
+    assert res["final_answer"] == "Let me check that. The answer is 4. (verified)"
     assert len(res["tool_log"]) == 1
     assert res["tool_log"][0]["name"] == "calculator"
     assert res["tool_log"][0]["args"] == {"expression": "2+2"}
@@ -274,6 +303,7 @@ async def test_execute_node_multi_tool_call_sequence():
             _tool_call("call_2", "get_datetime", "{}"),
         ]),
         ("done", None),
+        ("", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
     ])
 
     with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
@@ -291,6 +321,7 @@ async def test_execute_node_unknown_tool_returns_tool_error_not_raise():
     fake = _fake_stream_with_tools([
         ("", [_tool_call("call_1", "nonexistent_tool", "{}")]),
         ("done", None),
+        ("", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
     ])
 
     with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
@@ -395,6 +426,7 @@ async def test_execute_node_tool_exception_becomes_tool_error_observation():
     fake = _fake_stream_with_tools([
         ("", [_tool_call("call_1", "calculator", "not json")]),
         ("done", None),
+        ("", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
     ])
 
     with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
@@ -412,6 +444,7 @@ async def test_execute_node_emits_citation_for_fetch_url():
     fake = _fake_stream_with_tools([
         ("", [_tool_call("call_1", "fetch_url", '{"url": "https://example.com/page"}')]),
         ("done", None),
+        ("", None),  # O.1's mandatory closing-synthesis call, heavy difficulty
     ])
 
     dispatched = []
@@ -429,6 +462,72 @@ async def test_execute_node_emits_citation_for_fetch_url():
 
     assert res["citations"] == [{"url": "https://example.com/page", "title": "https://example.com/page"}]
     assert any(name == "citation" for name, _ in dispatched)
+
+
+class _TieredResolver(DummyResolver):
+    """Returns a distinct model id per capability level so a test can prove
+    which tier a given call actually used, instead of every level
+    coincidentally resolving to the same DummyResolver placeholder."""
+
+    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False):
+        return f"model-for-{level}"
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_closing_call_uses_research_tier_not_orchestrator_tier():
+    """O.1 (RC-1 fix): with no explicit user model pick, the closing-synthesis
+    call must resolve through ROLE_LEVELS['final_heavy']='research', not
+    reuse the orchestrator's own (now 'balanced') model."""
+    state = _state(difficulty="heavy", needs_agent=True, user_model_id=None)
+    resolver = _TieredResolver()
+    calls = []
+
+    async def fake(model_id, *args, **kwargs):
+        calls.append(model_id)
+        if kwargs.get("tools"):
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+        else:
+            yield {"type": "content", "delta": "answer"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            await execute_node(state, resolver=resolver)
+
+    assert calls[0] == "model-for-balanced"  # orchestrator's tool-driving call
+    assert calls[-1] == "model-for-research"  # O.1's dedicated closing-synthesis call
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_closing_call_degraded_emits_warning_step():
+    """O.1: if the closing-synthesis call fails over away from the requested
+    research-tier model, a visible trace warning is emitted -- a degraded
+    answer must be labeled, not silently passed off as full quality."""
+    state = _state(difficulty="heavy", needs_agent=True, user_model_id=None)
+    resolver = _TieredResolver()
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake(model_id, *args, **kwargs):
+        if kwargs.get("tools"):
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+        else:
+            # Simulate the closing call failing over to a weaker fallback model.
+            on_switch = kwargs.get("on_model_switch")
+            if on_switch:
+                await on_switch(model_id, "llama-3.3-70b")
+            yield {"type": "content", "delta": "degraded answer"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            await execute_node(state, resolver=resolver)
+
+    assert any(
+        name == "step" and data.get("label") == "Synthesis quality may be degraded" for name, data in dispatched
+    )
 
 
 # ── _memory_hit_lines ────────────────────────────────────────────────────────

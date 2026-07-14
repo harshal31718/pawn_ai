@@ -209,8 +209,12 @@ async def test_fallback_model_error_defaults_heavy():
 # ── ROLE_LEVELS ──────────────────────────────────────────────────────────────
 
 def test_role_levels_matches_plan_spec():
+    # orchestrator = "balanced" (not "fast"): O.1 companion fix, reply-quality
+    # plan Appendix A.4 -- glm-4.7 moved fast->research in the registry
+    # re-tiering, so "fast" alone (gemini-2.5-flash-lite + a stale
+    # llama-3.3-70b at the time) was too weak to drive tool use well.
     assert router.ROLE_LEVELS == {
-        "orchestrator": "fast",
+        "orchestrator": "balanced",
         "final_light": "fast",
         "final_heavy": "research",
         "summarizer": "fast",

@@ -251,9 +251,13 @@ async def test_execute_node_delegates_sequentially_and_merges_trace():
                 "finish_reason": "tool_calls",
                 "usage": {"total_tokens": 10},
             }
-        else:
+        elif main_call_count["n"] == 2:
             yield {"type": "content", "delta": "Here is the summary of X."}
             yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": {"total_tokens": 5}}
+        else:
+            # O.1's mandatory closing-synthesis call (heavy difficulty).
+            yield {"type": "content", "delta": " Confirmed."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": {"total_tokens": 3}}
 
     async def fake_run_subagent(name, task, ctx, tokens_used):
         assert name == "researcher"
@@ -277,5 +281,6 @@ async def test_execute_node_delegates_sequentially_and_merges_trace():
     assert res["tool_log"][0]["agent"] == "main"
     assert res["tool_log"][1]["agent"] == "researcher"
     assert res["citations"] == [{"url": "https://example.com", "title": "https://example.com"}]
-    # 10 (main's plan call) + 5 (main's second call) + 42 (subagent's calls) = 57.
-    assert res["tokens_used"] == 57
+    # 10 (main's plan call) + 5 (main's second call) + 42 (subagent's calls)
+    # + 3 (O.1's closing-synthesis call, heavy difficulty) = 60.
+    assert res["tokens_used"] == 60
