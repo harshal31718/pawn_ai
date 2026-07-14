@@ -2231,3 +2231,74 @@ stays non-streaming; subagent (`delegate_*`) internal tool loops stay
 non-streaming (a bounded, backgrounded, strictly-sequential unit — not part
 of the user's complaint); `_build_trace`/Drive persistence/reload rendering
 untouched.
+
+---
+
+## 2026-07-14 (later same day) — Image Lab: local-dev fixed, production diagnosed
+
+User reported Image Lab broken in two different ways and asked for both to
+be investigated: local dev gave a "direct error, session is not starting";
+production (main) showed the notebook starting then auto-failing, stuck on
+"warming," with no error surfaced. Explicit instruction: fix dev, diagnose
+prod only — don't change anything that could affect prod/deployment behavior
+until an actual deployment session.
+
+**Local dev — 3 real bugs found and fixed, all live-verified against a real
+Kaggle kernel:**
+
+1. `ImageGenerator.tsx`'s `handleHeaderStart/Extend/Stop` caught the backend
+   error and only `console.error`'d it, never calling `setError` — the
+   header Start button silently reset with zero user-visible feedback.
+   Fixed to `setError(err.message)` in all three handlers. Commit `97173a4`.
+2. Clicking Start then showed a real, informative error: `POSTGREST_PUBLIC_URL
+   isn't configured`. Traced via `git log` to a genuine regression, not a
+   permanent limitation as the code comment claimed: before commit `9350664`
+   (2026-07-03, Supabase → self-hosted Postgres+PostgREST), `SUPABASE_URL`
+   was always a real public cloud endpoint, so local warm-session testing
+   worked with zero setup. Self-hosted PostgREST has no public URL from a
+   plain `docker compose up`. Fixed with a dev-only, profile-gated
+   `cloudflared` tunnel service in `docker-compose.yml`
+   (`docker compose --profile tunnel up -d cloudflared`) plus
+   `docker-compose.override.yml.example` documenting how to wire the printed
+   tunnel URL into `POSTGREST_PUBLIC_URL`. Zero effect on
+   `docker-compose.prod.yml` or default `docker compose up`. User chose
+   Cloudflare Tunnel over ngrok (no account needed). Commit `30d5825`.
+3. Live-verifying #2 (real Start → real Kaggle kernel deploy → real Stop)
+   surfaced a third, independent bug: `stop_session()` 500'd with
+   `psycopg.errors.UndefinedColumn: stop_requested_at`. Commit `472a170`
+   (2026-07-05) added that column to `schema.sql` but shipped no migration
+   for already-initialized Postgres volumes — this dev machine's volume
+   predates it. Added `postgres/migrations/2026-07_image_sessions_stop_
+   requested_at.sql`, applied locally. **Flag for later: check whether
+   prod's volume needs the same migration.** Commit `30d5825`.
+
+Full live verification: Start → Warming → job queued (real Kaggle kernel,
+through the tunnel) → Stop → Stopping → honest "kernel didn't confirm exit
+in time" after the 30s grace window (expected, kernel was still installing
+deps). The whole warm-session plumbing genuinely works locally now.
+
+**Production — diagnosed, deliberately not fixed (out of scope until an
+actual deployment session):** read both warm-session notebook templates
+end to end. Primary finding: `patch_session()`/`patch_job()` in both
+notebooks never call `.raise_for_status()` or check the HTTP response at
+all — every status/heartbeat/error write is fire-and-forget. Only the two
+*read* functions (`get_session`/`next_job`) check status. So if PostgREST
+ever rejects a write (RLS token mismatch, schema drift like the
+`stop_requested_at` gap above, a transient 5xx), the notebook has no way of
+knowing — including cell-2's own explicit `except: patch_session({"status":
+"error", ...})` failure-reporting path, which can silently no-op. This
+matches the reported symptom precisely: Kaggle tears the kernel down (visible
+on kaggle.com as "closed"), but PAWN's `image_sessions` row is stuck at
+whatever status it last successfully wrote, showing "warming" indefinitely.
+Secondary contributing factors: the supervisor thread's heartbeat write is
+gated behind a successful *read* first, so a persistent read failure means
+`heartbeat_at` never lands at all (falls back to the 900s/15-min wall-clock
+timeout instead of the 90s heartbeat-staleness check); cell-1 (`pip install`)
+has no try/except at all, unlike cell-2. Full writeup + fix sketch (not
+applied) in `workspace/plan/plan_imagelab_session_issues.md`.
+
+**Docs reorganized per user request:** moved fully-completed plan docs to
+`workspace/implemented_phases/` (`plan_interleaved_agent_streaming.md`,
+`gap_audit_2026-07-14.md`); updated `build_tracker.md`/`plan_reply_quality.md`/
+`plan_consolidated_next_phases_2026-07-14.md` status headers so a fresh
+session can tell what's done vs. still open without re-deriving it.

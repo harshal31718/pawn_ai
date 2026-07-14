@@ -8,6 +8,14 @@ Phase P (UI polish) spec, which had no prior document.*
 
 Status legend: `[ ]` not started · `[~]` in progress / partially done · `[x]` done & verified
 
+**Progress as of 2026-07-14 (later same day):** N-verify [x], O.1 [x], O.2 [x],
+Phase P (P.1-P.4) [x] — all live-verified and committed. **Still open:** O.3,
+O.4 (not started), Image Lab production notebook auto-fail (diagnosed, not
+fixed — see `workspace/plan/plan_imagelab_session_issues.md`). Image Lab
+local-dev session-start/stop bugs (separate from the sequencing below) were
+also found and fixed this session. Source docs below are historical — for
+current status, prefer `workspace/status/build_tracker.md`.
+
 ---
 
 ## 0. Where things actually stand right now (verified via `git diff` + code read, not assumed)

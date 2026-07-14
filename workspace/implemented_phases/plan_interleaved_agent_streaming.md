@@ -1,6 +1,8 @@
 # Plan: Interleaved Agent Streaming (execute+final merge)
 
-*Branch: dev. Status: in progress, started 2026-07-14 (Cowork session).*
+*Branch: dev. Status: DONE — verified (pytest + tsc/build + live Chrome
+streaming-with-tools check) and committed 2026-07-14. Moved here from
+`workspace/plan/` on completion.*
 *Tracker: register as Phase N in `workspace/status/build_tracker.md`.*
 *Depends on: Phase A (`workspace/implemented_phases/phase_12_chat_agent_refinement.md`) — this plan modifies A.6's `execute_node`/`final_node` directly.*
 

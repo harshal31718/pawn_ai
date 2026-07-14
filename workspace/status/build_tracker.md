@@ -40,24 +40,12 @@ Full `deployment.md` §7 verification checklist passed on `pawn-temp`: HTTPS hea
 
 ---
 
-## Phase N — Interleaved Agent Streaming (execute+final merge)
-*Plan reference: `workspace/plan/plan_interleaved_agent_streaming.md`*
-*Branch: dev*
+## Phase N — Interleaved Agent Streaming (execute+final merge) — DONE
 
-- [ ] **N.1 — Merge execute_node + final_node into one streaming tool-loop node** (planned 2026-07-14, not started)
-  User-reported "reply reads as two separate blocks" traced to a real architecture
-  seam: `execute_node` (tool loop) is non-streaming, `final_node` (answer) is a
-  separate streaming call with no tool support, so all tool activity necessarily
-  finishes before any reply text exists. Plan: new `llm_core.stream_chat_with_tools()`
-  + `normalize.chat_stream_with_tools()` (same two-level failover as `chat_stream`)
-  to let one call both stream tokens live and receive tool_calls, so `execute_node`
-  can loop-and-stream instead of handing off to a separate `final_node` (to be
-  deleted). Frontend `Message` gains an ordered `segments` list (text/tool, arrival
-  order) replacing the old "trace block above, content below" split. Full plan +
-  file list in the plan doc. **Deliberately handed to a local Claude Code CLI
-  session to implement and verify** (not built in this Cowork session) — needs
-  real streaming+tools calls against the user's actual BYOK providers to verify
-  at all, which the Cowork build sandbox cannot do.
+See the full "Phase N" entry further down this file (implementation +
+verification record) — plan moved to
+`workspace/implemented_phases/plan_interleaved_agent_streaming.md` on
+completion, 2026-07-14.
 
 ## Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents)
 *Plan reference: `workspace/plan/plan_chat_agent_refinement.md`*
@@ -597,41 +585,46 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
 
 ---
 
-## Phase N — Interleaved agent streaming (execute+final merge)
+## Phase N — Interleaved agent streaming (execute+final merge) — DONE
 
-Plan: `workspace/plan/plan_interleaved_agent_streaming.md`. Sequencing/status
-check: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §0/§2.
+Plan: `workspace/implemented_phases/plan_interleaved_agent_streaming.md` (fully
+implemented — see `workspace/implemented_phases/` note below). Sequencing/
+status check: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md`
+§0/§2.
 
-- [~] **N — implementation found code-complete in the uncommitted working
-  tree 2026-07-14** (built by an earlier local Claude Code CLI session per
-  the plan's own commit message — not built in this Cowork session). Verified
-  via code read: `final_node` deleted, `execute_node` absorbed it,
-  `llm_core.stream_chat_with_tools`/`normalize.chat_stream_with_tools` exist,
-  frontend `segments` model wired through `types.ts`/`Message.tsx`/
-  `TraceView.tsx`/`ChatPage.tsx`/`useConversationStore.ts`, tests rewritten.
-  **Not yet run against the test suite or verified live in this session** —
-  next step is §2 of the consolidated plan (pytest, `tsc`/build, live
-  streaming-with-tools check via Chrome), then commit. Not marked `[x]`
-  until that gate passes.
+- [x] **N — verified and committed 2026-07-14.** Implementation (built by an
+  earlier local Claude Code CLI session) passed the full gate this session:
+  backend pytest green, frontend `tsc -b` + `vite build` clean, live
+  streaming-with-tools verified via Chrome against the real running stack.
+  `final_node` deleted, `execute_node` absorbed it,
+  `llm_core.stream_chat_with_tools`/`normalize.chat_stream_with_tools` land
+  the interleaved `segments` model end to end through `types.ts`/
+  `Message.tsx`/`TraceView.tsx`/`ChatPage.tsx`/`useConversationStore.ts`.
 
 ## Phase O — Reply generation quality (synthesis, task separation, model use)
 
 Plan: `workspace/plan/plan_reply_quality.md`. Sequencing:
 `workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §3/§5.
 
-- [~] **O — Appendix A registry re-tiering partially applied uncommitted**
-  (`llama-3.3-70b` balanced→fast, `glm-4.7` fast→research, two new inactive
-  model stubs) — found in the working tree, not yet reflected in
-  `constants.py`'s `ROLE_LEVELS["orchestrator"]` (the plan's own flagged
-  companion change, still `"fast"`, not yet flipped to `"balanced"`).
-- [ ] O.1 — dedicated final-synthesis pass on the research tier + the
-  missed orchestrator-tier flip (highest priority — reverses a live
-  regression).
-- [ ] O.2 — fetch+extract deep research (replace snippet-only web_search
-  observations with fetched page bodies).
+- [x] O.1 — dedicated final-synthesis pass on the research tier +
+  `ROLE_LEVELS["orchestrator"]` "fast"→"balanced" flip (reverses a live
+  regression). `graph.py`'s heavy-turn close-out now always runs a
+  dedicated closing synthesis via `resolve_final_model`, with a
+  "Synthesis quality may be degraded" step event on failover. Live-verified,
+  committed.
+- [x] O.2 — fetch+extract deep research: `web_search` now auto-fetches the
+  top `WEB_SEARCH_FETCH_TOP_N` results' full page bodies (guarded
+  `fetch_url` + trafilatura) instead of returning search-engine snippets
+  only; researcher subagent prompt rewritten for structured, sourced
+  extraction. Live-verified (caught + fixed a real regression during
+  verification: concurrent page-fetching could push the whole call past
+  the outer `TOOL_TIMEOUT_SECONDS=20`, discarding all results — fixed with
+  a per-fetch `WEB_SEARCH_FETCH_TIMEOUT_SECONDS=10` bound). Committed
+  `dc08569`.
 - [ ] O.3 — plan-as-contract verifier node, deep-research-gated, 1–2
-  revision passes.
-- [ ] O.4 — decomposition nudge for heavy analytical prompts.
+  revision passes. **Not started** — next up when resumed.
+- [ ] O.4 — decomposition nudge for heavy analytical prompts. **Not
+  started.**
 
 ## Phase P — UI polish (new 2026-07-14, spec in the consolidated plan)
 
@@ -661,12 +654,38 @@ prior source doc — fully speced there).
 All of Phase P verified live via Chrome and committed
 (`6618204`/`b130760`/`09fb4a7`/`d149697`) 2026-07-14.
 
-## Image Lab warm-session issues (paused, independent, user-paced)
+## Image Lab warm-session issues (in progress, independent, user-paced)
 
 Plan: `workspace/plan/plan_imagelab_session_issues.md`. Not a numbered
-phase — explicitly paused pending the user's live Kaggle-side repro steps
-(which model, which phase Stop was clicked in, pre/post supervisor-deploy).
-Not blocked by, and doesn't block, Phases N/O/P above.
+phase. Not blocked by, and doesn't block, Phases N/O/P above.
+
+- [x] **Local dev "session is not starting"** — FIXED 2026-07-14, live
+  end-to-end verified against a real Kaggle kernel (Start → Warming → job
+  queued → Stop → Stopping). Three real bugs found and fixed: (1)
+  `ImageGenerator.tsx` silently swallowed the start/extend/stop error
+  instead of showing it (commit `97173a4`); (2) `POSTGREST_PUBLIC_URL` has
+  been blank in dev since the D.3/D.4 Postgres migration — a real
+  regression (Supabase's URL was always public; self-hosted PostgREST isn't)
+  — fixed with a dev-only `cloudflared` tunnel + `docker-compose.override
+  .yml.example` (commit `30d5825`); (3) `stop_session()` 500'd on this dev
+  DB — `image_sessions.stop_requested_at` (added to `schema.sql` by commit
+  `472a170`) had no migration for already-initialized volumes; added
+  `postgres/migrations/2026-07_image_sessions_stop_requested_at.sql` and
+  applied it locally (same commit `30d5825`). **Check whether prod's
+  Postgres volume needs the same migration run before assuming Stop works
+  there.**
+- [ ] **Production "notebook auto-fails, app stuck on 'warming', PAWN never
+  finds out"** — DIAGNOSED, not fixed (explicit instruction: don't touch
+  prod-affecting code until an actual deployment session). Root cause:
+  `patch_session()`/`patch_job()` in both warm-session notebooks never call
+  `.raise_for_status()` or check the response — every status/heartbeat/error
+  write is fire-and-forget, so a PostgREST rejection (RLS mismatch, schema
+  drift, transient 5xx) is silently dropped with no retry and no visibility.
+  Full writeup + fix sketch in `plan_imagelab_session_issues.md`'s
+  2026-07-14 section.
+- [ ] Separate, still open: FLUX CUDA OOM on generate (`device_map=
+  "balanced"` packs GPU 0 full); stop/tracking's earlier hypotheses #3-#5
+  (unverified — need real Kaggle log access, human-in-the-loop).
 
 ---
 

@@ -1,8 +1,11 @@
 # Plan: Reply Generation Quality — Synthesis, Task Separation, Model Use
 
-*Branch: dev. Status: decisions locked 2026-07-14, not yet built. Drafted 2026-07-14 (Cowork session).*
-*Tracker: register as Phase O in `workspace/status/build_tracker.md`.*
-*Depends on / touches: Phase A (`workspace/implemented_phases/phase_12_chat_agent_refinement.md`) and Phase N (`workspace/plan/plan_interleaved_agent_streaming.md`) — this plan modifies `agent/graph.py`'s `execute_node`, `agent/tools/web_search.py`, `agent/subagents.py`, `core/router.py`, and `constants.py`.*
+*Branch: dev. Status: IN PROGRESS. O.1 (synthesis pass + orchestrator-tier
+fix) and O.2 (fetch+extract deep research) DONE, live-verified, committed
+2026-07-14. O.3 (verifier node) and O.4 (decomposition nudge) not started —
+next up when resumed.*
+*Tracker: registered as Phase O in `workspace/status/build_tracker.md`.*
+*Depends on / touches: Phase A (`workspace/implemented_phases/phase_12_chat_agent_refinement.md`) and Phase N (`workspace/implemented_phases/plan_interleaved_agent_streaming.md`) — this plan modifies `agent/graph.py`'s `execute_node`, `agent/tools/web_search.py`, `agent/subagents.py`, `core/router.py`, and `constants.py`.*
 
 ---
 

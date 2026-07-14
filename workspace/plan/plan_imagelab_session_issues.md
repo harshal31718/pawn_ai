@@ -1,9 +1,132 @@
-# Plan: Image Lab warm-session issues (PAUSED — dev only)
+# Plan: Image Lab warm-session issues
 
-Status: **OPEN / paused 2026-07-05 at user request.** Not deployed to prod as
-a "resolved" item — the fixes below are live, but the user confirms problems
-still remain. Kept on `dev` for a later focused session. Do NOT promote/deploy
-anything from this plan until the user re-engages on it.
+Status: **IN PROGRESS — resumed 2026-07-14.** Local-dev session-start/stop
+bugs found and fixed this session (all committed to `dev`, live-verified
+against a real Kaggle kernel). The separate production issue (notebook
+auto-fails, PAWN never finds out) is diagnosed with a strong, code-verified
+root cause below but **intentionally NOT fixed yet** — user's explicit
+instruction: fix dev, diagnose prod, do not change prod-affecting code until
+an actual deployment session (out of scope for now). See §2026-07-14 below.
+
+---
+
+## 2026-07-14 session — dev fixed, prod root-caused (not fixed)
+
+### Local dev: "session is not starting" — FIXED, 2 separate bugs found
+
+1. **UI silently swallowed the start/extend/stop error.**
+   `ImageGenerator.tsx`'s `handleHeaderStart/Extend/Stop` caught the API
+   error and only `console.error`'d it — never called `setError`, so the
+   header Start button just silently reset with no visible feedback. Fixed:
+   all three handlers now call `setError(err.message)`. Commit
+   `97173a4`.
+
+2. **`POSTGREST_PUBLIC_URL` has been blank in dev since the D.3/D.4 Postgres
+   migration — a real regression, not an always-existing limitation** (the
+   old code comment claiming "same as it did under Supabase" was wrong and
+   has been corrected). Before commit `9350664` (2026-07-03, Supabase ->
+   self-hosted Postgres+PostgREST), `SUPABASE_URL` was a real public cloud
+   endpoint reachable from anywhere including Kaggle, regardless of where
+   the backend ran — so local warm-session testing worked with zero extra
+   setup. Self-hosted PostgREST runs as a local-only Docker container with
+   no public URL, so `start_session()` has 412'd for every local dev session
+   since that migration. Fixed with a dev-only tunnel: `docker-compose.yml`
+   gained a profile-gated `cloudflared` service (`docker compose --profile
+   tunnel up -d cloudflared`), plus `docker-compose.override.yml.example`
+   documenting how to wire the printed `https://*.trycloudflare.com` URL
+   into `POSTGREST_PUBLIC_URL` for local runs only. Zero effect on
+   `docker-compose.prod.yml` or default `docker compose up`. Commit
+   `30d5825`.
+
+3. **Found while live-verifying #2: `stop_session()` 500'd** with
+   `psycopg.errors.UndefinedColumn: column "stop_requested_at" of relation
+   "image_sessions" does not exist`. Root cause: commit `472a170`
+   (2026-07-05) added `image_sessions.stop_requested_at` to `schema.sql` but
+   shipped no migration for already-initialized Postgres volumes (`schema.sql`
+   only runs via `docker-entrypoint-initdb.d` on a brand-new volume) — this
+   dev machine's volume predates that column. Added
+   `postgres/migrations/2026-07_image_sessions_stop_requested_at.sql` and
+   applied it locally. **This same gap may exist in production** if prod's
+   Postgres volume was also initialized before 2026-07-05 and this migration
+   was never run there — check `\d image_sessions` on the prod DB before
+   assuming Stop works there. Commit `30d5825`.
+
+Live-verified end-to-end against a real Kaggle kernel through the tunnel:
+Start -> Warming -> job queued -> Stop -> Stopping -> honest "kernel didn't
+confirm exit in time" after the 30s grace window (expected, kernel was still
+installing deps). The full warm-session plumbing genuinely works locally now.
+
+### Production: "notebook starts, auto-fails, app stuck showing 'warming',
+### notebook closed on Kaggle's side" — DIAGNOSED, NOT FIXED (out of scope)
+
+Read both `image_flux_session` and `image_sdxl_session` notebooks
+(`backend/app/kaggle_templates/image_{flux,sdxl}_session/notebook.ipynb` —
+byte-identical structure) end to end. **Primary, code-verified finding:**
+
+**`patch_session()` / `patch_job()` never check the HTTP response.** Every
+read function (`get_session()`, `next_job()`) calls `r.raise_for_status()`
+and would raise on a PostgREST rejection. Neither write function
+(`patch_session()`, `patch_job()`) does — they fire the `requests.patch(...)`
+and discard the response entirely, success or failure:
+
+```python
+def patch_session(fields):
+    requests.patch(f"{REST}/image_sessions", headers=HEADERS,
+                   params={"id": f"eq.{SESSION_ID}"}, json=fields, timeout=20)
+    # no .raise_for_status(), no response check at all
+```
+
+This means **every status/heartbeat/error write in the notebook is
+fire-and-forget**. If PostgREST ever rejects a write — RLS `session_token`
+mismatch, a schema drift like the `stop_requested_at` gap found above, a
+transient PostgREST 5xx, or the row simply not matching the RLS policy for
+any reason — the notebook code has **no way of knowing the write didn't
+land**, and nothing retries or surfaces it. Concretely, this explains the
+exact symptom reported ("not even informing the app"):
+
+- Cell-2's model-load failure path (`except Exception as e:
+  patch_session({"status": "error", ...}); raise`) LOOKS like it reports the
+  failure honestly, but if that specific `patch_session` call is silently
+  rejected by PostgREST, the session row is never updated to `'error'` —
+  the exception still propagates and Kaggle tears down the kernel ("the
+  notebook is closed due to some failure"), but PAWN's `image_sessions` row
+  is stuck at whatever status it last successfully wrote (`'installing'` or
+  `'loading_model'`), which is exactly "app shows warming mode" persisting
+  after the real failure.
+- The supervisor thread's heartbeat write has the same blind spot, AND is
+  additionally gated behind a successful *read* first
+  (`_supervisor()`: `if not _sess: continue` skips the heartbeat patch too
+  when `get_session()` returns nothing) — this was plan hypothesis #2
+  ("RLS token on reads"), now more precisely: even a transient read hiccup
+  skips that cycle's heartbeat, and a persistent one means `heartbeat_at`
+  never lands at all, forcing `get_session_status()`'s dead-session
+  detection onto the 900s (15 min) wall-clock fallback instead of the 90s
+  heartbeat-staleness check — a long, silent-feeling wait that reads exactly
+  as "not even informing the app."
+- Secondary, smaller gap: cell-1 (dependency `pip install`) has **no
+  try/except at all**, unlike cell-2's model-load. A `pip install` failure
+  (version conflict, transient PyPI blip, Kaggle base-image drift) raises
+  uncaught with zero attempt to report it — relies entirely on the same
+  blind heartbeat-staleness/900s fallback above.
+
+**Net: the notebooks' error-reporting design assumes every PostgREST write
+succeeds, and nothing in the code can tell when that assumption is false.**
+This is a plausible, well-supported explanation for the reported production
+behavior, but is *unverified against real Kaggle/PostgREST logs* (no Kaggle
+access from this environment) — the next production debugging session
+should first check kaggle.com's kernel log for the actual last-printed line
+before the run ended, and cross-check the `image_sessions` row's last
+successfully-written status/heartbeat_at against that timestamp, to confirm
+a write was in fact silently dropped rather than something else entirely
+(e.g. a genuine OOM crash that also killed the write attempt itself, which
+this fix wouldn't help — see the FLUX OOM item below).
+
+**Fix sketch for a future session (NOT applied — out of scope until
+deployment, per explicit instruction not to touch prod-affecting code now):**
+add `.raise_for_status()` (or at least log + retry-once) to `patch_session`/
+`patch_job` in both notebooks, and consider making the supervisor's
+heartbeat write independent of a successful read (it currently only reaches
+the heartbeat patch after `get_session()` succeeds).
 
 ---
 

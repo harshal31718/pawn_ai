@@ -428,6 +428,25 @@ Test/build status: **132 backend tests passing**; frontend `npm run build` passe
 - ~~Phase M live verification pending~~ — **DONE 2026-07-14.** M.7's checklist (legacy-tree migration, cross-chat isolation, cross-project sharing, add/remove-from-project retrieval transitions, cascade delete, manual-truncate + rebuild) run against the real Drive-linked stack via `claude-in-chrome`. See `gap_audit_2026-07-14.md` §L and `build_tracker.md`'s M.7 entry.
 - ~~Embedding gap re-index needed~~ — **DONE 2026-07-14**, folded into the M.7 truncate+rebuild drill above: `memory_chunks` fully truncated and rebuilt per scope via the real UI, all restored chunks have healthy `gemini-embedding-2` embeddings.
 - **Two low-severity code-review NOTEs deferred from M.6** (not fixed, judged out of scope/low-severity): `conversations_drive.py`'s `except (json.JSONDecodeError, Exception): pass` pattern (several call sites, pre-existing) swallows any error, not just parse errors — a transient Drive error would look identical to "not found" to `memory.py`'s new 404 checks. `memory.py`'s `_delete_scope_chunks` has no try/except unlike the sibling `_delete_chunks` pattern in `conversations.py` for the same class of derived-index cleanup.
+- ~~imageLab warm sessions unusable from local dev~~ — **FIXED 2026-07-14.**
+  `POSTGREST_PUBLIC_URL` has been blank in dev since the D.3/D.4 Supabase→
+  self-hosted-Postgres migration (a real regression — Supabase's URL was
+  always public, self-hosted PostgREST isn't). Fixed with a dev-only,
+  profile-gated `cloudflared` tunnel service (`docker compose --profile
+  tunnel up -d cloudflared`) + `docker-compose.override.yml.example`. Also
+  fixed: the UI silently swallowed session start/extend/stop errors instead
+  of showing them; `image_sessions.stop_requested_at` (added to schema.sql
+  by `472a170`, 2026-07-05) had no migration for already-initialized
+  volumes, added one and applied it locally — **check if prod's volume
+  needs the same migration.** Full record: `workspace/plan/
+  plan_imagelab_session_issues.md`'s 2026-07-14 section.
+- **imageLab production notebook auto-fail — diagnosed, not fixed
+  (2026-07-14):** the notebook silently loses its own error/heartbeat
+  reports when PostgREST rejects a write — `patch_session()`/`patch_job()`
+  in both warm-session notebook templates never check the HTTP response
+  (`.raise_for_status()` only exists on the two read functions). Deliberately
+  not fixed yet (user instruction: don't touch prod-affecting code outside a
+  real deployment session). Fix sketch in `plan_imagelab_session_issues.md`.
 
 ---
 
