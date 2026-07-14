@@ -1,0 +1,21 @@
+# Local-only override to test Image Lab warm sessions from dev.
+#
+# Steps:
+#   1. docker compose --profile tunnel up -d cloudflared
+#   2. docker compose logs cloudflared    # find the line with https://*.trycloudflare.com
+#   3. cp docker-compose.override.yml.example docker-compose.override.yml
+#   4. Paste that URL below, replacing the placeholder.
+#   5. docker compose up -d backend       # restart so it picks up the new env var
+#
+# The tunnel URL changes every time the `cloudflared` container restarts
+# (quick tunnels are ephemeral, no account needed) -- repeat steps 1-2 and
+# update this file whenever that happens.
+#
+# docker-compose.override.yml (without .example) is gitignored -- this is a
+# personal dev convenience, never committed, and never used in production
+# (docker-compose.prod.yml sets POSTGREST_PUBLIC_URL for real there).
+
+services:
+  backend:
+    environment:
+      - POSTGREST_PUBLIC_URL=https://REPLACE-ME.trycloudflare.com

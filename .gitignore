@@ -37,6 +37,10 @@ dist/
 # claude local settings
 .claude/settings.local.json
 
+# local-only compose override (e.g. Image Lab tunnel POSTGREST_PUBLIC_URL) --
+# keep only docker-compose.override.yml.example in git
+docker-compose.override.yml
+
 # os
 .DS_Store
 Thumbs.db
