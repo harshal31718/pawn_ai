@@ -6,6 +6,52 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Phase N verified+committed, O.1 built, all of Phase P built (consolidated plan, one session)
+
+Worked through `plan_consolidated_next_phases_2026-07-14.md`'s sequence in
+one session: N-verify → O.1 → P.1–P.4, each verified live via Chrome and
+committed separately. Full detail in each commit message
+(`ab5c228`/`1a41d6b`/`09fb4a7`/`6618204`/`b130760`/`d149697`); summary here.
+
+**N-verify**: Phase N (interleaved streaming) turned out to already be
+code-complete but never tested — 386 backend tests passed unmodified,
+`tsc`/`vite build` clean, and a live tool-using message showed real
+interleaved text/tool/text rendering with a correct calculator result,
+confirming the merged execute_node loop actually calls tools rather than
+hallucinating them (a light-path, no-tool test earlier gave a wrong
+arithmetic answer while claiming "using my calculator" — a good contrast
+for what heavy-path tool use should look like). Committed as-is.
+
+**O.1**: restored a dedicated final-synthesis pass on the research tier for
+heavy turns (reverses the green-hydrogen benchmark regression from Phase
+N's merge). Also landed the Appendix A registry re-tiering that was sitting
+uncommitted, plus its missed `ROLE_LEVELS["orchestrator"]` companion flip.
+389 backend tests (2 new). Live-verified twice: once with an explicit
+research-tier pick, once with the user's own selected model — the latter
+run hit a live rate-limit on the requested model and correctly surfaced the
+new "Synthesis quality may be degraded" trace warning while still
+producing a well-structured, source-cited answer via failover.
+
+**Phase P** (all four items, new this session, no prior plan doc existed):
+- P.1: two-level collapsible trace toggle for interleaved runs — outer
+  per-run toggle (live status label while active, auto-collapse on
+  completion) added around the existing per-tool/per-agent toggles.
+- P.2: chat-row rename/delete folded into the kebab menu.
+- P.3: search relocated + renamed + broadened to span projects (a real,
+  confirmed pre-existing gap: it only ever searched standalone chats).
+- P.4: project page rewritten to open directly into the chat/compose area
+  instead of a list-only page, handing off to ChatPage via router state
+  rather than duplicating its streaming logic. Found and fixed a real bug
+  live: the hand-off effect double-fired under React 18 StrictMode's
+  dev-only double-invocation, double-sending the first message and
+  corrupting the project-scope route — fixed with a same-mount ref guard,
+  re-verified clean.
+
+Remaining from the consolidated plan: O.2 (fetch+extract deep research),
+O.3 (verifier node), O.4 (decomposition nudge) — deeper reply-quality work,
+next up. Image Lab warm-session issues stay paused, independent, needs the
+user's own live Kaggle-side repro session.
+
 ### [2026-07-14] — A.9 + M.7 live verification checklists closed out (Chrome-driven session)
 
 Full live-test pass against the running `docker compose` stack, driven via

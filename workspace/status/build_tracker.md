@@ -638,18 +638,28 @@ Plan: `workspace/plan/plan_reply_quality.md`. Sequencing:
 Plan: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §4 (no
 prior source doc — fully speced there).
 
-- [ ] P.1 — two-level collapsible trace/agent-activity toggle (auto-collapse
-  on run completion, manual re-open, live status label). Depends on Phase N
-  being verified first (builds on the `segments` model).
-- [ ] P.2 — fold chat-row rename/delete into the kebab ("⋮") menu alongside
-  Add to project/Memory.
-- [ ] P.3 — rename "Search chats" → "Search", relocate below Image Lab,
-  broaden to search all chats + projects (currently standalone-only),
-  consistent row sizing with New chat/Image Lab.
-- [ ] P.4 — project page opens directly into the chat/compose area
-  (Claude-style) instead of an intermediate chat-list-only page; open
-  question on exact composer/lazy-create behavior flagged for confirmation
-  before building.
+- [x] P.1 — two-level collapsible trace/agent-activity toggle. New `TraceRun`
+  (TraceView.tsx) wraps each interleaved run: auto-open + live status label
+  ("Searching the web…") while active, auto-collapses to a summary line the
+  instant a later chunk begins, manual reopen anytime after. Verified live.
+- [x] P.2 — chat-row rename/delete folded into the kebab ("⋮") menu
+  alongside Add to project/Memory (Sidebar.tsx). Verified live.
+- [x] P.3 — search renamed "Search chats" → "Search", relocated below Image
+  Lab, broadened to all chats + projects (was standalone-only — confirmed
+  via code read before fixing), consistent sizing. New `SearchResults.tsx`.
+  Verified live (a project-scoped chat, previously unfindable, now matches
+  with a project-name badge and navigates correctly).
+- [x] P.4 — project page (`ProjectPage.tsx`) rewritten: breadcrumb + header +
+  composer + Recents, opens directly into the chat/compose area instead of
+  a list-only page. Composer hands off to ChatPage via router state
+  (pendingMessage/pendingUploadFile) rather than duplicating its streaming
+  logic. Found + fixed a real bug during live testing: the hand-off effect
+  double-fired under React 18 StrictMode's dev-only double-invocation,
+  double-sending the message and corrupting the project-scope route —
+  fixed with a same-mount ref guard. Re-verified live, clean.
+
+All of Phase P verified live via Chrome and committed
+(`6618204`/`b130760`/`09fb4a7`/`d149697`) 2026-07-14.
 
 ## Image Lab warm-session issues (paused, independent, user-paced)
 
