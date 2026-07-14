@@ -69,9 +69,31 @@ MEMORY_TOP_K = 4
 # crashes the graph — run_tool() converts it into a "TOOL_ERROR: ..." observation.
 TOOL_TIMEOUT_SECONDS = 20
 # web_search: cap on results returned to the model (keeps the observation small).
-WEB_SEARCH_MAX_RESULTS = 5
+# O.2 (reply-quality plan, RC-2 fix) bumped 5 -> 8: heavy research needs more
+# candidates to fetch full bodies from, not just more snippets to skim.
+WEB_SEARCH_MAX_RESULTS = 8
 # fetch_url: extracted page text is truncated to this many characters.
 FETCH_MAX_CHARS = 8000
+# O.2: auto-fetch the top N web_search results' full page bodies (via the
+# same guarded fetch_url path) instead of returning search-engine snippets
+# only -- the model was never seeing the text that actually contains named
+# figures/dates/entities. Bounded to keep this cheap; the remaining results
+# still return as snippets.
+WEB_SEARCH_FETCH_TOP_N = 3
+# Each auto-fetched body is truncated to this many characters (smaller than
+# FETCH_MAX_CHARS since up to WEB_SEARCH_FETCH_TOP_N of these are
+# concatenated into one web_search observation).
+WEB_SEARCH_FETCH_CHARS_PER_RESULT = 2000
+# Per-fetch bound on each auto-fetched result (found live: a slow/redirect-
+# heavy page's fetch_url-style GET, with up to 3 redirect hops at 15s each,
+# can run well past TOOL_TIMEOUT_SECONDS on its own -- run_tool's *outer*
+# 20s budget wraps the whole web_search call, so one slow fetch used to
+# discard ALL results (even ones that already succeeded) instead of
+# degrading just that one result to its snippet. Fetches run concurrently
+# (asyncio.gather), so this bounds wall-clock by the slowest single fetch,
+# not their sum -- comfortably under TOOL_TIMEOUT_SECONDS alongside the
+# initial search-API round-trip.
+WEB_SEARCH_FETCH_TIMEOUT_SECONDS = 10
 
 # Model router (A.5): heuristic-tier thresholds on total user-message text
 # length. Above HEAVY -> always heavy; below LIGHT (and no other heavy

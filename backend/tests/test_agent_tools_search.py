@@ -1,6 +1,7 @@
 """Tests for A.3: web_search, fetch_url (incl. the SSRF guard), and the
 registry's key-gating of web_search."""
 
+import asyncio
 import socket
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -78,7 +79,12 @@ async def test_web_search_prefers_tavily_over_brave():
         with patch.object(web_search_module.httpx, "AsyncClient") as get_client:
             client = get_client.return_value.__aenter__.return_value
             client.post = AsyncMock(return_value=_mock_response(tavily_body))
-            result = await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
+            # O.2's auto-fetch step is exercised by its own dedicated tests
+            # below -- stub it out to None here so this test stays about
+            # provider preference, not fetch/extract, and never attempts a
+            # real network call to a fake domain.
+            with patch.object(web_search_module, "_fetch_body", AsyncMock(return_value=None)):
+                result = await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
 
     assert "T" in result
     assert "t.example" in result
@@ -93,7 +99,8 @@ async def test_web_search_falls_back_to_brave_when_no_tavily_key():
         with patch.object(web_search_module.httpx, "AsyncClient") as get_client:
             client = get_client.return_value.__aenter__.return_value
             client.get = AsyncMock(return_value=_mock_response(brave_body))
-            result = await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
+            with patch.object(web_search_module, "_fetch_body", AsyncMock(return_value=None)):
+                result = await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
 
     assert "B" in result
     assert "b.example" in result
@@ -104,6 +111,85 @@ async def test_web_search_no_key_returns_tool_error():
     with _keys():
         result = await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
     assert result.startswith("TOOL_ERROR:")
+
+
+# ── O.2: auto-fetch top-N result bodies ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_web_search_enriches_top_results_with_fetched_body():
+    """The top WEB_SEARCH_FETCH_TOP_N results get their full page body
+    fetched+extracted (not just a search-engine snippet) -- this is the core
+    RC-2 fix: the model needs to see the text that actually contains named
+    figures/dates, not a truncated description."""
+    tavily_body = {
+        "results": [{"title": "Port Report", "url": "https://t.example/port", "content": "short snippet"}]
+    }
+
+    with _keys("tavily"):
+        with patch.object(web_search_module.httpx, "AsyncClient") as get_client:
+            client = get_client.return_value.__aenter__.return_value
+            client.post = AsyncMock(return_value=_mock_response(tavily_body))
+            with patch.object(
+                web_search_module, "_fetch_body", AsyncMock(return_value="Mundra Port handles ~50 MTPA of cargo annually."),
+            ):
+                result = await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
+
+    assert "Mundra Port handles ~50 MTPA of cargo annually." in result
+    assert "short snippet" not in result  # body replaces the snippet, doesn't just append to it
+
+
+@pytest.mark.asyncio
+async def test_fetch_body_returns_none_on_timeout_not_raise():
+    """A single slow/redirect-heavy fetch must not blow run_tool's outer
+    TOOL_TIMEOUT_SECONDS budget for the whole web_search call -- _fetch_body
+    bounds each fetch with its own shorter timeout and degrades to None
+    (snippet fallback) rather than propagating the timeout upward."""
+    async def hangs_forever(url):
+        raise asyncio.TimeoutError()
+
+    with patch.object(web_search_module, "_fetch_with_guard", hangs_forever):
+        result = await web_search_module._fetch_body("https://t.example/slow")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_web_search_falls_back_to_snippet_when_fetch_fails():
+    """A fetch failure (SSRF-blocked, network error, no extractable content)
+    for one result must never break the whole search -- fall back to that
+    result's own snippet instead."""
+    tavily_body = {
+        "results": [{"title": "Port Report", "url": "https://t.example/port", "content": "short snippet"}]
+    }
+
+    with _keys("tavily"):
+        with patch.object(web_search_module.httpx, "AsyncClient") as get_client:
+            client = get_client.return_value.__aenter__.return_value
+            client.post = AsyncMock(return_value=_mock_response(tavily_body))
+            with patch.object(web_search_module, "_fetch_body", AsyncMock(return_value=None)):
+                result = await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
+
+    assert "short snippet" in result
+
+
+@pytest.mark.asyncio
+async def test_web_search_only_fetches_top_n_results():
+    """Results beyond WEB_SEARCH_FETCH_TOP_N stay snippet-only -- the
+    auto-fetch step must not multiply cost/latency across every result."""
+    results = [
+        {"title": f"R{i}", "url": f"https://t.example/{i}", "content": f"snippet {i}"}
+        for i in range(web_search_module.WEB_SEARCH_MAX_RESULTS)
+    ]
+    tavily_body = {"results": results}
+
+    with _keys("tavily"):
+        with patch.object(web_search_module.httpx, "AsyncClient") as get_client:
+            client = get_client.return_value.__aenter__.return_value
+            client.post = AsyncMock(return_value=_mock_response(tavily_body))
+            fetch_mock = AsyncMock(return_value="fetched body")
+            with patch.object(web_search_module, "_fetch_body", fetch_mock):
+                await run_tool(WEB_SEARCH_TOOL, {"query": "test"}, _ctx())
+
+    assert fetch_mock.call_count == web_search_module.WEB_SEARCH_FETCH_TOP_N
 
 
 # ── SSRF guard ────────────────────────────────────────────────────────────────
