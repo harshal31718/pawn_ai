@@ -254,6 +254,49 @@ async def test_execute_node_heavy_pure_text_stream_still_gets_closing_synthesis(
 
 
 @pytest.mark.asyncio
+async def test_execute_node_heavy_plan_adds_delegation_nudge():
+    """O.4 (reply-quality plan, RC-4 fix): a heavy turn with a plan gets an
+    explicit nudge toward delegate_researcher for research sub-tasks appended
+    to the injected Plan system message -- a strong default, not a hard rule."""
+    state = _state(difficulty="heavy", needs_agent=True, plan=["1. Research X", "2. Research Y"])
+    captured = {}
+
+    async def fake(*args, **kwargs):
+        captured["messages"] = args[1]
+        yield {"type": "content", "delta": "answer"}
+        yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            await execute_node(state)
+
+    plan_message = captured["messages"][0]["content"]
+    assert plan_message.startswith("Plan:\n1. Research X\n2. Research Y")
+    assert "delegate_researcher" in plan_message
+
+
+@pytest.mark.asyncio
+async def test_execute_node_light_plan_omits_delegation_nudge():
+    """The nudge is gated to difficulty='heavy' (cheap where it's cheap) --
+    must not fire even if a plan somehow exists on a light turn."""
+    state = _state(difficulty="light", needs_agent=True, plan=["1. Research X"])
+    captured = {}
+
+    async def fake(*args, **kwargs):
+        captured["messages"] = args[1]
+        yield {"type": "content", "delta": "answer"}
+        yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            await execute_node(state)
+
+    plan_message = captured["messages"][0]["content"]
+    assert plan_message == "Plan:\n1. Research X"
+    assert "delegate_researcher" not in plan_message
+
+
+@pytest.mark.asyncio
 async def test_execute_node_streams_text_before_and_after_a_tool_call():
     """The core Phase N guarantee: text the model produces before a tool call
     streams live (as `token` events), interleaved around the tool's `step`

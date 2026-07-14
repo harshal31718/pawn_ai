@@ -8,6 +8,24 @@ root cause below but **intentionally NOT fixed yet** — user's explicit
 instruction: fix dev, diagnose prod, do not change prod-affecting code until
 an actual deployment session (out of scope for now). See §2026-07-14 below.
 
+**User flagged a fresh Kaggle failure log the same day (marked "critical,
+save for later, complete at last")** — real Kaggle log, `gaierror: Name or
+service not known` resolving `channels-lap-because-tcp.trycloudflare.com`
+inside cell-1 (`patch_session({"status": "installing"})`). **This is NOT a
+new/unexplained bug**: that hostname is the exact dev tunnel URL from this
+session's local-dev verification above, which was intentionally stopped
+(`docker compose stop cloudflared`) once verification finished — quick
+Cloudflare Tunnels don't persist their hostname across restarts, and
+`docker-compose.override.yml` still points at the now-dead URL. Any new
+local session-start attempt will hit this until the tunnel is restarted and
+the override file is updated with the new URL (steps in
+`docker-compose.override.yml.example`). **Deliberately not fixed now** — user
+asked to defer and finish other work first; only action needed later is
+restarting the tunnel, not a code fix. Kept separate from the actual
+production fire-and-forget-writes diagnosis above, which this log does
+*not* newly confirm (it's a dev-side DNS failure, not evidence about prod's
+real PostgREST reachability).
+
 ---
 
 ## 2026-07-14 session — dev fixed, prod root-caused (not fixed)

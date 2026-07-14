@@ -183,7 +183,12 @@ async def direct_answer_node(
 _PLAN_SYSTEM_PROMPT = (
     "You are planning how to answer the user's request. Write a short numbered "
     "plan (at most 5 steps) describing what you'll do to gather information and "
-    "answer well. Do not answer the question itself here -- only the plan."
+    "answer well. Do not answer the question itself here -- only the plan. "
+    "For any step that means researching a distinct sub-topic (a different "
+    "entity, region, or comparison point), phrase it as a self-contained "
+    "research task -- later, the strong default is to hand each such step "
+    "wholesale to the researcher subagent rather than answering it piecemeal "
+    "with one-off web searches."
 )
 
 
@@ -311,7 +316,21 @@ async def execute_node(
     working_messages = list(state["messages"])
     plan = state.get("plan") or []
     if plan:
-        working_messages = [{"role": "system", "content": "Plan:\n" + "\n".join(plan)}] + working_messages
+        plan_message = "Plan:\n" + "\n".join(plan)
+        if state["difficulty"] == "heavy":
+            # O.4 (reply-quality plan, RC-4 fix): decomposition is otherwise left
+            # entirely to the orchestrator's whim -- it has delegate_researcher
+            # available but nothing nudges it to prefer that over firing one-off
+            # web_search calls itself. Strong default, not a hard rule: the model
+            # still decides per step.
+            plan_message += (
+                "\n\nFor any plan step above that is a distinct research "
+                "sub-task, prefer delegating it wholesale to delegate_researcher "
+                "over answering it yourself with one-off web_search calls -- "
+                "treat each numbered step as a unit of work. Use your judgment "
+                "for steps that don't need research."
+            )
+        working_messages = [{"role": "system", "content": plan_message}] + working_messages
 
     tool_log: List[Dict[str, Any]] = list(state.get("tool_log", []))
     citations: List[Dict[str, str]] = list(state.get("citations", []))
