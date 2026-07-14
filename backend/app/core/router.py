@@ -88,7 +88,10 @@ async def _llm_fallback_classify(
     (no available model, upstream error, unparseable response) defaults to
     heavy/needs_agent=True — fail toward capability, not away."""
     try:
-        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"])
+        # user_id matters here: post-BYOK there are no shared keys, so picking
+        # without it can select a model the user holds no key for and waste a
+        # failover hop inside chat_complete (rescued, but suboptimal).
+        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"], user_id=user_id)
         result = await chat_complete(
             model_id,
             [

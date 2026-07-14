@@ -67,6 +67,16 @@ def _build_trace(tool_log: list[dict], citations: list[dict]) -> list[dict]:
     return trace[-TRACE_MAX_ENTRIES:]
 
 
+def _prior_turn_used_tools(history: list[dict]) -> bool:
+    """Router heavy-trigger (A.5): True when the most recent persisted
+    assistant message carries a trace with at least one tool entry (A.8) —
+    i.e. the previous turn actually used tools."""
+    for past in reversed(history):
+        if past.get("role") == "assistant":
+            return any(entry.get("kind") == "tool" for entry in (past.get("trace") or []))
+    return False
+
+
 def _create_with_id(drive, conv_id: str, user_id: str | None, model_id: str):
     """Blocking: materialize a client-owned conversation id (lazy-create on first message)."""
     return conversations_drive.create_conversation(
@@ -158,10 +168,14 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                 "X-Accel-Buffering": "no",
             },
         )
+    # Router heavy-trigger (A.5): did the previous assistant turn use tools?
+    # Derived from the last persisted assistant message's trace (A.8) below.
+    prior_turn_used_tools = False
     if req.conversation_id:
         meta, history, summary = await run_in_threadpool(
             call_drive, _load_conversation_bundle, drive, req.conversation_id, user_id
         )
+        prior_turn_used_tools = _prior_turn_used_tools(history)
         if not meta:
             # The client owns the conversation id (optimistic UI). If the background
             # create op hasn't landed yet, materialize it now so the first message
@@ -220,6 +234,7 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "conversation_id": req.conversation_id or "stateless",
         "user_model_id": model_id,
         "has_doc": bool(req.doc_id),
+        "has_tools_likely": prior_turn_used_tools,
         "scope_type": scope_type,
         "scope_id": scope_id,
         "difficulty": "light",

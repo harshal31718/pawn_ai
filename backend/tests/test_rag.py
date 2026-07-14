@@ -293,7 +293,7 @@ def test_chat_yields_memory_hit_events(client, fake_drive):
 
     exec_calls = {"n": 0}
 
-    async def mock_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto"):
+    async def mock_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
         if tool_choice == "none":  # plan step
             return {"role": "assistant", "content": "1. search memory", "usage": {}}
         exec_calls["n"] += 1
@@ -343,7 +343,7 @@ def test_stateless_chat_never_queries_memory(client):
     on ctx.scope_type is not None) -- retrieve() must never be called and no
     memory_hit event can fire, regardless of what the model tries to call."""
 
-    async def mock_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto"):
+    async def mock_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
         if tool_choice == "none":
             return {"role": "assistant", "content": "1. try to search memory", "usage": {}}
         return {

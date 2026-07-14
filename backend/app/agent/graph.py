@@ -55,6 +55,11 @@ class AgentState(TypedDict):
     conversation_id: str
     user_model_id: str
     has_doc: bool
+    # Router heavy-trigger: did the previous assistant turn use tools? Derived
+    # in chat.py from the last persisted assistant message's `trace` (A.8) —
+    # the persisted trace made this signal available, closing the "not
+    # available yet" hardcoded-False gap from the A.6 session.
+    has_tools_likely: bool
     # Phase M (memory scoping): resolved once per request in chat.py via
     # memory.indexer.resolve_scope. None for stateless chats.
     scope_type: Optional[str]
@@ -96,9 +101,9 @@ async def classify_node(
     decision = await router_classify(
         state["messages"],
         has_doc=state.get("has_doc", False),
-        # The previous-assistant-turn-used-tools signal needs persisted trace
-        # data (A.8) to detect reliably; not available yet this session.
-        has_tools_likely=False,
+        # Derived in chat.py from the last persisted assistant message's
+        # trace (A.8) — True when the prior turn actually used tools.
+        has_tools_likely=state.get("has_tools_likely", False),
         resolver=resolver,
         rate_limiter=rate_limiter,
         user_id=user_id,
@@ -191,6 +196,8 @@ async def plan_node(
         result = await normalize.chat_complete(
             model_id, messages, resolver, rate_limiter, user_id=user_id,
             tools=tool_specs, tool_choice="none",
+            on_provider_switch=_on_provider_switch_events,
+            on_model_switch=_on_provider_switch_events,
         )
     except (ProviderError, NoEndpointError) as e:
         print(f"Plan step failed (upstream), proceeding with an empty plan: {e}", file=sys.stderr)
@@ -275,6 +282,8 @@ async def execute_node(
         try:
             result = await normalize.chat_complete(
                 model_id, working_messages, resolver, rate_limiter, user_id=user_id, tools=tool_specs,
+                on_provider_switch=_on_provider_switch_events,
+                on_model_switch=_on_provider_switch_events,
             )
         except (ProviderError, NoEndpointError) as e:
             print(f"Execute loop chat_complete failed (upstream): {e}", file=sys.stderr)

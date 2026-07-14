@@ -105,7 +105,7 @@ async def test_plan_node_skipped_for_light_difficulty():
 async def test_plan_node_produces_short_plan_with_tool_choice_none():
     state = _state(difficulty="heavy", needs_agent=True, messages=[{"role": "user", "content": "research X vs Y"}])
 
-    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto"):
+    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
         assert tool_choice == "none"
         return {"role": "assistant", "content": "1. Search for X\n2. Search for Y\n3. Compare", "usage": {"total_tokens": 50}}
 

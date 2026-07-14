@@ -261,6 +261,46 @@ def test_build_trace_empty_input_yields_empty_trace():
     assert _build_trace([], []) == []
 
 
+# ─── Router heavy-trigger: prior turn used tools (A.5/A.8 wiring) ────────────
+
+def test_prior_turn_used_tools_true_when_last_assistant_has_tool_trace():
+    from app.routes.chat import _prior_turn_used_tools
+
+    history = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a", "trace": [
+            {"kind": "tool", "agent": "main", "name": "web_search", "args": {}, "observation": "r", "elapsed_ms": 5},
+        ]},
+    ]
+    assert _prior_turn_used_tools(history) is True
+
+
+def test_prior_turn_used_tools_false_cases():
+    from app.routes.chat import _prior_turn_used_tools
+
+    # No history at all.
+    assert _prior_turn_used_tools([]) is False
+    # Assistant message without a trace (direct-answer path persists none).
+    assert _prior_turn_used_tools([
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a"},
+    ]) is False
+    # Trace present but citation-only -- no tool entries.
+    assert _prior_turn_used_tools([
+        {"role": "assistant", "content": "a", "trace": [
+            {"kind": "citation", "agent": "main", "url": "https://a.com", "title": "A"},
+        ]},
+    ]) is False
+    # Only the MOST RECENT assistant message counts.
+    assert _prior_turn_used_tools([
+        {"role": "assistant", "content": "old", "trace": [
+            {"kind": "tool", "agent": "main", "name": "calculator", "args": {}, "observation": "4", "elapsed_ms": 1},
+        ]},
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "new"},
+    ]) is False
+
+
 def test_build_trace_caps_at_trace_max_entries():
     from app.constants import TRACE_MAX_ENTRIES
 
@@ -300,7 +340,7 @@ def test_chat_agent_path_persists_tool_trace(drive_client, fake_drive):
     conv_id = "conv-agent-1"
     call_count = {"n": 0}
 
-    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto"):
+    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
         call_count["n"] += 1
         if tool_choice == "none":
             return {"role": "assistant", "content": "1. Use the calculator", "usage": {"total_tokens": 5}}
@@ -344,7 +384,7 @@ def test_chat_agent_path_persists_top_level_citations(drive_client, fake_drive):
     conv_id = "conv-agent-citations-1"
     call_count = {"n": 0}
 
-    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto"):
+    async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
         call_count["n"] += 1
         if tool_choice == "none":
             return {"role": "assistant", "content": "1. Fetch the page", "usage": {"total_tokens": 5}}

@@ -18,6 +18,8 @@ Public API:
         user_id: str | None = None,
         tools: list | None = None,
         tool_choice: str = "auto",
+        on_provider_switch: Callable[[str, str], None] | None = None,
+        on_model_switch: Callable[[str, str], None] | None = None,
     ) -> dict:
 
 Routes and agent nodes call ONLY these functions.
@@ -173,14 +175,23 @@ async def _complete_one_model(
     user_id: str | None,
     tools: list | None,
     tool_choice: str,
+    on_provider_switch: Callable[[str, str], None] | None = None,
 ) -> dict:
     """Complete against ONE model, failing over across that model's keyed endpoints
     (priority order). Raises _ModelExhausted if every endpoint failed, so the caller
-    can try a different model."""
+    can try a different model. Fires on_provider_switch on each endpoint-level
+    failover, mirroring _stream_one_model (closes the A.9-7 gap: in-loop agent
+    failovers were previously invisible to the client)."""
     candidates = resolver.pick(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for url, provider_model_id, headers, endpoint_id, provider in candidates:
+    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+        if i > 0 and on_provider_switch:
+            prev_provider = candidates[i - 1][4]
+            if asyncio.iscoroutinefunction(on_provider_switch):
+                await on_provider_switch(prev_provider, provider)
+            else:
+                on_provider_switch(prev_provider, provider)
         try:
             message = await _chat_complete_llm(
                 url, provider_model_id, messages, headers, tools=tools, tool_choice=tool_choice
@@ -211,21 +222,34 @@ async def chat_complete(
     user_id: str | None = None,
     tools: list | None = None,
     tool_choice: str = "auto",
+    on_provider_switch: Callable[[str, str], None] | None = None,
+    on_model_switch: Callable[[str, str], None] | None = None,
 ) -> dict:
     """Non-streaming completion for the given model_id, with the same two-level
     failover as chat_stream (endpoint-level, then cross-model). Used for
     agent-internal calls (plan, tool decisions) — never for the final streamed
     user-facing answer, which stays on chat_stream.
 
+    on_provider_switch/on_model_switch mirror chat_stream's callbacks (sync or
+    async), so agent-internal failovers can surface as provider_switch SSE
+    events (A.9-7 gap fix). Both optional; omitted = silent failover as before.
+
     Returns the completion message dict ({"role", "content", "tool_calls", "usage"}).
     """
     models = resolver.fallback_models(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for candidate_model in models:
+    for i, candidate_model in enumerate(models):
+        if i > 0 and on_model_switch:
+            prev_model = models[i - 1]
+            if asyncio.iscoroutinefunction(on_model_switch):
+                await on_model_switch(prev_model, candidate_model)
+            else:
+                on_model_switch(prev_model, candidate_model)
         try:
             return await _complete_one_model(
-                candidate_model, messages, resolver, rate_limiter, user_id, tools, tool_choice
+                candidate_model, messages, resolver, rate_limiter, user_id, tools, tool_choice,
+                on_provider_switch=on_provider_switch,
             )
         except _ModelExhausted as me:
             last_error = me.error

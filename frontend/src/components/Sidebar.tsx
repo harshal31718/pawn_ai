@@ -399,7 +399,7 @@ export default function Sidebar({
                             </button>
                           </div>
                         ) : (
-                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-50 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                             <button
                               onClick={(e) => handleStartRename(conv, e)}
                               className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-theme-text transition-all active:scale-95"

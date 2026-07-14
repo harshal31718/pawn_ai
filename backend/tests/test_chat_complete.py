@@ -152,6 +152,65 @@ async def test_normalize_chat_complete_fails_over_on_429():
     assert message["content"] == "from groq"
 
 
+@pytest.mark.asyncio
+async def test_normalize_chat_complete_fires_failover_callbacks():
+    """A.9-7 gap fix: chat_complete now accepts on_provider_switch /
+    on_model_switch (sync or async) and fires them on failover, mirroring
+    chat_stream — so in-loop agent failovers can emit provider_switch SSE
+    events instead of happening silently."""
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
+
+    async def selective_complete(url, model, messages, headers, tools=None, tool_choice="auto"):
+        if "generativelanguage" in url:
+            raise ProviderError(kind="rate_limit", message="429 rate limited")
+        return {"role": "assistant", "content": "from groq", "tool_calls": None}
+
+    switches: list = []
+
+    async def on_switch(frm, to):
+        switches.append((frm, to))
+
+    with _keys("google", "groq"), patch("app.core.normalize._chat_complete_llm", side_effect=selective_complete):
+        message = await normalize.chat_complete(
+            model_id="gemini-2.5-flash-lite",
+            messages=[{"role": "user", "content": "hi"}],
+            resolver=resolver,
+            rate_limiter=resolver._rate_limiter,
+            user_id="u",
+            on_provider_switch=on_switch,
+            on_model_switch=on_switch,
+        )
+
+    assert message["content"] == "from groq"
+    # At least one switch (endpoint- or model-level) fired on the way to groq.
+    assert switches, "expected a failover callback to fire"
+
+
+@pytest.mark.asyncio
+async def test_normalize_chat_complete_callbacks_silent_on_success():
+    """No failover -> no callback calls (and omitting them stays valid)."""
+    resolver = Resolver(load_registry(), EndpointRateLimiter())
+
+    async def fake_complete(url, model, messages, headers, tools=None, tool_choice="auto"):
+        return {"role": "assistant", "content": "ok", "tool_calls": None}
+
+    switches: list = []
+
+    with _keys("google"), patch("app.core.normalize._chat_complete_llm", side_effect=fake_complete):
+        message = await normalize.chat_complete(
+            model_id="gemini-2.5-flash-lite",
+            messages=[{"role": "user", "content": "hi"}],
+            resolver=resolver,
+            rate_limiter=resolver._rate_limiter,
+            user_id="u",
+            on_provider_switch=lambda f, t: switches.append((f, t)),
+            on_model_switch=lambda f, t: switches.append((f, t)),
+        )
+
+    assert message["content"] == "ok"
+    assert switches == []
+
+
 # ── resolver.pick_model_by_capability require_tools filter ─────────────────
 
 def test_require_tools_excludes_models_without_tool_support():

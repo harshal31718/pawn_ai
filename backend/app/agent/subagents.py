@@ -112,6 +112,13 @@ SUBAGENTS: Dict[str, SubagentPreset] = {
 DELEGATE_PREFIX = "delegate_"
 
 
+async def _on_provider_switch_events(from_p: str, to_p: str) -> None:
+    """Dispatches a provider_switch custom event for failovers inside a
+    subagent's own chat_complete calls (A.9-7 gap fix). Defined here (not
+    imported from graph.py) to avoid a graph<->subagents circular import."""
+    await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+
+
 def delegate_tool_specs() -> List[dict]:
     """OAI-format tool schemas for the three delegate_<name> tools, to be
     appended to the orchestrator's own tool_specs list. These never go
@@ -173,6 +180,8 @@ async def run_subagent(name: str, task: str, ctx: ToolContext, tokens_used: int)
         try:
             result = await normalize.chat_complete(
                 model_id, messages, ctx.resolver, ctx.rate_limiter, user_id=ctx.user_id, tools=tool_specs,
+                on_provider_switch=_on_provider_switch_events,
+                on_model_switch=_on_provider_switch_events,
             )
         except (ProviderError, NoEndpointError) as e:
             print(f"Subagent {name} chat_complete failed (upstream): {e}", file=sys.stderr)
