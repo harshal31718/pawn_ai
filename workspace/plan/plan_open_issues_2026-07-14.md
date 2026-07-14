@@ -1,7 +1,10 @@
 # Plan: Open Issues & Improvements (post Phase A/M/N/O/P audit)
 
-*Branch: dev. Status: IN PROGRESS — §2.1 (O.1 mid-loop double-answer) DONE
-2026-07-14, committed and live-verified. Everything else still NOT STARTED.*
+*Branch: dev. Status: IN PROGRESS — §2.1 (O.1 mid-loop double-answer) and
+§2.2's code part (deterministic Drive root resolution) DONE 2026-07-14,
+both committed and tested. §2.2's actual folder merge stays a manual,
+user-only step (unchanged — see §2.2/§4). Everything else still NOT
+STARTED.*
 *Written 2026-07-14 after auditing `build_tracker.md`, `current_state.md`,
 `dev_log.md`, `workspace/implemented_phases/gap_audit_2026-07-14.md`, and
 `workspace/plan/plan_imagelab_session_issues.md`, then cross-checked each
@@ -182,7 +185,7 @@ persisted trace before the final verified draft — consistent with the fix.
 **Files:** `backend/app/agent/graph.py` (`execute_node`'s tool loop),
 `backend/tests/test_agent.py`.
 
-### 2.2 — Duplicate "PAWN" Drive root folders (pre-existing, from before the concurrency fix)
+### 2.2 — Duplicate "PAWN" Drive root folders (pre-existing, from before the concurrency fix) — CODE PART DONE 2026-07-14
 
 Not purely a "needs you" item — flagging here because it may still be
 actively causing scope-resolution confusion. `core/drive_factory`'s
@@ -194,9 +197,34 @@ under the other root. `gap_audit_2026-07-14.md` flagged this as the
 lead suspect for one mis-scoping incident during M.7 testing (later
 correctly attributed to a different bug — a stale closure sending the wrong
 chat ID — but the duplicate-root risk itself was never ruled out or fixed,
-just not the cause *that specific time*). The merge itself has to be manual
-(§4) but it's worth actually doing before it causes a real, harder-to-debug
-incident, not just a theoretical one.
+just not the cause *that specific time*).
+
+**Fixed (the safely-automatable part):** `storage/drive.py`'s
+`get_or_create_root()` queried Drive's `files.list` with no `orderBy` and
+`pageSize=1` — without an explicit order, Drive gives no guarantee of stable
+ordering, so which "PAWN" folder got picked (when more than one exists)
+could genuinely differ between calls/instances, not just be "whichever
+happens to be found first" once and stay that way. Fixed: now queries
+`orderBy="createdTime"` with `pageSize=10`, always resolving to the OLDEST
+matching folder — deterministic across every call and every DriveStorage
+instance (a real, previously-missing guarantee, not just a symptom
+workaround), and favors the folder most likely to hold the most existing
+history. When more than one folder is found, logs a clear stderr warning
+(user ID + every folder ID + a pointer back to this doc) so the condition is
+visible in logs instead of silently invisible, without touching any data.
+6 new tests in `backend/tests/test_drive_storage.py` (new file — DriveStorage
+itself had zero direct unit coverage before this; `_build_service` mocked to
+avoid real Google API calls). 415 backend tests green (up from 409).
+
+**Still needs you (unchanged, this part is NOT automated and shouldn't be):**
+actually merging the two real "PAWN" folders' *contents* in your live Google
+Drive account — moving/reconciling files between them requires judgment
+about conflicts (e.g. two chats with colliding auto-generated titles, like
+the false-alarm case `gap_audit_2026-07-14.md` §K already found) that isn't
+safe to automate blindly. The code fix above means the app will now, at
+least, *consistently* use the same (oldest, most-complete) root every time
+instead of possibly flip-flopping — so the visible symptom should already be
+far less confusing even before you get to the manual merge. See §4.
 
 ---
 

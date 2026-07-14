@@ -6,6 +6,70 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Fix: deterministic Drive root resolution (plan_open_issues §2.2)
+
+Second item off `plan_open_issues_2026-07-14.md`. The plan's original
+framing split this into "safely automatable" (make root resolution
+consistent) vs. "needs manual judgment" (actually merging two real folders'
+contents) — stayed strictly within the automatable half, same call as when
+the plan was first written.
+
+Read `storage/drive.py`'s `get_or_create_root()`: `self._files().list(q=q,
+fields="files(id)", pageSize=1).execute()` with no `orderBy` at all. Drive's
+`files.list` API makes no ordering guarantee absent an explicit `orderBy` --
+so for any user with more than one "PAWN" folder (a pre-existing condition
+from before `drive_factory`'s concurrent-cache-miss race was fixed, commit
+`2146b07`), which folder `pageSize=1` happens to return isn't just
+"whichever was found first, forever" -- it could differ across separate
+calls, separate DriveStorage instances (e.g. after a cache eviction), even
+though each instance's OWN `_root_id` is cached and stable for its own
+lifetime. That's a strictly worse problem than the plan's original framing
+suggested: not "always resolves to the same wrong root" but "may resolve to
+a DIFFERENT root each time," which would make the "missing content"
+symptom intermittent and much harder to debug from a bug report.
+
+**Fix:** added `orderBy="createdTime"` and raised `pageSize` from 1 to 10 (to
+actually see how many duplicates exist, not just fetch-and-ignore). Always
+picks `files[0]` (now guaranteed oldest) -- deterministic across every call,
+every instance, forever, and the oldest folder is the one most likely to
+hold the most pre-race history, minimizing the "missing content" symptom
+without moving or deleting anything. When `len(files) > 1`, logs a clear
+stderr warning (`Drive: user {id} has {N} duplicate 'PAWN' root folders
+({ids}) -- using the oldest ({id}) deterministically. Manual merge
+recommended...`) -- pure visibility, no data touched, safe to ship
+unconditionally.
+
+Deliberately did NOT attempt an automated merge of the two folders' actual
+contents -- reconciling file trees needs judgment about naming conflicts
+(exactly the kind of confusion `gap_audit_2026-07-14.md` §K already
+documented once, from a coincidentally-similar auto-generated chat title,
+not even a duplicate-root cause that time) that isn't safe to blindly
+automate. That stays a manual step for the user in their real Drive account.
+
+**Tests:** `DriveStorage` had zero direct unit coverage anywhere before this
+-- every existing Drive-related test goes through `FakeDriveStorage` (a
+duck-typed substitute for storage/routes-layer tests, not something that
+exercises DriveStorage's own real Google API query construction). New
+`backend/tests/test_drive_storage.py` (6 tests): `_build_service` mocked to
+avoid real Google OAuth/API calls, a fake `files()` resource records
+`.list()`/`.create()` call kwargs -- covers the `orderBy` param itself,
+oldest-picked-among-duplicates, the stderr warning firing correctly (message
+content) and NOT firing on a single (non-duplicate) root, folder creation
+when none exists, and the existing `_root_id` in-memory cache still skipping
+a repeat query. 415 backend tests green (up from 409), full suite via
+`docker compose exec backend pytest -n auto`.
+
+No live verification against a real Drive account this session (the actual
+duplicate-root condition lives in the user's own Google Drive, not
+reproducible from this environment) -- confidence here comes from the unit
+tests directly exercising the query-construction logic, which is the
+entirety of what changed.
+
+Updated `plan_open_issues_2026-07-14.md` §2.2 (code part DONE, manual-merge
+part unchanged); `current_state.md`/`build_tracker.md` updated.
+
+---
+
 ### [2026-07-14] — Fix: O.1 mid-loop double-answer (plan_open_issues §2.1)
 
 First item picked off `workspace/plan/plan_open_issues_2026-07-14.md` (the

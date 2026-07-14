@@ -687,6 +687,28 @@ Plan: `workspace/implemented_phases/plan_consolidated_next_phases_2026-07-14.md`
 All of Phase P verified live via Chrome and committed
 (`6618204`/`b130760`/`09fb4a7`/`d149697`) 2026-07-14.
 
+## Open Issues follow-ups (in progress, from workspace/plan/plan_open_issues_2026-07-14.md)
+
+Not a numbered phase — a consolidated audit of previously-deferred gaps,
+worked one item at a time. §2.1 (O.1 mid-loop double-answer) is tracked as
+Phase O's O.5 above, not duplicated here.
+
+- [x] §2.2 (code part) — deterministic Drive root resolution. `storage/
+  drive.py`'s `get_or_create_root()` now orders Drive's `files.list` query
+  by `createdTime` ascending (was unordered, `pageSize=1` — no ordering
+  guarantee, so a user with a pre-existing duplicate "PAWN" root could
+  resolve to a DIFFERENT one across separate calls/instances, not just
+  consistently the "wrong" one) and always picks the oldest, deterministic
+  match; logs a stderr warning when duplicates are found (visibility only,
+  no data touched). New `test_drive_storage.py` (6 tests — DriveStorage had
+  zero direct unit coverage before this). 415 backend tests green (up from
+  409). **§2.2's actual multi-root merge stays a manual, user-only step**
+  (needs judgment about file-tree conflicts, not safely automatable) — see
+  `plan_open_issues_2026-07-14.md` §4.
+- [ ] §3 — small cleanups (`EndpointEntry.secret` vestige,
+  `conversations_drive.py`'s broad except pattern, `memory.py`'s missing
+  try/except on `_delete_scope_chunks`). Not started yet.
+
 ## Image Lab warm-session issues (in progress, independent, user-paced)
 
 Plan: `workspace/plan/plan_imagelab_session_issues.md`. Not a numbered
