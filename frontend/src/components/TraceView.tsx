@@ -279,6 +279,27 @@ function SubagentGroup({ group, isStreaming }: { group: AgentGroup; isStreaming:
   )
 }
 
+/** Renders one run of trace entries grouped by agent (main's items inline,
+ *  each subagent as its own collapsible group) -- the reusable core both
+ *  TraceView (the full collapsible block, reload/no-segments path) and
+ *  Message.tsx's interleaved segments renderer (Phase N, live path) build
+ *  on, so a subagent's nested "N tool calls" grouping looks identical in
+ *  both rendering modes. */
+export function TraceEntries({ entries, isStreaming }: { entries: TraceEntry[]; isStreaming: boolean }) {
+  const groups = groupByAgent(entries)
+  return (
+    <>
+      {groups.map((group, gIdx) =>
+        group.agent === 'main' ? (
+          <ItemList key={gIdx} items={group.items} />
+        ) : (
+          <SubagentGroup key={gIdx} group={group} isStreaming={isStreaming} />
+        ),
+      )}
+    </>
+  )
+}
+
 export default function TraceView({ trace, isStreaming }: Props) {
   const [isOpen, setIsOpen] = useState(isStreaming)
   const wasStreaming = useRef(isStreaming)
@@ -293,7 +314,6 @@ export default function TraceView({ trace, isStreaming }: Props) {
   if (trace.length === 0) return null
 
   const { steps, toolCalls, sources, seconds } = summarize(trace)
-  const groups = groupByAgent(trace)
 
   return (
     <div className="mb-2 flex flex-col w-full text-[11px] text-theme-ai-bubble-text/60">
@@ -311,13 +331,7 @@ export default function TraceView({ trace, isStreaming }: Props) {
 
       <div className={`overflow-hidden transition-all duration-200 grid ${isOpen ? 'grid-rows-[1fr] opacity-100 mt-1' : 'grid-rows-[0fr] opacity-0'}`}>
         <div className="min-h-0">
-          {groups.map((group, gIdx) =>
-            group.agent === 'main' ? (
-              <ItemList key={gIdx} items={group.items} />
-            ) : (
-              <SubagentGroup key={gIdx} group={group} isStreaming={isStreaming} />
-            ),
-          )}
+          <TraceEntries entries={trace} isStreaming={isStreaming} />
         </div>
       </div>
     </div>

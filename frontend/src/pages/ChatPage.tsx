@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useOutletContext, useNavigate } from 'react-router-dom'
-import type { Message, TraceEntry } from '../types'
+import type { Message, Segment, TraceEntry } from '../types'
 import ChatWindow from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
 import InteractiveGridBackground from '../components/InteractiveGridBackground'
@@ -40,6 +40,33 @@ function settleRunningTrace(trace: TraceEntry[]): TraceEntry[] {
 
 function appendTraceEntry(trace: TraceEntry[] | undefined, entry: TraceEntry): TraceEntry[] {
   return [...settleRunningTrace(trace || []), entry]
+}
+
+// Phase N — segments mirror of the trace helpers above: an ordered,
+// arrival-order list of text/tool-entry segments so Message.tsx can render
+// "text, then a tool card, then more text" instead of trace-always-above-
+// content. A running tool segment settles (status: 'done' + elapsed) the
+// moment the next segment of either kind arrives, exactly like trace's own
+// settle-on-next-entry rule.
+function settleRunningSegment(segments: Segment[]): Segment[] {
+  if (segments.length === 0) return segments
+  const last = segments[segments.length - 1]
+  if (last.type !== 'tool' || last.entry.status !== 'running') return segments
+  const elapsedMs = last.entry.startedAt ? Date.now() - last.entry.startedAt : undefined
+  return [...segments.slice(0, -1), { type: 'tool', entry: { ...last.entry, status: 'done', elapsedMs } }]
+}
+
+function appendTextSegment(segments: Segment[] | undefined, delta: string): Segment[] {
+  const settled = settleRunningSegment(segments || [])
+  const last = settled[settled.length - 1]
+  if (last && last.type === 'text') {
+    return [...settled.slice(0, -1), { type: 'text', content: last.content + delta }]
+  }
+  return [...settled, { type: 'text', content: delta }]
+}
+
+function appendToolSegment(segments: Segment[] | undefined, entry: TraceEntry): Segment[] {
+  return [...settleRunningSegment(segments || []), { type: 'tool', entry }]
 }
 
 export default function ChatPage() {
@@ -224,7 +251,9 @@ export default function ChatPage() {
         onToken: (delta) => {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + delta } : m,
+              m.id === assistantId
+                ? { ...m, content: m.content + delta, segments: appendTextSegment(m.segments, delta) }
+                : m,
             ),
           )
         },
@@ -232,7 +261,12 @@ export default function ChatPage() {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? { ...m, viaProvider, trace: settleRunningTrace(m.trace || []) }
+                ? {
+                  ...m,
+                  viaProvider,
+                  trace: settleRunningTrace(m.trace || []),
+                  segments: settleRunningSegment(m.segments || []),
+                }
                 : m,
             ),
           )
@@ -245,7 +279,12 @@ export default function ChatPage() {
           setMessagesFor(convId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? { ...m, content: `Error: ${err}`, trace: settleRunningTrace(m.trace || []) }
+                ? {
+                  ...m,
+                  content: `Error: ${err}`,
+                  trace: settleRunningTrace(m.trace || []),
+                  segments: settleRunningSegment(m.segments || []),
+                }
                 : m,
             ),
           )
@@ -259,7 +298,7 @@ export default function ChatPage() {
               const entry: TraceEntry = TOOL_STEP_RE.test(label)
                 ? { kind: 'tool', agent, label, detail, status: 'running', startedAt: Date.now() }
                 : { kind: 'step', agent, label, detail }
-              return { ...m, trace: appendTraceEntry(m.trace, entry) }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
             }),
           )
         },
@@ -269,38 +308,46 @@ export default function ChatPage() {
           // the same event) -- TraceView otherwise falls back to the raw label.
           setMessagesFor(convId, (prev) =>
             prev.map((m) => {
-              if (m.id !== assistantId || !m.trace || m.trace.length === 0) return m
-              const last = m.trace[m.trace.length - 1]
-              if (last.kind !== 'tool' || last.status !== 'running' || last.agent !== agent) return m
-              return { ...m, trace: [...m.trace.slice(0, -1), { ...last, name }] }
+              if (m.id !== assistantId) return m
+              let next = m
+              if (m.trace && m.trace.length > 0) {
+                const last = m.trace[m.trace.length - 1]
+                if (last.kind === 'tool' && last.status === 'running' && last.agent === agent) {
+                  next = { ...next, trace: [...m.trace.slice(0, -1), { ...last, name }] }
+                }
+              }
+              if (m.segments && m.segments.length > 0) {
+                const last = m.segments[m.segments.length - 1]
+                if (last.type === 'tool' && last.entry.kind === 'tool' && last.entry.status === 'running' && last.entry.agent === agent) {
+                  next = { ...next, segments: [...m.segments.slice(0, -1), { type: 'tool', entry: { ...last.entry, name } }] }
+                }
+              }
+              return next
             }),
           )
         },
         onMemoryHit: (summary, scope, sourceConvId) => {
           setMessagesFor(convId, (prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                  ...m,
-                  trace: appendTraceEntry(m.trace, {
-                    kind: 'memory_hit',
-                    agent: 'main',
-                    summary,
-                    scope: scope === 'project' ? 'project' : scope === 'chat' ? 'chat' : undefined,
-                    sourceConvId,
-                  }),
-                }
-                : m,
-            ),
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = {
+                kind: 'memory_hit',
+                agent: 'main',
+                summary,
+                scope: scope === 'project' ? 'project' : scope === 'chat' ? 'chat' : undefined,
+                sourceConvId,
+              }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
+            }),
           )
         },
         onModelCall: (model, purpose) => {
           setMessagesFor(convId, (prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, trace: appendTraceEntry(m.trace, { kind: 'model_call', agent: 'main', model, purpose }) }
-                : m,
-            ),
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = { kind: 'model_call', agent: 'main', model, purpose }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
+            }),
           )
         },
         onCitation: (url, title) => {
@@ -309,10 +356,12 @@ export default function ChatPage() {
               if (m.id !== assistantId) return m
               const existing = m.citations || []
               if (existing.some((c) => c.url === url)) return m // de-dup by URL
+              const entry: TraceEntry = { kind: 'citation', agent: 'main', url, title }
               return {
                 ...m,
                 citations: [...existing, { url, title }],
-                trace: appendTraceEntry(m.trace, { kind: 'citation', agent: 'main', url, title }),
+                trace: appendTraceEntry(m.trace, entry),
+                segments: appendToolSegment(m.segments, entry),
               }
             }),
           )
@@ -326,11 +375,11 @@ export default function ChatPage() {
           // flow" the agent trace (A.8) was built to guarantee. Removed
           // 2026-07-14.
           setMessagesFor(convId, (prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, trace: appendTraceEntry(m.trace, { kind: 'provider_switch', agent: 'main', from, to }) }
-                : m,
-            ),
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const entry: TraceEntry = { kind: 'provider_switch', agent: 'main', from, to }
+              return { ...m, trace: appendTraceEntry(m.trace, entry), segments: appendToolSegment(m.segments, entry) }
+            }),
           )
         },
       },

@@ -47,11 +47,28 @@ export interface Citation {
   title: string
 }
 
+/** Phase N — interleaved agent streaming: an ordered, arrival-order record of
+ *  what a LIVE assistant reply is made of (text prose vs. a trace-worthy
+ *  event — tool call, step, citation, memory hit, provider switch), so
+ *  Message.tsx can render "text, then a tool card, then more text" instead
+ *  of the old fixed "trace block above, content below" split. `entry` reuses
+ *  the same TraceEntry shape trace already uses (not narrowed to
+ *  kind:'tool') -- any trace-worthy event becomes a 'tool'-typed segment.
+ *  Only populated for LIVE streaming messages (see ChatPage.tsx); reloaded/
+ *  historical messages have no segments and fall back to the legacy
+ *  trace-above/content-below rendering (see Message.tsx) -- the persisted
+ *  shape from the backend has no positional info to reconstruct true
+ *  interleaving order from. */
+export type Segment =
+  | { type: 'text'; content: string }
+  | { type: 'tool'; entry: TraceEntry }
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'notice'
   content: string
   trace?: TraceEntry[]
+  segments?: Segment[]
   citations?: Citation[]
   viaProvider?: string
 }
@@ -92,6 +109,10 @@ export interface PersistedMsg {
   content: string
   viaProvider?: string
   trace?: TraceEntry[]
+  /** Live-session cache only (Phase N) -- carries the interleaved arrival
+   *  order across a page reload within the same session, before the next
+   *  server round-trip refetches the (non-interleaved) persisted shape. */
+  segments?: Segment[]
   citations?: Citation[]
 }
 

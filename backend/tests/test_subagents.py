@@ -242,14 +242,18 @@ async def test_execute_node_delegates_sequentially_and_merges_trace():
 
     main_call_count = {"n": 0}
 
-    async def fake_main_complete(*args, **kwargs):
+    async def fake_main_stream(*args, **kwargs):
         main_call_count["n"] += 1
         if main_call_count["n"] == 1:
-            return {
-                "role": "assistant", "content": "", "usage": {"total_tokens": 10},
+            yield {
+                "type": "done",
                 "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "delegate_researcher", "arguments": '{"task": "research X"}'}}],
+                "finish_reason": "tool_calls",
+                "usage": {"total_tokens": 10},
             }
-        return {"role": "assistant", "content": "Here is the summary of X.", "tool_calls": None, "usage": {"total_tokens": 5}}
+        else:
+            yield {"type": "content", "delta": "Here is the summary of X."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": {"total_tokens": 5}}
 
     async def fake_run_subagent(name, task, ctx, tokens_used):
         assert name == "researcher"
@@ -261,7 +265,7 @@ async def test_execute_node_delegates_sequentially_and_merges_trace():
             "tokens_used": tokens_used + 42,
         }
 
-    with patch("app.core.normalize.chat_complete", side_effect=fake_main_complete):
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake_main_stream):
         with patch("app.agent.graph.run_subagent", side_effect=fake_run_subagent):
             with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
                 res = await execute_node(state)

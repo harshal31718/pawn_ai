@@ -338,25 +338,29 @@ def test_chat_agent_path_persists_tool_trace(drive_client, fake_drive):
     """Force the heavy/agent path via a tool call and confirm the persisted
     assistant record's `trace` field reflects the graph's final tool_log."""
     conv_id = "conv-agent-1"
-    call_count = {"n": 0}
 
     async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
-        call_count["n"] += 1
-        if tool_choice == "none":
-            return {"role": "assistant", "content": "1. Use the calculator", "usage": {"total_tokens": 5}}
-        if call_count["n"] <= 2:
-            return {
-                "role": "assistant", "content": "", "usage": {"total_tokens": 5},
-                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": '{"expression": "2+2"}'}}],
-            }
-        return {"role": "assistant", "content": "the answer is 4", "tool_calls": None, "usage": {"total_tokens": 5}}
+        assert tool_choice == "none"  # plan step -- the only chat_complete caller left
+        return {"role": "assistant", "content": "1. Use the calculator", "usage": {"total_tokens": 5}}
 
-    async def fake_stream(*args, **kwargs):
-        yield "the answer is 4"
+    exec_calls = {"n": 0}
+
+    async def fake_stream_with_tools(*args, **kwargs):
+        exec_calls["n"] += 1
+        if exec_calls["n"] == 1:
+            yield {
+                "type": "done",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": '{"expression": "2+2"}'}}],
+                "finish_reason": "tool_calls",
+                "usage": {"total_tokens": 5},
+            }
+        else:
+            yield {"type": "content", "delta": "the answer is 4"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": {"total_tokens": 5}}
 
     with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "heavy", "needs_agent": True})):
         with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
-            with patch("app.core.normalize.chat_stream", side_effect=fake_stream):
+            with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake_stream_with_tools):
                 with drive_client.stream(
                     "POST", "/chat",
                     json={"messages": [{"role": "user", "content": "please analyze this deeply"}], "conversation_id": conv_id},
@@ -382,25 +386,29 @@ def test_chat_agent_path_persists_top_level_citations(drive_client, fake_drive):
     it from trace, so without this a real reload (not the live SSE session)
     silently loses source chips even though the trace still has them."""
     conv_id = "conv-agent-citations-1"
-    call_count = {"n": 0}
 
     async def fake_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
-        call_count["n"] += 1
-        if tool_choice == "none":
-            return {"role": "assistant", "content": "1. Fetch the page", "usage": {"total_tokens": 5}}
-        if call_count["n"] <= 2:
-            return {
-                "role": "assistant", "content": "", "usage": {"total_tokens": 5},
-                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "fetch_url", "arguments": '{"url": "https://example.com/article"}'}}],
-            }
-        return {"role": "assistant", "content": "summarized", "tool_calls": None, "usage": {"total_tokens": 5}}
+        assert tool_choice == "none"  # plan step -- the only chat_complete caller left
+        return {"role": "assistant", "content": "1. Fetch the page", "usage": {"total_tokens": 5}}
 
-    async def fake_stream(*args, **kwargs):
-        yield "summarized"
+    exec_calls = {"n": 0}
+
+    async def fake_stream_with_tools(*args, **kwargs):
+        exec_calls["n"] += 1
+        if exec_calls["n"] == 1:
+            yield {
+                "type": "done",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "fetch_url", "arguments": '{"url": "https://example.com/article"}'}}],
+                "finish_reason": "tool_calls",
+                "usage": {"total_tokens": 5},
+            }
+        else:
+            yield {"type": "content", "delta": "summarized"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": {"total_tokens": 5}}
 
     with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "heavy", "needs_agent": True})):
         with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
-            with patch("app.core.normalize.chat_stream", side_effect=fake_stream):
+            with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake_stream_with_tools):
                 with patch("app.agent.graph.run_tool", new=AsyncMock(return_value="fetched page text")):
                     with drive_client.stream(
                         "POST", "/chat",

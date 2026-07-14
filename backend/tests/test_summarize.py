@@ -58,7 +58,12 @@ def test_chat_truncates_context_to_last_10_messages(client, fake_drive):
             "POST",
             "/chat",
             json={
-                "messages": [{"role": "user", "content": "Latest turn?"}],
+                # Deliberately avoids router.py's _TIME_SENSITIVE_KEYWORDS (e.g.
+                # "latest") -- conftest's blanket stub_byok_key fixture gives the
+                # test user a (fake) search key too, so a time-sensitive keyword
+                # here would flip needs_agent=True and route through execute_node
+                # instead of the direct_answer path this test means to exercise.
+                "messages": [{"role": "user", "content": "One more question?"}],
                 "conversation_id": conv_id,
             },
         ) as resp:
@@ -68,7 +73,7 @@ def test_chat_truncates_context_to_last_10_messages(client, fake_drive):
     # one streaming call, no plan/synthesis prompts. 10 history + 1 new user turn = 11.
     assert len(captured_messages) == 11
     assert captured_messages[0]["content"] == "User prompt 1"
-    assert captured_messages[-1]["content"] == "Latest turn?"
+    assert captured_messages[-1]["content"] == "One more question?"
 
 
 def test_chat_prepends_summary_context(client, fake_drive):

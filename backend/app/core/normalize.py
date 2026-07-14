@@ -22,6 +22,20 @@ Public API:
         on_model_switch: Callable[[str, str], None] | None = None,
     ) -> dict:
 
+    async def chat_stream_with_tools(
+        model_id: str,
+        messages: list,
+        resolver: Resolver,
+        rate_limiter: EndpointRateLimiter,
+        tools: list | None = None,
+        tool_choice: str = "auto",
+        on_provider_switch: Callable[[str, str], None] | None = None,
+        user_id: str | None = None,
+        on_model_switch: Callable[[str, str], None] | None = None,
+    ) -> AsyncGenerator[dict, None]:
+        # Phase N: streams tokens live AND receives tool_calls in one call --
+        # the merged execute_node tool loop's only call type.
+
 Routes and agent nodes call ONLY these functions.
 Never import llm_core.stream_llm / llm_core.chat_complete directly outside of this module.
 """
@@ -31,7 +45,11 @@ from typing import AsyncGenerator, Callable
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import ProviderError, NoEndpointError
-from app.core.llm_core import stream_llm, chat_complete as _chat_complete_llm
+from app.core.llm_core import (
+    stream_llm,
+    chat_complete as _chat_complete_llm,
+    stream_chat_with_tools as _stream_chat_with_tools_llm,
+)
 
 class _ModelExhausted(Exception):
     """Internal: a single model produced no tokens and all its endpoints failed.
@@ -157,6 +175,129 @@ async def chat_stream(
             continue
         # Note: a mid-stream error (after tokens) propagates from _stream_one_model
         # and is intentionally NOT caught here — we cannot restart a partial reply.
+
+    if last_error:
+        if isinstance(last_error, ProviderError):
+            raise last_error
+        if isinstance(last_error, NoEndpointError):
+            raise last_error
+        raise ProviderError(kind="upstream_error", message=str(last_error))
+    raise NoEndpointError(f"No available endpoint for model '{model_id}'")
+
+
+async def _stream_one_model_with_tools(
+    model_id: str,
+    messages: list,
+    resolver: Resolver,
+    rate_limiter: EndpointRateLimiter,
+    on_provider_switch: Callable[[str, str], None] | None,
+    user_id: str | None,
+    tools: list | None,
+    tool_choice: str,
+) -> AsyncGenerator[dict, None]:
+    """Streaming-with-tools sibling of _stream_one_model: same endpoint-level
+    failover across ONE model's keyed endpoints, same "no retry once a token
+    has reached the user" rule -- here that means once a "content" event has
+    been yielded for this call, any subsequent error propagates directly
+    instead of trying the next endpoint. A response with tool_calls but no
+    content (a pure tool-call turn) still counts as a clean success once its
+    "done" event is yielded, exactly like a zero-token _stream_one_model run."""
+    candidates = resolver.pick(model_id, user_id=user_id)
+
+    last_error: Exception | None = None
+    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+        if i > 0 and on_provider_switch:
+            prev_provider = candidates[i - 1][4]
+            if asyncio.iscoroutinefunction(on_provider_switch):
+                await on_provider_switch(prev_provider, provider)
+            else:
+                on_provider_switch(prev_provider, provider)
+
+        tokens_yielded = 0
+        try:
+            async for event in _stream_chat_with_tools_llm(
+                url, provider_model_id, messages, headers, tools=tools, tool_choice=tool_choice
+            ):
+                if event["type"] == "content":
+                    if tokens_yielded == 0:
+                        rate_limiter.record_call(endpoint_id)
+                        rate_limiter.record_success(endpoint_id)
+                    tokens_yielded += 1
+                yield event
+
+            if tokens_yielded == 0:
+                rate_limiter.record_call(endpoint_id)
+                rate_limiter.record_success(endpoint_id)
+            return
+
+        except ProviderError as pe:
+            last_error = pe
+            if tokens_yielded > 0:
+                raise pe
+            if pe.kind == "rate_limit":
+                rate_limiter.record_429(endpoint_id)
+            else:
+                rate_limiter.record_connect_failure(endpoint_id)
+
+        except (httpx.HTTPError, Exception) as e:
+            last_error = e
+            if tokens_yielded > 0:
+                raise e
+            rate_limiter.record_connect_failure(endpoint_id)
+
+    raise _ModelExhausted(last_error or NoEndpointError(f"No available endpoint for model '{model_id}'"))
+
+
+async def chat_stream_with_tools(
+    model_id: str,
+    messages: list,
+    resolver: Resolver,
+    rate_limiter: EndpointRateLimiter,
+    tools: list | None = None,
+    tool_choice: str = "auto",
+    on_provider_switch: Callable[[str, str], None] | None = None,
+    user_id: str | None = None,
+    on_model_switch: Callable[[str, str], None] | None = None,
+) -> AsyncGenerator[dict, None]:
+    """Streaming completion WITH tool-calling for model_id, with the same
+    two-level failover as chat_stream (endpoint-level, then cross-model) and
+    the same hard rule: once a content token has reached the user for a given
+    call, no retry/switch -- a mid-stream error propagates directly (identical
+    to _stream_one_model's contract, see _stream_one_model_with_tools above).
+
+    Used by the merged execute_node tool loop (Phase N) -- the ONLY call type
+    it needs, since it must both stream the answer live and inspect tool_calls
+    to decide whether to loop. Yields the same event shape as
+    llm_core.stream_chat_with_tools: {"type": "content", "delta": str} per
+    token, then a final {"type": "done", "tool_calls": [...] | None,
+    "finish_reason": str, "usage": dict | None}.
+    """
+    models = resolver.fallback_models(model_id, user_id=user_id)
+
+    last_error: Exception | None = None
+    for i, candidate_model in enumerate(models):
+        if i > 0 and on_model_switch:
+            prev_model = models[i - 1]
+            if asyncio.iscoroutinefunction(on_model_switch):
+                await on_model_switch(prev_model, candidate_model)
+            else:
+                on_model_switch(prev_model, candidate_model)
+
+        try:
+            async for event in _stream_one_model_with_tools(
+                candidate_model, messages, resolver, rate_limiter, on_provider_switch, user_id, tools, tool_choice
+            ):
+                yield event
+            return
+        except _ModelExhausted as me:
+            last_error = me.error
+            continue
+        except NoEndpointError as ne:
+            last_error = ne
+            continue
+        # Note: a mid-stream error (after a content token) propagates from
+        # _stream_one_model_with_tools and is intentionally NOT caught here --
+        # we cannot restart a partial reply, same as chat_stream above.
 
     if last_error:
         if isinstance(last_error, ProviderError):

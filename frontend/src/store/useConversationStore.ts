@@ -33,6 +33,10 @@ function toPersisted(msgs: Message[]): PersistedMsg[] {
     // would show a bare reply with no trace).
     ...(m.trace && m.trace.length > 0 ? { trace: m.trace } : {}),
     ...(m.citations && m.citations.length > 0 ? { citations: m.citations } : {}),
+    // Phase N: segments carry the live interleaved arrival order through a
+    // same-session reload too (before the next server round-trip refetches
+    // the non-interleaved persisted shape via backgroundLoadDetail below).
+    ...(m.segments && m.segments.length > 0 ? { segments: m.segments } : {}),
   }))
 }
 
@@ -44,6 +48,7 @@ function fromPersisted(msgs: PersistedMsg[]): Message[] {
     viaProvider: m.viaProvider,
     trace: m.trace,
     citations: m.citations,
+    segments: m.segments,
   }))
 }
 

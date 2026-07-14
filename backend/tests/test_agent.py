@@ -1,21 +1,25 @@
-"""Tests for the graph v2 orchestrator (Phase A / A.6): classify -> direct_answer
-| plan -> execute -> final. The old ReAct protocol (parser.py, routing.py,
-build_agent_prompt, route_action) is deleted, not tested here."""
+"""Tests for the graph v2 orchestrator (Phase A / A.6; execute/final merged
+in Phase N): classify -> direct_answer | plan -> execute -> END. The old
+ReAct protocol (parser.py, routing.py, build_agent_prompt, route_action) is
+deleted, not tested here. final_node no longer exists (Phase N merged it
+into execute_node's own streaming tool loop) -- there is no separate
+final_node test section."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.agent.graph import (
+    _estimate_tokens,
     _memory_hit_lines,
     classify_node,
     direct_answer_node,
     execute_node,
-    final_node,
     plan_node,
     route_after_classify,
 )
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS
+from app.exceptions import ProviderError
 
 
 def _state(**overrides):
@@ -37,6 +41,36 @@ def _state(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def _fake_stream_with_tools(turns):
+    """Builds a chat_stream_with_tools-shaped fake: `turns` is a list of
+    (content, tool_calls) tuples, one per expected call -- each call yields a
+    "content" event (only if content is truthy) then a final "done" event.
+    Raises AssertionError if called more times than turns provided (catches
+    an unbounded loop in the node under test instead of hanging/IndexError)."""
+    calls = {"n": 0}
+
+    async def fake(*args, **kwargs):
+        i = calls["n"]
+        assert i < len(turns), "chat_stream_with_tools called more times than the test expected"
+        calls["n"] += 1
+        content, tool_calls = turns[i]
+        if content:
+            yield {"type": "content", "delta": content}
+        yield {
+            "type": "done",
+            "tool_calls": tool_calls,
+            "finish_reason": "tool_calls" if tool_calls else "stop",
+            "usage": None,
+        }
+
+    fake.call_count = lambda: calls["n"]
+    return fake
+
+
+def _tool_call(call_id: str, name: str, arguments: str) -> dict:
+    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 
 # ── classify_node / routing ─────────────────────────────────────────────────
@@ -149,62 +183,117 @@ async def test_plan_node_failure_falls_back_to_empty_plan():
     assert res["plan"] == []
 
 
-# ── execute_node: the tool loop ─────────────────────────────────────────────
+# ── _estimate_tokens ─────────────────────────────────────────────────────────
+
+def test_estimate_tokens_empty_is_zero():
+    assert _estimate_tokens("", None) == 0
+
+
+def test_estimate_tokens_nonempty_is_at_least_one():
+    assert _estimate_tokens("hi", None) >= 1
+
+
+def test_estimate_tokens_scales_with_content_and_tool_calls():
+    short = _estimate_tokens("hi", None)
+    long_with_calls = _estimate_tokens("a long piece of reasoning text " * 10, [{"function": {"arguments": "{}"}}])
+    assert long_with_calls > short
+
+
+# ── execute_node: the merged streaming tool loop (Phase N) ─────────────────
 
 @pytest.mark.asyncio
-async def test_execute_node_no_tool_calls_stops_immediately():
+async def test_execute_node_pure_text_stream_no_tool_calls():
+    """A response with no tool_calls streams straight through as the final
+    answer -- one call, no closing call, no tool_log."""
     state = _state(difficulty="heavy", needs_agent=True)
+    dispatched = []
 
-    async def fake_complete(*args, **kwargs):
-        return {"role": "assistant", "content": "no tools needed", "tool_calls": None, "usage": {"total_tokens": 10}}
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
 
-    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
-        res = await execute_node(state)
+    fake = _fake_stream_with_tools([("no tools needed", None)])
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)
 
     assert res["tool_log"] == []
-    assert res["tokens_used"] == 10
+    assert res["final_answer"] == "no tools needed"
+    assert fake.call_count() == 1  # no closing call needed -- the loop already answered
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert "".join(token_deltas) == "no tools needed"
+    assert not any(name == "step" and data.get("label") == "Composing final answer" for name, data in dispatched)
 
 
 @pytest.mark.asyncio
-async def test_execute_node_runs_a_tool_call_and_logs_it():
+async def test_execute_node_streams_text_before_and_after_a_tool_call():
+    """The core Phase N guarantee: text the model produces before a tool call
+    streams live (as `token` events), interleaved around the tool's `step`
+    event -- not withheld until every tool call has finished."""
     state = _state(difficulty="heavy", needs_agent=True)
-    call_count = {"n": 0}
+    dispatched = []
 
-    async def fake_complete(*args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return {
-                "role": "assistant", "content": "", "usage": {"total_tokens": 5},
-                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": '{"expression": "2+2"}'}}],
-            }
-        return {"role": "assistant", "content": "the answer is 4", "tool_calls": None, "usage": {"total_tokens": 5}}
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
 
-    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+    fake = _fake_stream_with_tools([
+        ("Let me check that. ", [_tool_call("call_1", "calculator", '{"expression": "2+2"}')]),
+        ("The answer is 4.", None),
+    ])
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)
+
+    assert res["final_answer"] == "Let me check that. The answer is 4."
+    assert len(res["tool_log"]) == 1
+    assert res["tool_log"][0]["name"] == "calculator"
+    assert res["tool_log"][0]["args"] == {"expression": "2+2"}
+    assert res["tool_log"][0]["observation"] == "4"
+    assert res["tool_log"][0]["agent"] == "main"
+
+    idx_first_token = next(i for i, (n, _) in enumerate(dispatched) if n == "token")
+    idx_calling_step = next(
+        i for i, (n, d) in enumerate(dispatched) if n == "step" and d.get("label") == "Calling calculator"
+    )
+    idx_last_token = max(i for i, (n, _) in enumerate(dispatched) if n == "token")
+    assert idx_first_token < idx_calling_step < idx_last_token, (
+        "text must stream both before and after the tool card, not only after every tool call resolves"
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_node_multi_tool_call_sequence():
+    """Multiple tool_calls returned in one iteration's done event all run,
+    in order, before the loop continues."""
+    state = _state(difficulty="heavy", needs_agent=True)
+
+    fake = _fake_stream_with_tools([
+        ("", [
+            _tool_call("call_1", "calculator", '{"expression": "2+2"}'),
+            _tool_call("call_2", "get_datetime", "{}"),
+        ]),
+        ("done", None),
+    ])
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
         with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
             res = await execute_node(state)
 
-    assert len(res["tool_log"]) == 1
-    assert res["tool_log"][0]["name"] == "calculator"
-    assert res["tool_log"][0]["observation"] == "4"
-    assert res["tool_log"][0]["agent"] == "main"
-    assert res["tokens_used"] == 10
+    assert [t["name"] for t in res["tool_log"]] == ["calculator", "get_datetime"]
+    assert res["final_answer"] == "done"
 
 
 @pytest.mark.asyncio
 async def test_execute_node_unknown_tool_returns_tool_error_not_raise():
     state = _state(difficulty="heavy", needs_agent=True)
-    call_count = {"n": 0}
 
-    async def fake_complete(*args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return {
-                "role": "assistant", "content": "", "usage": {},
-                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "nonexistent_tool", "arguments": "{}"}}],
-            }
-        return {"role": "assistant", "content": "done", "tool_calls": None, "usage": {}}
+    fake = _fake_stream_with_tools([
+        ("", [_tool_call("call_1", "nonexistent_tool", "{}")]),
+        ("done", None),
+    ])
 
-    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
         with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
             res = await execute_node(state)  # must not raise
 
@@ -214,52 +303,101 @@ async def test_execute_node_unknown_tool_returns_tool_error_not_raise():
 @pytest.mark.asyncio
 async def test_execute_node_stops_at_max_iterations():
     """A model that always calls a tool must be stopped by AGENT_MAX_ITERATIONS,
-    not loop forever."""
+    not loop forever -- then makes exactly one no-tools closing call to still
+    produce a real answer (mirrors the old final_node's unconditional call)."""
     state = _state(difficulty="heavy", needs_agent=True)
 
     async def always_calls_tool(*args, **kwargs):
-        return {
-            "role": "assistant", "content": "", "usage": {},
-            "tool_calls": [{"id": "call_x", "type": "function", "function": {"name": "get_datetime", "arguments": "{}"}}],
-        }
+        if kwargs.get("tools"):
+            yield {"type": "done", "tool_calls": [_tool_call("call_x", "get_datetime", "{}")], "finish_reason": "tool_calls", "usage": None}
+        else:
+            yield {"type": "content", "delta": "closing answer"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
 
-    with patch("app.core.normalize.chat_complete", side_effect=always_calls_tool):
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=always_calls_tool):
         with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
             res = await execute_node(state)
 
     assert len(res["tool_log"]) == AGENT_MAX_ITERATIONS
-    assert res["messages"][-1] == {"role": "system", "content": "budget exhausted — answer with what you have"}
+    nudge_idx = res["messages"].index({"role": "system", "content": "budget exhausted — answer with what you have"})
+    assert res["messages"][nudge_idx + 1] == {"role": "assistant", "content": "closing answer"}
+    assert res["final_answer"] == "closing answer"
 
 
 @pytest.mark.asyncio
 async def test_execute_node_stops_when_token_budget_exceeded():
+    """Budget already exhausted before the first call: the tool loop itself
+    never runs, but a single no-tools closing call still produces an answer
+    (same "always answer" guarantee the old final_node provided)."""
     state = _state(difficulty="heavy", needs_agent=True, tokens_used=AGENT_MAX_TOKENS)
 
-    with patch("app.core.normalize.chat_complete", new=AsyncMock()) as mock_complete:
+    fake = _fake_stream_with_tools([("here you go", None)])
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
         with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
             res = await execute_node(state)
 
-    mock_complete.assert_not_called()  # budget already exhausted before the first call
-    assert res["messages"][-1] == {"role": "system", "content": "budget exhausted — answer with what you have"}
+    assert fake.call_count() == 1  # only the closing call -- no tool-loop iteration happened
+    assert res["tool_log"] == []
+    assert res["messages"][-2] == {"role": "system", "content": "budget exhausted — answer with what you have"}
+    assert res["messages"][-1] == {"role": "assistant", "content": "here you go"}
+    assert res["final_answer"] == "here you go"
+
+
+@pytest.mark.asyncio
+async def test_execute_node_upstream_failure_falls_through_to_closing_call():
+    """An upstream failure mid-loop (e.g. every fallback model exhausted)
+    doesn't kill the turn -- the loop breaks without the budget nudge, and one
+    closing call still attempts a real answer."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    call_count = {"n": 0}
+
+    async def fake(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise ProviderError(kind="upstream_error", message="all endpoints exhausted")
+        yield {"type": "content", "delta": "recovered answer"}
+        yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            res = await execute_node(state)
+
+    assert not any(m == {"role": "system", "content": "budget exhausted — answer with what you have"} for m in res["messages"])
+    assert res["final_answer"] == "recovered answer"
+
+
+@pytest.mark.asyncio
+async def test_execute_node_upstream_failure_after_content_sent_propagates_not_falls_through():
+    """The locked contract (mirrored from _stream_one_model): once a content
+    token has reached the user for a given call, a mid-stream failure must
+    surface directly -- NOT be swallowed and papered over with a fresh
+    closing call, which would silently concatenate an unrelated second answer
+    onto the truncated partial text the user already saw."""
+    state = _state(difficulty="heavy", needs_agent=True)
+
+    async def fake(*args, **kwargs):
+        yield {"type": "content", "delta": "partial answer, then it breaks"}
+        raise ProviderError(kind="upstream_error", message="mid-stream failure")
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            with pytest.raises(ProviderError):
+                await execute_node(state)
 
 
 @pytest.mark.asyncio
 async def test_execute_node_tool_exception_becomes_tool_error_observation():
-    """Even if a tool handler raises, run_tool's wrapper converts it to a
-    TOOL_ERROR observation -- the graph must never crash on a bad tool call."""
+    """Even with malformed tool_call arguments JSON, run_tool's wrapper
+    converts it to a TOOL_ERROR observation -- the graph must never crash."""
     state = _state(difficulty="heavy", needs_agent=True)
-    call_count = {"n": 0}
 
-    async def fake_complete(*args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return {
-                "role": "assistant", "content": "", "usage": {},
-                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": "not json"}}],
-            }
-        return {"role": "assistant", "content": "done", "tool_calls": None, "usage": {}}
+    fake = _fake_stream_with_tools([
+        ("", [_tool_call("call_1", "calculator", "not json")]),
+        ("done", None),
+    ])
 
-    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
         with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
             res = await execute_node(state)  # must not raise
 
@@ -270,16 +408,11 @@ async def test_execute_node_tool_exception_becomes_tool_error_observation():
 @pytest.mark.asyncio
 async def test_execute_node_emits_citation_for_fetch_url():
     state = _state(difficulty="heavy", needs_agent=True)
-    call_count = {"n": 0}
 
-    async def fake_complete(*args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return {
-                "role": "assistant", "content": "", "usage": {},
-                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "fetch_url", "arguments": '{"url": "https://example.com/page"}'}}],
-            }
-        return {"role": "assistant", "content": "done", "tool_calls": None, "usage": {}}
+    fake = _fake_stream_with_tools([
+        ("", [_tool_call("call_1", "fetch_url", '{"url": "https://example.com/page"}')]),
+        ("done", None),
+    ])
 
     dispatched = []
 
@@ -289,7 +422,7 @@ async def test_execute_node_emits_citation_for_fetch_url():
     async def fake_run_tool(spec, args, ctx):
         return "some page text"
 
-    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
         with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
             with patch("app.agent.graph.run_tool", side_effect=fake_run_tool):
                 res = await execute_node(state)
@@ -326,56 +459,3 @@ def test_memory_hit_lines_splits_multiple_hits_with_multiline_text():
 def test_memory_hit_lines_no_marker_returns_whole_observation():
     hits = _memory_hit_lines("[some_doc.txt] plain doc_search text")
     assert hits == [{"text": "[some_doc.txt] plain doc_search text", "source_conv_id": ""}]
-
-
-# ── final_node ───────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_final_node_streams_answer():
-    state = _state(messages=[{"role": "user", "content": "hi"}])
-
-    async def mock_stream(*args, **kwargs):
-        yield "final"
-        yield " answer"
-
-    with patch("app.core.normalize.chat_stream", side_effect=mock_stream):
-        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
-            res = await final_node(state)
-
-    assert res["final_answer"] == "final answer"
-
-
-@pytest.mark.asyncio
-async def test_final_node_digests_tool_log_not_raw_observations():
-    state = _state(
-        messages=[{"role": "user", "content": "hi"}],
-        tool_log=[{"name": "web_search", "args": {}, "observation": "some long result " * 50, "elapsed_ms": 1, "agent": "main"}],
-    )
-    captured = {}
-
-    async def capturing_stream(model_id, messages, resolver, rate_limiter, **kwargs):
-        captured["messages"] = messages
-        yield "ok"
-
-    with patch("app.core.normalize.chat_stream", side_effect=capturing_stream):
-        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
-            await final_node(state)
-
-    digest_msg = next(m for m in captured["messages"] if "Findings from tool use" in m.get("content", ""))
-    assert "web_search" in digest_msg["content"]
-
-
-@pytest.mark.asyncio
-async def test_final_node_respects_user_model_override():
-    state = _state(user_model_id="user-picked-model", difficulty="heavy")
-    captured = {}
-
-    async def capturing_stream(model_id, messages, resolver, rate_limiter, **kwargs):
-        captured["model_id"] = model_id
-        yield "ok"
-
-    with patch("app.core.normalize.chat_stream", side_effect=capturing_stream):
-        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
-            await final_node(state)
-
-    assert captured["model_id"] == "user-picked-model"

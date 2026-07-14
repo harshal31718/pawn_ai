@@ -1,8 +1,8 @@
 import { useState, useRef, useLayoutEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { Message } from '../types'
-import TraceView from './TraceView'
+import type { Message, Segment, TraceEntry } from '../types'
+import TraceView, { TraceEntries } from './TraceView'
 import CitationChips from './CitationChips'
 
 interface Props {
@@ -16,6 +16,122 @@ const formatProviderName = (p: string) => {
   if (p === 'openrouter') return 'OpenRouter'
   if (p === 'github') return 'GitHub'
   return p.charAt(0).toUpperCase() + p.slice(1)
+}
+
+type Chunk = { kind: 'text'; content: string } | { kind: 'trace'; entries: TraceEntry[] }
+
+// Phase N — merges the ordered segments list into render-ready chunks:
+// consecutive 'tool'-typed segments (a run of trace-worthy events, possibly
+// spanning a subagent's whole nested activity) collapse into one TraceEntries
+// run; consecutive 'text' segments (arriving as separate token deltas) merge
+// into one prose block. Empty text segments are dropped (e.g. a stream that
+// hasn't produced its first delta yet).
+function chunkSegments(segments: Segment[]): Chunk[] {
+  const chunks: Chunk[] = []
+  for (const seg of segments) {
+    const last = chunks[chunks.length - 1]
+    if (seg.type === 'text') {
+      if (seg.content === '') continue
+      if (last && last.kind === 'text') last.content += seg.content
+      else chunks.push({ kind: 'text', content: seg.content })
+    } else {
+      if (last && last.kind === 'trace') last.entries.push(seg.entry)
+      else chunks.push({ kind: 'trace', entries: [seg.entry] })
+    }
+  }
+  return chunks
+}
+
+/** Shared markdown renderer -- used both for the legacy single-block content
+ *  render and for each text chunk in the interleaved segments render. */
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        table: ({ children }) => (
+          <div className="overflow-x-auto my-2 rounded-lg border border-theme-border/40">
+            <table className="w-full text-sm sm:text-xs border-collapse">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead className="bg-theme-surface-hover/80 text-theme-text">{children}</thead>
+        ),
+        th: ({ children }) => (
+          <th className="px-3 py-1.5 text-left font-semibold border-b border-theme-border/40 whitespace-nowrap">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="px-3 py-1.5 border-b border-theme-border/20 align-top">{children}</td>
+        ),
+        tr: ({ children }) => <tr className="even:bg-theme-surface-hover/30">{children}</tr>,
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-theme-border pl-3 my-2 text-theme-text-muted italic">
+            {children}
+          </blockquote>
+        ),
+        hr: () => <hr className="my-3 border-theme-border/40" />,
+        ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
+        li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
+        p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0 leading-relaxed">{children}</p>,
+        h1: ({ children }) => <h1 className="text-lg font-bold my-2">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
+        pre: ({ children }) => (
+          <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-sm sm:text-xs leading-normal">
+            {children}
+          </pre>
+        ),
+        code: ({ children, className }) => {
+          const isInline = !className
+          return isInline ? (
+            <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-sm sm:text-xs border border-theme-border/30">
+              {children}
+            </code>
+          ) : (
+            <code className={className}>{children}</code>
+          )
+        },
+        a: ({ children, href }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
+}
+
+/** Phase N — live interleaved rendering: walks `segments` in arrival order,
+ *  rendering prose and trace-entry runs exactly where they occurred instead
+ *  of the legacy "trace block above, content below" split. Only used once a
+ *  message actually has at least one tool-typed segment (a pure-text stream
+ *  falls back to the legacy single-block path, which is equivalent and
+ *  simpler). */
+function InterleavedContent({ segments, isStreaming }: { segments: Segment[]; isStreaming: boolean }) {
+  const chunks = chunkSegments(segments)
+  const lastChunk = chunks[chunks.length - 1]
+
+  return (
+    <>
+      {chunks.map((chunk, i) =>
+        chunk.kind === 'trace' ? (
+          <div key={i} className="my-1 text-[11px] text-theme-ai-bubble-text/60">
+            <TraceEntries entries={chunk.entries} isStreaming={isStreaming} />
+          </div>
+        ) : (
+          <MarkdownContent key={i} content={chunk.content} />
+        ),
+      )}
+      {isStreaming && lastChunk?.kind === 'text' && (
+        <span className="inline-block w-0.5 h-3.5 bg-theme-ai-bubble-text opacity-75 animate-pulse ml-px align-middle" aria-hidden />
+      )}
+    </>
+  )
 }
 
 export default function MessageBubble({ message, isStreaming }: Props) {
@@ -79,12 +195,20 @@ export default function MessageBubble({ message, isStreaming }: Props) {
 
           {isUser ? (
             message.content
+          ) : (message.segments && message.segments.some((s) => s.type === 'tool')) ? (
+            /* Phase N — interleaved live rendering: text and tool cards render
+               in true arrival order instead of one trace block above the
+               whole reply. Only taken once a message has actually produced a
+               tool-typed segment; reloaded/historical messages (no segments)
+               and pure-text streams both fall back to the legacy path below,
+               which is equivalent for them and simpler. */
+            <InterleavedContent segments={message.segments} isStreaming={isStreaming} />
           ) : (
             <>
-              {/* Agent activity renders inline, above the reply, inside the
-                  same bubble (Phase A / A.8 — "Claude-app style", locked with
-                  the user 2026-07-13: one continuous block, not a separate
-                  card underneath). */}
+              {/* Legacy path: reloaded/historical messages (trace/content as
+                  separate persisted fields, Phase A / A.8) and pure-text live
+                  streams (no tool activity to interleave) both render here —
+                  agent activity above the reply, inside the same bubble. */}
               {message.trace && message.trace.length > 0 && (
                 <TraceView trace={message.trace} isStreaming={isStreaming} />
               )}
@@ -97,63 +221,7 @@ export default function MessageBubble({ message, isStreaming }: Props) {
                 </span>
               ) : (
                 <>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      table: ({ children }) => (
-                        <div className="overflow-x-auto my-2 rounded-lg border border-theme-border/40">
-                          <table className="w-full text-sm sm:text-xs border-collapse">{children}</table>
-                        </div>
-                      ),
-                      thead: ({ children }) => (
-                        <thead className="bg-theme-surface-hover/80 text-theme-text">{children}</thead>
-                      ),
-                      th: ({ children }) => (
-                        <th className="px-3 py-1.5 text-left font-semibold border-b border-theme-border/40 whitespace-nowrap">
-                          {children}
-                        </th>
-                      ),
-                      td: ({ children }) => (
-                        <td className="px-3 py-1.5 border-b border-theme-border/20 align-top">{children}</td>
-                      ),
-                      tr: ({ children }) => <tr className="even:bg-theme-surface-hover/30">{children}</tr>,
-                      blockquote: ({ children }) => (
-                        <blockquote className="border-l-2 border-theme-border pl-3 my-2 text-theme-text-muted italic">
-                          {children}
-                        </blockquote>
-                      ),
-                      hr: () => <hr className="my-3 border-theme-border/40" />,
-                      ul: ({ children }) => <ul className="list-disc pl-4 space-y-1 my-1.5">{children}</ul>,
-                      ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1 my-1.5">{children}</ol>,
-                      li: ({ children }) => <li className="text-sm my-0.5 leading-relaxed">{children}</li>,
-                      p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0 leading-relaxed">{children}</p>,
-                      h1: ({ children }) => <h1 className="text-lg font-bold my-2">{children}</h1>,
-                      h2: ({ children }) => <h2 className="text-base font-bold my-1.5">{children}</h2>,
-                      h3: ({ children }) => <h3 className="text-sm font-bold my-1">{children}</h3>,
-                      pre: ({ children }) => (
-                        <pre className="bg-theme-surface-hover/80 p-3 rounded-lg overflow-x-auto my-2 border border-theme-border/40 font-mono text-sm sm:text-xs leading-normal">
-                          {children}
-                        </pre>
-                      ),
-                      code: ({ children, className }) => {
-                        const isInline = !className
-                        return isInline ? (
-                          <code className="bg-theme-surface-hover px-1 py-0.5 rounded font-mono text-sm sm:text-xs border border-theme-border/30">
-                            {children}
-                          </code>
-                        ) : (
-                          <code className={className}>{children}</code>
-                        )
-                      },
-                      a: ({ children, href }) => (
-                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
-                          {children}
-                        </a>
-                      ),
-                    }}
-                  >
-                    {message.content}
-                  </ReactMarkdown>
+                  <MarkdownContent content={message.content} />
                   {/* Blinking cursor during active stream */}
                   {isStreaming && (
                     <span className="inline-block w-0.5 h-3.5 bg-theme-ai-bubble-text opacity-75 animate-pulse ml-px align-middle" aria-hidden />

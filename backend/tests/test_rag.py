@@ -291,30 +291,33 @@ def test_chat_yields_memory_hit_events(client, fake_drive):
     async def mock_embed(text, *args, **kwargs):
         return emb
 
+    async def mock_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
+        assert tool_choice == "none"  # plan step -- the only chat_complete caller left
+        return {"role": "assistant", "content": "1. search memory", "usage": {}}
+
     exec_calls = {"n": 0}
 
-    async def mock_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
-        if tool_choice == "none":  # plan step
-            return {"role": "assistant", "content": "1. search memory", "usage": {}}
+    async def mock_stream_with_tools(*args, **kwargs):
         exec_calls["n"] += 1
         if exec_calls["n"] == 1:
-            return {
-                "role": "assistant", "content": "", "usage": {},
+            yield {
+                "type": "done",
                 "tool_calls": [{
                     "id": "call_1", "type": "function",
                     "function": {"name": "search_memory", "arguments": '{"query": "What cheese does Bob like?"}'},
                 }],
+                "finish_reason": "tool_calls",
+                "usage": {},
             }
-        return {"role": "assistant", "content": "", "tool_calls": None, "usage": {}}
-
-    async def mock_stream(url, model, messages, headers):
-        yield "Response"
+        else:
+            yield {"type": "content", "delta": "Response"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": {}}
 
     with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "heavy", "needs_agent": True})):
         with patch("app.memory.retrieve.fetchall", fake_fetchall):
             with patch("app.memory.retrieve.embed", side_effect=mock_embed):
                 with patch("app.core.normalize.chat_complete", side_effect=mock_complete):
-                    with patch("app.core.normalize.stream_llm", side_effect=mock_stream):
+                    with patch("app.core.normalize.chat_stream_with_tools", side_effect=mock_stream_with_tools):
                         with client.stream(
                             "POST",
                             "/chat",
@@ -344,24 +347,32 @@ def test_stateless_chat_never_queries_memory(client):
     memory_hit event can fire, regardless of what the model tries to call."""
 
     async def mock_complete(model_id, messages, resolver, rate_limiter, user_id=None, tools=None, tool_choice="auto", **kwargs):
-        if tool_choice == "none":
-            return {"role": "assistant", "content": "1. try to search memory", "usage": {}}
-        return {
-            "role": "assistant", "content": "", "usage": {},
-            "tool_calls": [{
-                "id": "call_1", "type": "function",
-                "function": {"name": "search_memory", "arguments": '{"query": "anything"}'},
-            }],
-        }
+        assert tool_choice == "none"  # plan step -- the only chat_complete caller left
+        return {"role": "assistant", "content": "1. try to search memory", "usage": {}}
 
-    async def mock_stream(url, model, messages, headers):
-        yield "Response"
+    exec_calls = {"n": 0}
+
+    async def mock_stream_with_tools(*args, **kwargs):
+        exec_calls["n"] += 1
+        if exec_calls["n"] == 1:
+            yield {
+                "type": "done",
+                "tool_calls": [{
+                    "id": "call_1", "type": "function",
+                    "function": {"name": "search_memory", "arguments": '{"query": "anything"}'},
+                }],
+                "finish_reason": "tool_calls",
+                "usage": {},
+            }
+        else:
+            yield {"type": "content", "delta": "Response"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": {}}
 
     fake_retrieve = MagicMock()
     with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "heavy", "needs_agent": True})):
         with patch("app.memory.retrieve.retrieve", fake_retrieve):
             with patch("app.core.normalize.chat_complete", side_effect=mock_complete):
-                with patch("app.core.normalize.stream_llm", side_effect=mock_stream):
+                with patch("app.core.normalize.chat_stream_with_tools", side_effect=mock_stream_with_tools):
                     with client.stream(
                         "POST",
                         "/chat",

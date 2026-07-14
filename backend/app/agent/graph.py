@@ -1,11 +1,24 @@
-"""Agent orchestrator, graph v2 (Phase A / A.6).
+"""Agent orchestrator, graph v2 (Phase A / A.6; execute/final merged in Phase N).
 
-classify -> direct_answer (needs_agent=False, THE fast path) | plan -> execute -> final
+classify -> direct_answer (needs_agent=False, THE fast path) | plan -> execute -> END
 
 Replaces the old hand-rolled ReAct JSON action protocol (build_agent_prompt,
 route_action, the load_context/agent/search_memory/ask_model nodes) with
 native tool calling (A.1), the tool layer (A.2-A.4), and the model router
 (A.5). Deleted, not kept alongside.
+
+Phase N (2026-07-14): execute_node and the old final_node merged into one
+streaming tool-loop node -- both used to make separate LLM calls (execute:
+non-streaming chat_complete looping on tool_calls; final: a completely
+separate chat_stream with no tool support), so all tool activity necessarily
+finished before any reply text existed. Now every iteration streams tokens
+live via normalize.chat_stream_with_tools (stream=True + tools in one call),
+so text the model produces before/after a tool call is visible to the user
+interleaved with the tool card, matching one continuous generation instead of
+two disconnected blocks. final_node deleted; resolve_final_model (router.py)
+is no longer called from here -- every iteration uses the same
+orchestrator-capable, tool-supporting model picked once at the top of
+execute_node.
 """
 
 import json
@@ -25,7 +38,6 @@ from app.agent.tools.registry import get_tools
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS
 from app.core import normalize
 from app.core.router import classify as router_classify
-from app.core.router import resolve_final_model
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import NoEndpointError, ProviderError
@@ -229,9 +241,20 @@ async def plan_node(
     return {"plan": plan_lines, "tokens_used": tokens_used}
 
 
-# ── execute: the tool loop ───────────────────────────────────────────────
+# ── execute: the streaming tool loop (Phase N — merged with the old final_node)
 
 _MEMORY_HIT_START_RE = re.compile(r"^-\s*\[conv:(?P<conv_id>[^\]]*)\]\s*", re.MULTILINE)
+
+_TOKEN_CHARS_PER_ESTIMATED_TOKEN = 4
+
+
+def _estimate_tokens(content: str, tool_calls: Optional[List[Dict[str, Any]]]) -> int:
+    """Fallback token-budget estimate for a streamed iteration when the
+    provider doesn't honor the OAI stream_options.include_usage flag (real
+    usage is preferred -- see stream_iteration below). Rough chars/4 proxy,
+    good enough for a soft AGENT_MAX_TOKENS nudge, not a billing figure."""
+    raw = content + (json.dumps(tool_calls) if tool_calls else "")
+    return max(1, len(raw) // _TOKEN_CHARS_PER_ESTIMATED_TOKEN) if raw else 0
 
 
 def _memory_hit_lines(observation: str) -> List[Dict[str, str]]:
@@ -258,6 +281,15 @@ async def execute_node(
     resolver: Optional[Resolver] = None,
     rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
+    """The tool loop AND the user-facing answer, merged into one streaming
+    call type (Phase N) -- replaces the old execute_node (non-streaming
+    chat_complete tool loop) + final_node (separate chat_stream, no tools)
+    split. Every iteration streams tokens live via chat_stream_with_tools
+    (forwarded as SSE `token` events as they arrive, not withheld until the
+    whole tool loop finishes), so text the model produces before a tool call
+    (e.g. "Let me check that...") is visible to the user interleaved with the
+    tool card, not only the model's final answer after every tool call has
+    already resolved."""
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
     scope_type = state.get("scope_type")
@@ -285,7 +317,63 @@ async def execute_node(
     citations: List[Dict[str, str]] = list(state.get("citations", []))
     seen_urls = {c["url"] for c in citations}
     tokens_used = state.get("tokens_used", 0)
+    full_response = ""
 
+    # Same F-1 fix as direct_answer_node/the old final_node: this peek only
+    # checks model_id's own endpoints (a subset of what chat_stream_with_tools
+    # will try via fallback_models), so it must never crash the turn on its own.
+    try:
+        candidates = resolver.pick(model_id, user_id=user_id)
+        active_provider = candidates[0][4] if candidates else "unknown"
+    except (ProviderError, NoEndpointError):
+        active_provider = "unknown"
+    await adispatch_custom_event("final_provider", {"provider": active_provider})
+
+    async def on_switch(from_p, to_p):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
+        await adispatch_custom_event("final_provider", {"provider": to_p})
+
+    async def on_model_switch(from_m, to_m):
+        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
+        await adispatch_custom_event("final_provider", {"provider": to_m})
+
+    # Set False at the start of every stream_iteration call, flipped True the
+    # moment that call's first "content" event reaches the user. Checked by
+    # the loop's except clauses below: once true, a failure in that same call
+    # must propagate directly (the locked "no retry once a token has reached
+    # the user" contract -- chat_stream_with_tools/_stream_one_model_with_tools
+    # already honor this at their own layer, but a broad try/except one level
+    # up here would otherwise silently swallow it and fall through to a fresh
+    # closing call, producing partial-text-then-unrelated-answer garbage).
+    content_reached_user_this_call = False
+
+    async def stream_iteration(use_tools: bool):
+        """Runs one streaming call, forwarding content live as SSE `token`
+        events and accumulating tokens_used from real usage when the provider
+        honors stream_options.include_usage, estimated otherwise. Returns
+        (content, tool_calls)."""
+        nonlocal tokens_used, full_response, content_reached_user_this_call
+        content_reached_user_this_call = False
+        content = ""
+        tool_calls: Optional[List[Dict[str, Any]]] = None
+        async for event in normalize.chat_stream_with_tools(
+            model_id, working_messages, resolver, rate_limiter, user_id=user_id,
+            tools=tool_specs if use_tools else None,
+            on_provider_switch=on_switch,
+            on_model_switch=on_model_switch,
+        ):
+            if event["type"] == "content":
+                content_reached_user_this_call = True
+                content += event["delta"]
+                full_response += event["delta"]
+                await adispatch_custom_event("token", {"delta": event["delta"]})
+            else:  # "done"
+                tool_calls = event.get("tool_calls")
+                real_total = (event.get("usage") or {}).get("total_tokens")
+                tokens_used += real_total if real_total is not None else _estimate_tokens(content, tool_calls)
+        return content, tool_calls
+
+    answered = False
     budget_exhausted = False
     for _ in range(AGENT_MAX_ITERATIONS):
         if tokens_used >= AGENT_MAX_TOKENS:
@@ -293,24 +381,21 @@ async def execute_node(
             break
 
         try:
-            result = await normalize.chat_complete(
-                model_id, working_messages, resolver, rate_limiter, user_id=user_id, tools=tool_specs,
-                on_provider_switch=_on_provider_switch_events,
-                on_model_switch=_on_provider_switch_events,
-            )
+            content, tool_calls = await stream_iteration(use_tools=True)
         except (ProviderError, NoEndpointError) as e:
-            print(f"Execute loop chat_complete failed (upstream): {e}", file=sys.stderr)
+            if content_reached_user_this_call:
+                raise  # a token already reached the user this call -- no fallback, surface directly
+            print(f"Execute loop chat_stream_with_tools failed (upstream), no content sent yet: {e}", file=sys.stderr)
             break
         except Exception as e:
-            print(f"Execute loop chat_complete failed (unexpected): {e}", file=sys.stderr)
+            if content_reached_user_this_call:
+                raise
+            print(f"Execute loop chat_stream_with_tools failed (unexpected), no content sent yet: {e}", file=sys.stderr)
             break
-
-        tokens_used += (result.get("usage") or {}).get("total_tokens", 0) or 0
-        tool_calls = result.get("tool_calls")
-        content = result.get("content") or ""
 
         if not tool_calls:
             working_messages.append({"role": "assistant", "content": content})
+            answered = True
             break
 
         working_messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
@@ -396,78 +481,26 @@ async def execute_node(
     if budget_exhausted:
         working_messages.append({"role": "system", "content": "budget exhausted — answer with what you have"})
 
+    if not answered:
+        # Mirrors the old final_node's unconditional close-out call -- reached
+        # after budget exhaustion, the iteration cap, or an upstream failure in
+        # the loop above (never after a clean tool-call-free stop, which
+        # already produced the real answer above). tools=None so the model
+        # can't extend the loop again. A failure here is NOT swallowed (same
+        # as the old final_node's un-guarded chat_stream call) -- it propagates
+        # to routes/chat.py's own exception handling as a real error event,
+        # rather than silently returning a blank reply.
+        await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
+        content, _ = await stream_iteration(use_tools=False)
+        working_messages.append({"role": "assistant", "content": content})
+
     return {
         "messages": working_messages,
         "tool_log": tool_log,
         "citations": citations,
         "tokens_used": tokens_used,
+        "final_answer": full_response,
     }
-
-
-# ── final ────────────────────────────────────────────────────────────────
-
-async def final_node(
-    state: AgentState,
-    resolver: Optional[Resolver] = None,
-    rate_limiter: Optional[EndpointRateLimiter] = None,
-) -> dict:
-    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
-    user_id = state.get("user_id")
-
-    model_id = resolve_final_model(
-        state.get("difficulty", "light"), state.get("user_model_id"), resolver, user_id=user_id
-    )
-
-    # Digest, not raw observations: the tool loop's own last messages already
-    # carry the assistant's synthesis of what it found; we just append a
-    # compact recap so the final model doesn't have to re-derive it from a
-    # long tool-call transcript.
-    digest_messages = list(state["messages"])
-    tool_log = state.get("tool_log", [])
-    if tool_log:
-        digest_lines = [f"- {t['name']}: {t['observation'][:300]}" for t in tool_log]
-        digest_messages.append(
-            {"role": "system", "content": "Findings from tool use this turn:\n" + "\n".join(digest_lines)}
-        )
-
-    await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
-
-    # Same F-1 fix as direct_answer_node above: this peek only checks model_id's
-    # own endpoints (a subset of what chat_stream will try via fallback_models),
-    # so it must never crash the turn on its own -- this was the actual root
-    # cause of the reported "An unexpected error occurred" after heavy failover
-    # (live traceback, 2026-07-14): NoEndpointError('gemini-2.5-flash') escaped
-    # here, uncaught, even though chat_stream right below would likely have
-    # failed over to a working model.
-    try:
-        candidates = resolver.pick(model_id, user_id=user_id)
-        initial_provider = candidates[0][4] if candidates else "unknown"
-    except (ProviderError, NoEndpointError):
-        initial_provider = "unknown"
-    await adispatch_custom_event("final_provider", {"provider": initial_provider})
-
-    async def on_switch(from_p, to_p):
-        await adispatch_custom_event("provider_switch", {"from_provider": from_p, "to_provider": to_p})
-        await adispatch_custom_event("final_provider", {"provider": to_p})
-
-    async def on_model_switch(from_m, to_m):
-        await adispatch_custom_event("provider_switch", {"from_provider": from_m, "to_provider": to_m})
-        await adispatch_custom_event("final_provider", {"provider": to_m})
-
-    full_response = ""
-    async for token in normalize.chat_stream(
-        model_id=model_id,
-        messages=digest_messages,
-        resolver=resolver,
-        rate_limiter=rate_limiter,
-        on_provider_switch=on_switch,
-        user_id=user_id,
-        on_model_switch=on_model_switch,
-    ):
-        full_response += token
-        await adispatch_custom_event("token", {"delta": token})
-
-    return {"final_answer": full_response}
 
 
 def build_agent_graph(
@@ -483,7 +516,6 @@ def build_agent_graph(
     graph.add_node("direct_answer", partial(direct_answer_node, resolver=resolver, rate_limiter=rate_limiter))
     graph.add_node("plan", partial(plan_node, resolver=resolver, rate_limiter=rate_limiter))
     graph.add_node("execute", partial(execute_node, resolver=resolver, rate_limiter=rate_limiter))
-    graph.add_node("final", partial(final_node, resolver=resolver, rate_limiter=rate_limiter))
 
     graph.set_entry_point("classify")
     graph.add_conditional_edges(
@@ -491,7 +523,6 @@ def build_agent_graph(
     )
     graph.add_edge("direct_answer", END)
     graph.add_edge("plan", "execute")
-    graph.add_edge("execute", "final")
-    graph.add_edge("final", END)
+    graph.add_edge("execute", END)
 
     return graph
