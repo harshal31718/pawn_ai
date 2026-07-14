@@ -86,7 +86,12 @@ services:
   # to restart the backend so it picks up the new env var.
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate --url http://postgrest:3000
+    # --protocol http2: QUIC (the default transport) dials over UDP, which
+    # this host's Docker Desktop network setup repeatedly fails to establish
+    # ("failed to dial to edge with quic: timeout: no recent network
+    # activity", retried with exponential backoff, never connects). HTTP/2
+    # runs over plain TCP 443, which isn't blocked the same way.
+    command: tunnel --no-autoupdate --protocol http2 --url http://postgrest:3000
     depends_on:
       - postgrest
     profiles:
