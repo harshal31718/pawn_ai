@@ -6,6 +6,87 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Fix: F-1 crash (unguarded resolver.pick peek) + real pytest gate root cause (SQLite bind-mount contention)
+
+User ran the two commands handed over from the earlier session's gap audit
+and pasted the output back. Both surfaced real, distinct bugs — the earlier
+session's hypotheses about both were wrong in the specific mechanism, right
+that something was broken.
+
+**F-1 fixed.** Live traceback: `NoEndpointError: All endpoints for
+'gemini-2.5-flash' are rate-limited or inactive.` raised from
+`agent/graph.py::final_node`, line `candidates = resolver.pick(model_id,
+user_id=user_id)`, uncaught, killing the whole turn — surfaced to the user as
+the generic "An unexpected error occurred" because `NoEndpointError` isn't a
+`ProviderError` subclass, so `routes/chat.py`'s `except ProviderError` never
+caught it and it fell into the bare `except Exception`. Root cause: that
+`resolver.pick()` call is a "peek" — it exists only to grab the provider name
+for a cosmetic `final_provider` UI event, immediately before the real call
+(`normalize.chat_stream`, right below it) which does the actual failover-safe
+pick across every endpoint of every fallback model via
+`resolver.fallback_models(model_id, ...)`. The peek only checks `model_id`'s
+own endpoints — a strict subset — so it could (and did, live) raise on a
+model that `chat_stream` would likely have failed over away from
+successfully. Same unguarded pattern existed in `direct_answer_node` (the
+fast path), fixed identically. Both now degrade to `"unknown"` on
+`(ProviderError, NoEndpointError)` instead of crashing the node;
+`chat_stream`'s own `on_provider_switch`/`on_model_switch` callbacks correct
+the badge once a real endpoint is found. Also added a dedicated
+`except NoEndpointError` branch in `routes/chat.py` for the residual case
+where `chat_stream` itself is genuinely fully exhausted (every fallback
+model, every endpoint) — that really is "nothing left to try," not a bug, so
+it now gets an honest "All available models are currently rate-limited"
+message instead of the generic one.
+
+**Full pytest gate — real root cause found, not the assumed one.** The
+earlier session's audit assumed the sandbox's 15 failures (unpinned
+langchain-core needing a parent run id for `adispatch_custom_event`) would be
+"expected green in Docker." User ran `docker compose exec backend pytest -n
+auto` for real: 16 failed, all `sqlite3.OperationalError: unable to open
+database file` from `AsyncSqliteSaver`, on every test that actually invokes
+`/chat`. Different bug entirely, and it reproduces for real, in Docker, not
+just the sandbox. Root cause: every `/chat`-touching test module's `client`
+fixture does `with TestClient(app) as c:`, which runs the real FastAPI
+lifespan → `app_initializer.initialize_managers()` → a real
+`AsyncSqliteSaver.from_conn_string()` against `CHECKPOINTS_DB`
+(`/app/data/checkpoints.db`) — and `/app/data` is `docker-compose.yml`'s
+bind mount of `./backend/data` from the Windows host. `pytest -n auto`
+(mandated by `testing.md` for the full-suite gate) spins up many parallel
+xdist worker processes, all opening/closing connections to that *same* file
+concurrently, on a filesystem boundary (Docker Desktop for Windows bind
+mount) known for SQLite locking incompatibilities. Fixed in
+`tests/conftest.py`: set `PAWN_DATA_DIR` to a throwaway temp directory,
+namespaced per xdist worker (`PYTEST_XDIST_WORKER`), before any `app.*`
+module import — same pattern already used there for `JWT_SECRET`/
+`ENCRYPTION_SECRET`. Confirmed safe: `registry.loader.load_registry()` calls
+`seed_registry()`, which writes fresh `models.json`/`endpoints.json`
+whenever it finds `REGISTRY_DIR` empty, so no test depends on real seed data
+surviving at the new path.
+
+Also hit, and worked around, the same Cowork sandbox mount-desync bug
+documented in `gap_audit_2026-07-14.md` section I — the Edit tool's writes to
+`agent/graph.py`, `routes/chat.py`, and `tests/conftest.py` all came back
+*truncated mid-statement* when read from this session's Linux sandbox mount
+(syntax errors on `ast.parse`). Rebuilt all three from their pristine `git
+show HEAD:...` blobs plus the exact intended text replacement, applied via a
+Python script writing directly from the bash side, verified with `ast.parse`
++ `git diff -w` before committing. Did not run the full backend test suite in
+this sandbox this round (no `pytest`/`langchain-core` installed fresh in this
+session, and a full `pip install` here would burn significant time for a
+gate whose only authoritative run is the user's real Docker stack anyway) —
+verified via Python's `ast` module that all three changed files parse
+cleanly and the diffs are exactly the intended ~58 lines, nothing more.
+Committed on `dev` as `ea765df`. **Still needs the user:** re-run `docker
+compose exec backend pytest -n auto` to confirm 16 → 0; if the SQLite fix is
+incomplete (e.g. some other fixture/path still touches the real bind-mounted
+`checkpoints.db`) that will show as a smaller number of the same
+`OperationalError` failures, not new ones.
+
+Separately, the user's pasted output also showed a `docker compose build
+backend` pip install timing out on `files.pythonhosted.org` (network read
+timeout) — looks like a transient network flake on the heavy `langchain`/
+`langgraph` dependency tree, not a code issue; flagging in case it recurs.
+
 ### [2026-07-14] — Fix: duplicate failover notice pill (the "separated reply" report), break-all, stale lockfile
 
 User reported agent replies still feel like separate blocks rather than one
@@ -1783,43 +1864,4 @@ Full deploy from scratch on `pawn-temp`: Docker Engine + Compose plugin, a fresh
 
 **Why:** A warm session on the SDXL tab returned `ECHO: <prompt>` text — SDXL's session was wired to the W.0 CPU-echo POC (placeholder; "real SDXL serve-loop is a follow-up"). Only FLUX had a real warm serve-loop. User wants warm image generation for SDXL too (load once → generate many).
 **Built:**
-- `kaggle_templates/image_sdxl_session/notebook.ipynb` (new): mirrors the FLUX serve-loop structure (cell-0 payload + Supabase REST helpers; cell-1 install; cell-2 load SDXL ONCE via `AutoPipelineForText2Image.from_pretrained(..., torch_dtype=float16, use_safetensors=True, local_files_only=True).to("cuda")` → PATCH `ready`/`error`; cell-3 serve loop with SDXL inference 4 steps / guidance 0 / 512×768 → PATCH job done + PNG, `via kaggle:sdxl-session`).
-- `core/image_models.py`: SDXL entry repointed — `session_template=image_sdxl_session`, `session_slug="pawn-sdxl-session"`, `session_gpu=True` (start_session then mounts the SDXL dataset + T4). Dropped the now-unused `KAGGLE_SESSION_POC_TEMPLATE`/`KAGGLE_SESSION_SLUG` imports (constants + session_poc notebook remain as the W.0 artifact, unreferenced).
-- No frontend change — `ImageGenerator`/`GenerationsPanel` already render PNG vs text by MIME.
-**Decision:** kept the cold path's 4 steps / guidance 0 / 512×768 for consistency (SDXL quality tuning is a separate pre-existing deferred item). The CPU echo POC stays in the repo (W.0 artifact) but is no longer user-facing — both SDXL + FLUX warm sessions are real now. SDXL loads in ~1–2 min (single T4, ~7GB fp16) vs FLUX ~10 min.
-**Tests:** 134 backend passing — rewrote `test_start_session_inserts_row_and_pushes_cpu_notebook` → `test_start_session_sdxl_uses_gpu_serve_loop` (asserts GPU + dataset + `pawn-sdxl-session`); added `test_session_slug_titles_round_trip` (Kaggle title↔slug invariant for session slugs). The anon-key-only security test (runs on sdxl) still passes → no service key in the SDXL session push.
-**Live verify pending:** SDXL → Connect → Warm session → Start → `Warm` in ~1–2 min → Generate returns an image in seconds (`via kaggle:sdxl-session`); thumbnails in Generations.
-**Commit:** (this commit)
-
----
-
-### 2026-06-30 — Plan 1.0: Generations panel UI fixes [imageLab]
-
-**Why:** Five targeted UX gaps in the Generations monitor panel: (1) "6 active" header conflated queued and running; (2) no way to see how long a generation actually took; (3) style preset not visible on job rows; (4) no way to reuse a prompt; (5) killing a Kaggle notebook externally left running jobs stuck forever in "running" state.
-**Built:**
-- **Fix 1 (header):** Split `N active` into `N running · M queued`; running segment uses amber colour, queued uses muted text; either segment hidden if count is 0.
-- **Fix 2 (gen time):** `⏱ Xm Ys` shown at right of each row's second line — live ticking every second for running jobs (1 s `setInterval` in `JobRow`), fixed `started_at→done_at` duration for done/error jobs, hidden for queued or when `started_at` is null. `started_at` added to `_JOB_LIST_COLUMNS` and `list_jobs` dict (was selected but not mapped); `JobResult.started_at` added to `client.ts`.
-- **Fix 3 (style preset tag):** Small pill badge in the top-right of the first line when `job.params?.style_preset` is set; key inverted to human-readable label via `STYLE_PRESET_LABELS` map in `GenerationsPanel`. `params` added to `_JOB_LIST_COLUMNS`, `list_jobs` dict, and `JobResult` type.
-- **Fix 4 (copy button):** Clipboard icon button per row copies the full `job.prompt`; swaps to a green checkmark for 1.5 s then resets. Timer cancelled on unmount.
-- **Fix 5 (session-death failover):** `reap_stale_jobs` now fetches full session rows and uses `_is_alive()` (which includes heartbeat-stale detection) instead of a structural status check. Running session jobs for non-alive sessions are also failed with "Session terminated unexpectedly" (previously only queued jobs were touched). This handles the case of a notebook being manually killed — on the next 3 s panel poll the job flips to error with `done_at` set.
-- **View/Download buttons:** Stacked vertically (column) at far right of each row with image.
-**Decisions:** Reaping running session jobs is now gated by `_is_alive()` (90 s heartbeat-stale threshold), which provides enough buffer for warm-session FLUX inference (typically seconds, not minutes).
-**Tests:** 136 backend passing (updated `test_reap_stale_jobs_reaps_jobs_of_dead_sessions` to assert both the queued and running reap updates); `npm run build` clean.
-**Commit:** (this commit)
-
-## 2026-07-13 — Full implementation verification of Phase M + Phase A (Cowork session) + sidebar UI fixes
-
-**Verification (code-reading audit, both phases, against their prescriptive plans):**
-- Phase M (M.1–M.7): all invariants confirmed — strict scope-equality SQL functions
-  (+ kind param), add_chunk upsert on (user_id, chunk_id), Drive-first indexer with
-  shared per-(user,conv) lock, scoped retrieve (kind='message'), load_context no
-  longer auto-retrieves, additive memory_hit payload, conversation-delete PG cleanup,
-  on-access legacy Drive migration, idempotent two-way moves + 409 cross-project
-  guard, cascade delete holding all contained chats' locks, embedding =
-  gemini-embedding-2 @ 768 (post-fix), projects UI (ProjectSection/ProjectRow/
-  ProjectPage/dialogs matching plan wording), syncQueue op kinds exactly as planned.
-- Phase A (A.1–A.9): all invariants confirmed — chat_complete in llm_core+normalize
-  only, supports_tools in schema+seed, agent/tools package complete, constants all
-  present (TOOL_TIMEOUT 20 / WEB_SEARCH 5 / FETCH 8000 / ROUTER 1500/200 / AGENT 8 /
-  24000 / SUBAGENT 5 / TRACE 50), SSRF guard incl. IPv4-mapped-IPv6 handling (beyond
-  
+- `kaggle_templates/image_sdxl_session/n
