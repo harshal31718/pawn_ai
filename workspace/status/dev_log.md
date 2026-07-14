@@ -2302,3 +2302,37 @@ applied) in `workspace/plan/plan_imagelab_session_issues.md`.
 `gap_audit_2026-07-14.md`); updated `build_tracker.md`/`plan_reply_quality.md`/
 `plan_consolidated_next_phases_2026-07-14.md` status headers so a fresh
 session can tell what's done vs. still open without re-deriving it.
+
+---
+
+## 2026-07-14 (later still) — O.4: decomposition nudge for heavy research plans
+
+Fixes RC-4 from `plan_reply_quality.md`: subagent decomposition was left
+entirely to the "fast" orchestrator model's whim — `delegate_researcher`
+existed but nothing nudged it over firing one-off `web_search` calls itself.
+`_PLAN_SYSTEM_PROMPT` now asks the model to phrase each distinct research
+sub-topic as a self-contained plan step; `execute_node`'s injected
+"Plan:\n..." system message (heavy-turns only, per the plan's "cheap where
+it's cheap" principle) gets an explicit nudge naming `delegate_researcher`
+as the strong default for those steps. Kept as a nudge, not a hard-wired
+pipeline — the model still decides per step.
+
+Live-verified: "research Tesla's and Rivian's Q4 2024 deliveries, then
+compare" produced a plan with two distinct steps and two separate
+`delegate_researcher` calls (one per company, confirmed via the trace)
+instead of raw `web_search` calls, landing a correctly-sourced comparison
+(Tesla 418,227 vs Rivian 12,887 vehicles, both cited). 2 new regression
+tests (nudge present on heavy+plan, absent on light+plan). Full backend
+suite: 395 passed. Committed `0a9a9a8`.
+
+Also folded a note into `plan_imagelab_session_issues.md`: the user flagged
+a fresh Kaggle failure log (`gaierror` resolving `channels-lap-because-tcp
+.trycloudflare.com`) mid-session — clarified this is fallout from this same
+session's dev-tunnel verification being intentionally stopped afterward
+(`docker compose stop cloudflared`), not a new/unexplained bug, and not new
+evidence about the actual production issue. Deferred per user request ("save
+it for later, complete at last").
+
+**Remaining open:** O.3 (verifier node, not started) is now the only item
+left in `plan_reply_quality.md`. Image Lab production fire-and-forget-writes
+fix and the dev-tunnel restart are both deferred, user-paced.

@@ -623,8 +623,14 @@ Plan: `workspace/plan/plan_reply_quality.md`. Sequencing:
   `dc08569`.
 - [ ] O.3 — plan-as-contract verifier node, deep-research-gated, 1–2
   revision passes. **Not started** — next up when resumed.
-- [ ] O.4 — decomposition nudge for heavy analytical prompts. **Not
-  started.**
+- [x] O.4 — decomposition nudge for heavy analytical prompts. `_PLAN_SYSTEM_
+  PROMPT` and `execute_node`'s injected plan system message (heavy-only)
+  now name `delegate_researcher` as the strong default for distinct research
+  sub-topics, without hard-wiring delegation. Live-verified: a two-company
+  research+compare prompt produced a plan with two distinct steps and two
+  separate `delegate_researcher` calls instead of raw `web_search` calls,
+  landing a correctly-sourced comparison. 2 new tests, 395 backend tests
+  green. Committed `0a9a9a8`.
 
 ## Phase P — UI polish (new 2026-07-14, spec in the consolidated plan)
 
