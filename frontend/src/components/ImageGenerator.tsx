@@ -25,6 +25,15 @@ export interface ModelDef {
 
 export const WARMUP_STATUSES = new Set(['starting', 'installing', 'loading_model'])
 
+// Short human labels for each warmup phase — shown in the Warming pill so a
+// session stuck in one phase for a long time is visibly stuck, not
+// indistinguishable from a healthy warmup in progress.
+const WARMUP_LABELS: Record<string, string> = {
+  starting: 'starting',
+  installing: 'installing deps',
+  loading_model: 'loading model',
+}
+
 interface InitImage {
   preview: string
   b64?: string
@@ -41,6 +50,16 @@ function countdown(expiresAt?: string | null): string {
   const m = Math.floor(total / 60)
   const s = total % 60
   return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function elapsed(createdAt?: string | null): string {
+  if (!createdAt) return ''
+  const ms = Date.now() - new Date(createdAt).getTime()
+  if (ms <= 0) return '0s'
+  const total = Math.floor(ms / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
 const ImageGenerator = forwardRef<
@@ -318,7 +337,7 @@ const ImageGenerator = forwardRef<
           ) : (
             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 flex items-center gap-1.5 select-none">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              Warming
+              Warming · {WARMUP_LABELS[session?.status ?? ''] ?? session?.status} · {elapsed(session?.created_at)}
             </span>
           )}
           <button

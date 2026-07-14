@@ -186,6 +186,7 @@ export interface SessionStatus {
   error?: string | null // set when status === 'error': model-load failure, heartbeat lost, or stop unconfirmed
   session_id?: string
   expires_at?: string | null
+  created_at?: string | null // used to show elapsed time in the warming pill
   images_done?: number
   max_images?: number | null
 }

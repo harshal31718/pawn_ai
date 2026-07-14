@@ -37,79 +37,13 @@ Four groups, roughly in priority order:
 
 ---
 
-## 1. Image Lab — production notebook fix (gated, needs a deployment session)
+## 1. Image Lab — production notebook fix
 
-Full diagnosis already lives in `workspace/plan/plan_imagelab_session_issues.md`
-(2026-07-14 section) — this is a summary + the concrete fix plan, not a
-re-diagnosis.
-
-**Symptom (user-reported):** in production, a Kaggle warm-session notebook
-sometimes auto-fails and Kaggle tears the kernel down, but PAWN's UI stays
-stuck showing "warming" — the app never finds out the session died.
-
-**Root cause (code-verified, not yet confirmed against a real Kaggle log):**
-both warm-session notebook templates
-(`backend/app/kaggle_templates/image_{flux,sdxl}_session/notebook.ipynb`)
-have read functions (`get_session()`, `next_job()`) that call
-`r.raise_for_status()`, but the *write* functions (`patch_session()`,
-`patch_job()`) don't check the response at all — every status/heartbeat/error
-write to PostgREST is fire-and-forget. If PostgREST ever rejects a write (RLS
-`session_token` mismatch, a schema-drift gap like the `stop_requested_at` one
-found this session, a transient 5xx), the notebook has no way of knowing —
-nothing retries, nothing surfaces it. Concretely: cell-2's failure handler
-(`except Exception as e: patch_session({"status": "error", ...}); raise`)
-*looks* like it reports failure honestly, but if that one `patch_session`
-call is itself silently rejected, the row never updates and Kaggle just
-tears the kernel down — exactly "stuck on warming, PAWN never finds out."
-The supervisor thread's heartbeat write has the same blind spot, and is
-additionally skipped whenever a *read* fails first, so a persistent read
-hiccup silently disables heartbeats too, forcing the 900s wall-clock
-dead-session fallback instead of the 90s heartbeat-staleness check.
-
-**Fix plan:**
-1. Add `.raise_for_status()` (or log + retry-once) to `patch_session()` and
-   `patch_job()` in both `image_flux_session/notebook.ipynb` and
-   `image_sdxl_session/notebook.ipynb`.
-2. Decouple the supervisor's heartbeat write from a successful read —
-   currently `_supervisor()` does `if not _sess: continue`, skipping the
-   heartbeat patch whenever `get_session()` returns nothing, even on a
-   transient hiccup.
-3. Wrap cell-1's `pip install` in a try/except that reports failure the same
-   way cell-2 does — right now a `pip install` failure (version conflict,
-   transient PyPI blip, Kaggle base-image drift) raises uncaught with zero
-   report, relying entirely on the same blind fallback.
-4. Before assuming this is the full story: check prod's Kaggle kernel log for
-   the actual last-printed line before a real failure, and cross-check
-   `image_sessions`' last successfully-written status/`heartbeat_at` against
-   that timestamp — confirms a write was silently dropped rather than
-   something else (e.g. a genuine OOM that also killed the write attempt,
-   which this fix wouldn't help with — see the separate FLUX OOM item below).
-5. **Check whether prod's Postgres volume has the `stop_requested_at` column**
-   at all — `postgres/migrations/2026-07_image_sessions_stop_requested_at.sql`
-   was applied locally 2026-07-14 but prod's volume predates that commit
-   (`472a170`, 2026-07-05) and may never have gotten it. Run
-   `\d image_sessions` on the prod DB before assuming Stop works there.
-
-**Gate:** don't touch the notebook templates or run prod migrations outside
-an actual deployment session — same standing instruction as before. When
-that session happens, this is ready to execute directly from steps 1-5 above.
-
-### 1a. Also open in Image Lab, lower priority, not gated
-
-- **FLUX CUDA OOM on generate** — `device_map="balanced"` packs GPU 0 to the
-  brim on model load, then OOMs on the next inference call. A `max_memory`
-  cap fix was drafted (`84c0a4d`) then reverted (`d96c1c6`) — still unfixed.
-  Confounds FLUX-specific stop/session testing; prefer SDXL when isolating
-  unrelated session-lifecycle issues.
-- **Stop/tracking hypotheses #3-5, unverified** (from the original
-  2026-07-05 investigation, still listed in
-  `plan_imagelab_session_issues.md`): is the supervisor thread actually
-  running on the deployed kernel (vs. a pre-fix kernel still live)? Does a
-  PostgREST read failure ever cause the supervisor to miss a stop signal
-  entirely? Does `os._exit(0)` inside a Kaggle kernel actually free the GPU,
-  not just end the visible run? Are there orphaned/multiple kernel versions
-  on the same Kaggle slug from earlier redeploys? All four need Kaggle log
-  access this environment doesn't have — human-in-the-loop only.
+§1 has moved to `workspace/plan/plan_imagelab_session_issues.md` — see that
+file for the full diagnosis and implementation plan (IN PROGRESS as of
+2026-07-14: Steps 1-3 of 6 done, live-verification and prod deployment
+still pending). Kept here as a pointer only so this doc's numbering/history
+stays intact; §2/§3/§4 below are unrelated and unaffected.
 
 ---
 

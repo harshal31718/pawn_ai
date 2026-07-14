@@ -6,6 +6,156 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Feature: Image Lab dead-session detection (app was stuck on "Warming" forever)
+
+User-reported: a warm image session starts, the Kaggle notebook stops
+abruptly, and PAWN keeps showing "Warming" — never flips to an error, never
+recovers. Planned in `EnterPlanMode`/`ExitPlanMode` this session: two
+`Explore` agents traced the full path (backend `image_session.py`/
+`kaggle.py`, both warm-session notebook templates, `ImageGenerator.tsx`)
+before a `Plan` agent designed the fix, confirming the standing diagnosis in
+`plan_imagelab_session_issues.md` and finding the decisive missing piece.
+
+**Root cause, two independent legs:**
+1. All forward status transitions (`installing`→`loading_model`→`ready`)
+   and every heartbeat are written *by the notebook* over PostgREST — the
+   backend has zero independent signal. If the notebook never lands a
+   single heartbeat (PostgREST unreachable, RLS mismatch, writes silently
+   rejected), the only fallback was a 900s (15min) wall-clock timeout — the
+   UI showed "Warming" that whole time. Yet `kaggle.py` already had working
+   `/kernels/status` polling code on the *cold* job path
+   (`_wait_until_complete`) — just never used for warm sessions.
+2. `patch_session()`/`patch_job()` were fire-and-forget (never checked the
+   response) YET could still raise on a network error — the live-observed
+   failure was exactly this: a `gaierror` from a dead dev tunnel raised out
+   of cell-1's first `patch_session({"status":"installing"})` call, killing
+   the run before the first heartbeat. Cell-1's `pip install` also had no
+   try/except, and the supervisor skipped its heartbeat whenever a *read*
+   failed.
+
+**Fix, backend (`backend/app/core/kaggle.py`, `constants.py`,
+`image_session.py`):** new `kaggle.kernel_status(username, api_token,
+kernel_name) -> Optional[str]` — one best-effort `GET /kernels/status`,
+never raises, returns Kaggle's lowercased status or None ("no info," never
+"kernel is gone"). `TERMINAL_KERNEL_STATUSES = frozenset(_DONE | _FAILED)`
+alongside it. Three new constants:
+`IMAGE_SESSION_KAGGLE_PROBE_INTERVAL_SECONDS=30` (throttle vs the 3s
+frontend poll), `IMAGE_SESSION_STARTUP_PROBE_AFTER_SECONDS=60` (don't probe
+brand-new sessions), `IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS=180`
+(Kaggle says running but zero heartbeats ever → rendezvous broken). Kept
+`IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS=900` as the backstop for when the
+probe itself has no information (no creds, Kaggle API down) — exactly where
+conservatism is right, since a long GPU queue legitimately delays the first
+heartbeat; a `queued` probe result now suppresses the 900s flip entirely.
+`image_session.py` gained a module-level `_probe_cache` (session_id →
+(monotonic ts, status)) and `_kernel_probe(user_id, model, session_id)`
+throttled helper, wired into `get_session_status()`'s warmup branch: a
+heartbeat past half the stale window triggers an early probe check (don't
+wait out the full 90s when Kaggle can already confirm the kernel is over);
+no heartbeat past 60s probes too, with three outcomes — terminal status
+flips immediately with a precise reason naming what Kaggle reported;
+`running` + no heartbeat past 180s flips with a "rendezvous broken" message
+(kernel alive but can't reach PAWN's database); anything else falls through
+to the existing 900s backstop, now correctly suppressed on `queued`.
+`created_at` added to the status response (same passthrough convention as
+`expires_at`) for the frontend's new elapsed-time display.
+
+**Fix, notebooks (`backend/app/kaggle_templates/image_{sdxl,flux}_session/
+notebook.ipynb`, cell-0 kept byte-identical between the two):** `patch_session`/
+`patch_job` replaced with a shared `_rest_patch(url, params, fields, timeout,
+label)` that never raises — try/except around the request, one retry after
+`time.sleep(2)`, loud `[pawn] ...` `print(..., flush=True)` lines on any
+failure (visible in the Kaggle kernel log even though nothing can be shown
+to the user directly), and detects a `[]` (0-row) response body as a likely
+RLS/session-token mismatch, logged distinctly since that's silent data loss
+that doesn't even get a non-2xx status. `get_session()`/`next_job()` mark
+`_last_rest_ok = time.time()` on success. The supervisor now heartbeats
+every tick regardless of whether the read above succeeded (safe now that
+`patch_session` itself can't raise), and gained
+`_REST_UNREACHABLE_EXIT_SECONDS=600` — no successful PostgREST contact in
+600s → loud log, best-effort `patch_session({"status":"ended"})`,
+`os._exit(1)` (exit 1, not 0, so Kaggle marks the run failed — which the
+backend probe then reports precisely instead of the kernel just vanishing).
+Cell-1's pip install wrapped in try/except mirroring cell-2's existing
+model-load error handling — kills the exact live-observed `gaierror`
+failure. Cell-3's loop-top `get_session()`/`next_job()` also wrapped so a
+transient blip can't kill an otherwise-healthy warm session mid-flight.
+
+Edit mechanics: a small Python script (json.load → replace cell-0's body
+after the shared setup marker + cell-1's install block + cell-3's loop-top
+block, using the exact original text as the match target so a
+non-matching old string fails loudly instead of silently no-op'ing →
+json.dump). Verified both templates end-to-end afterward, not just by eye:
+valid JSON, `__PAWN_PAYLOAD_B64__` placeholder still present, every code
+cell `compile()`s clean, cell-0 bodies still byte-identical between sdxl
+and flux. `git diff` reviewed line-by-line — clean, only the intended cells
+changed, no metadata/formatting churn from the JSON re-dump.
+
+**Fix, frontend (`frontend/src/api/client.ts`, `ImageGenerator.tsx`):**
+`SessionStatus` gained `created_at?: string | null`. New `WARMUP_LABELS`
+map (starting/installing/loading_model → short labels) and an
+`elapsed(createdAt)` helper mirroring the existing `countdown()`. The
+Warming pill now reads `Warming · {label} · {elapsed}` instead of a bare
+"Warming" — reused the existing 1s ticker (already running during warmup
+since `session.alive && session.expires_at` are both true then; no new
+effect needed). `tsc --noEmit` + `npm run build` both clean.
+
+**Tests:** new `backend/tests/test_kaggle_session_templates.py` (9 tests,
+built from `IMAGE_MODELS`'s own `session_template` paths so it can't drift
+from the app's registry — locks in the notebook shape this fix depends on:
+valid JSON, placeholder present, cells compile, cell-0 identical across
+templates, writes never go through a bare unhandled `requests.patch`, cell-1
+wraps pip install, supervisor has the unreachable-self-exit). 13 new/updated
+tests in `test_image_session.py` (autouse fixture clearing `_probe_cache`
+between tests, since it's module-level state and most tests reuse session id
+`"s1"`; terminal-status early flip; `complete` also flips; `queued` stays
+warming AND suppresses the 900s backstop; `running` recent stays warming;
+`running` + no heartbeat past 180s flips with the rendezvous message;
+no-creds skips the probe entirely (`kernel_status` never called); throttling
+(two calls within the window only hit Kaggle once); half-stale-heartbeat
+early check; response includes `created_at`). 5 new `kernel_status` unit
+tests in `test_generate.py` (mirrors the existing `_client`-mocking pattern
+used for `_wait_until_idle`/`deploy_kernel`). One existing test
+(`..._warmup_no_heartbeat_falls_back_to_timeout`) updated to explicitly mock
+the probe as unavailable, for determinism — without it, the test would
+incidentally rely on a real (fast-failing) `localhost:5432` connection
+attempt succeeding at "connection refused," which works but isn't a
+deliberate contract. 438 backend tests green (up from 415), confirmed via
+two separate full-suite runs to rule out flakes.
+
+**Live verification:** rebuilt the backend image after each step
+(`backend/app/` and `backend/tests/` are baked into the image at build
+time, not bind-mounted — only `./backend/data` is) and confirmed clean
+`Application startup complete` each time. Used Chrome against the real
+running dev stack to verify the frontend changes: mocked the
+`/generate/session/status` fetch response in the browser console rather
+than starting a real Kaggle session (deliberately avoided spending the
+user's real GPU quota without asking first). Confirmed: a warming session
+with `created_at` 62s in the past rendered "Warming · loading model · 1m
+21s" and the elapsed time visibly ticked upward over the next several
+seconds; a probe-detected terminal-kernel error rendered the precise
+message text in the amber warning box and correctly fell back to the idle
+Start-button state instead of staying stuck on "Warming." **Not done this
+session (needs the user):** an actual live smoke test against a real
+Kaggle kernel — start a session and watch it progress to `ready`, then
+separately break PostgREST reachability and confirm the new probe path
+catches it within ~90s instead of 15 minutes — and checking the Kaggle
+kernel log itself for the new `[pawn]` lines. Needs real Kaggle creds and a
+restarted `cloudflared` tunnel, neither available in this environment. Prod
+deploy of the notebook-template changes stays gated on a real deployment
+session per the standing instruction.
+
+**Docs:** merged `plan_imagelab_dead_session_detection.md` (the plan
+written and approved this session) into `plan_imagelab_session_issues.md`,
+which is now the single canonical Image-Lab-reliability doc — done via a
+background fork while the main implementation continued, to keep the docs
+consolidated as requested mid-session. `plan_open_issues_2026-07-14.md` §1
+replaced with a pointer to the merged doc; its unrelated §2/§3/§4 sections
+were left untouched (diff-verified). `build_tracker.md`'s Image Lab section,
+`current_state.md` updated to match.
+
+---
+
 ### [2026-07-14] — Cleanup: §3 of plan_open_issues (secret vestige, swallowed exceptions)
 
 Third and final item picked off `plan_open_issues_2026-07-14.md` this

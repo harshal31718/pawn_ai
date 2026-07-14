@@ -741,15 +741,40 @@ phase. Not blocked by, and doesn't block, Phases N/O/P above.
   applied it locally (same commit `30d5825`). **Check whether prod's
   Postgres volume needs the same migration run before assuming Stop works
   there.**
-- [ ] **Production "notebook auto-fails, app stuck on 'warming', PAWN never
-  finds out"** — DIAGNOSED, not fixed (explicit instruction: don't touch
-  prod-affecting code until an actual deployment session). Root cause:
-  `patch_session()`/`patch_job()` in both warm-session notebooks never call
-  `.raise_for_status()` or check the response — every status/heartbeat/error
-  write is fire-and-forget, so a PostgREST rejection (RLS mismatch, schema
-  drift, transient 5xx) is silently dropped with no retry and no visibility.
-  Full writeup + fix sketch in `plan_imagelab_session_issues.md`'s
-  2026-07-14 section.
+- [x] **"Notebook auto-fails, app stuck on 'warming', PAWN never finds
+  out"** — FIXED on `dev` 2026-07-14 (prod deploy still pending, gated on a
+  real deployment session per standing instruction). Two independent legs:
+  (1) the backend had no independent signal a kernel died — new
+  `kaggle.kernel_status()` probes Kaggle's `/kernels/status` directly
+  (previously only used on the cold-job path), wired into
+  `image_session.get_session_status()`'s warmup branch via a throttled
+  `_kernel_probe()` helper + 3 new constants — a dead/terminal kernel now
+  flips the session to a precise error in ~60-90s instead of the old 900s
+  (15min) wall-clock-only fallback, which is now just the backstop for when
+  the probe itself has no information. (2) both warm-session notebooks'
+  `patch_session()`/`patch_job()` were fire-and-forget (no response check)
+  YET could still raise on a network error, silently killing the run before
+  its own error report landed — this is the exact live-observed failure
+  (a dead dev tunnel's `gaierror` raised out of cell-1's first
+  `patch_session` call). Replaced with a shared, never-raising `_rest_patch`
+  helper (retry once, loud `[pawn]` kernel-log lines on failure, detects
+  silently-rejected 0-row writes), wrapped cell-1's pip install in
+  try/except, decoupled the supervisor's heartbeat from read success, and
+  added a 600s total-unreachability self-exit so a kernel that can never
+  reach PAWN doesn't just burn GPU quota until Kaggle's ~12h cap. Frontend
+  Warming pill now shows the substatus + live elapsed time (`Warming ·
+  loading model · 1m 21s`) instead of a bare "Warming" indistinguishable
+  from a healthy warmup. New `test_kaggle_session_templates.py` (9 tests)
+  + 13 new/updated `test_image_session.py` tests + 5 new `kernel_status`
+  unit tests in `test_generate.py`. 438 backend tests green (up from 415),
+  `tsc`/`npm run build` clean. Live-verified via Chrome (mocked backend
+  responses — deliberately did not start a real Kaggle session/spend GPU
+  quota without asking): both the warming-with-elapsed-time pill and the
+  probe-detected-error message render correctly. **Still needs the user:**
+  a live smoke test against a REAL Kaggle kernel (needs their creds + a
+  restarted dev tunnel) — the one item from the original diagnosis's
+  "confirm against a real kernel log" ask left open. Full writeup in
+  `plan_imagelab_session_issues.md`'s "Active implementation plan" section.
 - [ ] Separate, still open: FLUX CUDA OOM on generate (`device_map=
   "balanced"` packs GPU 0 full); stop/tracking's earlier hypotheses #3-#5
   (unverified — need real Kaggle log access, human-in-the-loop).

@@ -332,6 +332,72 @@ def test_deploy_kernel_treats_409_as_already_deployed():
     assert fake.get_calls == 0  # never waited on the busy slug
 
 
+class _FakeStatusOnlyClient:
+    """Context-manager fake for kernel_status() -- unlike _FakeStatusClient
+    above, this one is entered via `with _client(...) as client:` (mirrors
+    _FakeDeployClient's __enter__/__exit__ shape)."""
+
+    def __init__(self, status_code=200, status="running"):
+        self.status_code = status_code
+        self.status = status
+        self.get_calls = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get(self, path, params=None):
+        self.get_calls += 1
+        return _FakeResp(self.status_code, self.status)
+
+
+def test_kernel_status_returns_lowercased_status():
+    from app.core import kaggle
+
+    fake = _FakeStatusOnlyClient(200, "Error")
+    with patch("app.core.kaggle._client", return_value=fake):
+        assert kaggle.kernel_status("u", "t", "k") == "error"
+    assert fake.get_calls == 1
+
+
+def test_kernel_status_non_200_returns_none():
+    from app.core import kaggle
+
+    fake = _FakeStatusOnlyClient(404, "")
+    with patch("app.core.kaggle._client", return_value=fake):
+        assert kaggle.kernel_status("u", "t", "k") is None
+
+
+def test_kernel_status_never_raises_on_client_exception():
+    from app.core import kaggle
+
+    def _boom(username, api_token):
+        raise RuntimeError("network blip")
+
+    with patch("app.core.kaggle._client", side_effect=_boom):
+        assert kaggle.kernel_status("u", "t", "k") is None
+
+
+def test_kernel_status_missing_status_field_returns_none():
+    from app.core import kaggle
+
+    fake = _FakeStatusOnlyClient(200, "")  # {"status": ""} -- falsy
+    with patch("app.core.kaggle._client", return_value=fake):
+        assert kaggle.kernel_status("u", "t", "k") is None
+
+
+def test_terminal_kernel_statuses_covers_done_and_failed():
+    from app.core import kaggle
+
+    assert kaggle.TERMINAL_KERNEL_STATUSES == kaggle._DONE | kaggle._FAILED
+    assert "complete" in kaggle.TERMINAL_KERNEL_STATUSES
+    assert "error" in kaggle.TERMINAL_KERNEL_STATUSES
+    assert "running" not in kaggle.TERMINAL_KERNEL_STATUSES
+    assert "queued" not in kaggle.TERMINAL_KERNEL_STATUSES
+
+
 def test_generate_image_stores_params(client):
     """Non-default params are forwarded to create_cold_job."""
     with patch(

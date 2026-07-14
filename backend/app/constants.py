@@ -44,8 +44,24 @@ IMAGE_SESSION_HEARTBEAT_STALE_SECONDS = 90  # 3× typical FLUX inference time (~
 # A session still stuck in starting/installing/loading_model past this long is
 # considered dead (no heartbeat exists yet during this phase to check instead).
 # Cold-start cost is deps install + multi-GB model weight download/load, which
-# can run well past a few minutes depending on Kaggle's network/GPU queue.
+# can run well past a few minutes depending on Kaggle's network/GPU queue. Only
+# reached when the Kaggle kernel-status probe below returns nothing usable (no
+# creds, Kaggle API unreachable) or reports the kernel still 'queued' — the
+# probe's own detection windows below are the normal, much faster path.
 IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS = 900
+# Minimum interval between GET /kernels/status calls for the same warmup
+# session — the frontend polls session status every 3s, but Kaggle's own API
+# doesn't need hammering that hard just to detect a dead kernel.
+IMAGE_SESSION_KAGGLE_PROBE_INTERVAL_SECONDS = 30
+# Don't probe Kaggle for a session younger than this — a kernel needs a moment
+# to actually start after push, and it's not worth the API call before then.
+IMAGE_SESSION_STARTUP_PROBE_AFTER_SECONDS = 60
+# Kaggle reports the kernel as 'running' but it has never landed a single
+# heartbeat past this long during warmup -- the kernel is alive but can't reach
+# PAWN's database at all (tunnel down, RLS token mismatch, writes rejected).
+# The cell-0 supervisor heartbeats within seconds of container start on a
+# healthy notebook, so this window is generous, not tight.
+IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS = 180
 # Hard backstop on a session's duration (Kaggle's max batch run-time guardrail).
 IMAGE_SESSION_MAX_DURATION_MINUTES = 120
 # Backend/UI poll cadence while waiting for a durable job to finish.
