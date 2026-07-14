@@ -101,8 +101,10 @@ const ImageGenerator = forwardRef<
     try {
       const s = await startSession(model.id, headerDuration, null)
       setSession({ status: s.status, alive: true, session_id: s.session_id, expires_at: s.expires_at })
+      setError(null)
     } catch (err) {
       console.error('Failed to start session from header:', err)
+      setError(err instanceof Error ? err.message : 'Failed to start session')
     } finally {
       setBusyAction(null)
     }
@@ -114,8 +116,10 @@ const ImageGenerator = forwardRef<
     try {
       const { expires_at } = await extendSession(session.session_id, 30)
       setSession({ ...session, expires_at })
+      setError(null)
     } catch (err) {
       console.error('Failed to extend session:', err)
+      setError(err instanceof Error ? err.message : 'Failed to extend session')
     } finally {
       setBusyAction(null)
     }
@@ -127,8 +131,10 @@ const ImageGenerator = forwardRef<
     try {
       await stopSession(session.session_id)
       setSession({ ...session, status: 'stopping', alive: false })
+      setError(null)
     } catch (err) {
       console.error('Failed to stop session:', err)
+      setError(err instanceof Error ? err.message : 'Failed to stop session')
     } finally {
       setBusyAction(null)
     }
