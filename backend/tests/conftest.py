@@ -32,8 +32,19 @@ os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost:5432/tes
 # test relies on real seed data surviving here -- `registry.loader.load_registry()`
 # calls `seed_registry()`, which writes fresh models.json/endpoints.json into
 # whatever REGISTRY_DIR it finds empty.
+#
+# mkdtemp(), not a fixed gettempdir()/pawn_test_data_<worker> path (2026-07-14
+# follow-up): a fixed path is stable *within* one `pytest` run but persists in the
+# container's /tmp *across* separate `docker compose exec backend pytest` invocations
+# -- so the first run seeds registry/models.json once, and every later run's
+# seed_registry() finds it "already exists" and never rewrites it, even after
+# INITIAL_MODELS/INITIAL_ENDPOINTS change (exactly what happened: the seed-data-drift
+# fix landed, but a still-running container's leftover /tmp/pawn_test_data_gw16 from
+# before the fix kept serving the stale data on the next run). mkdtemp() generates a
+# fresh, uniquely-named directory every time this module loads -- i.e. every `pytest`
+# process start -- so there is never a stale leftover to find.
 _worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
-os.environ.setdefault("PAWN_DATA_DIR", os.path.join(tempfile.gettempdir(), f"pawn_test_data_{_worker_id}"))
+os.environ.setdefault("PAWN_DATA_DIR", tempfile.mkdtemp(prefix=f"pawn_test_data_{_worker_id}_"))
 
 
 TEST_USER_ID = "test-user-id"
