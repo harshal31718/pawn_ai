@@ -1864,4 +1864,90 @@ Full deploy from scratch on `pawn-temp`: Docker Engine + Compose plugin, a fresh
 
 **Why:** A warm session on the SDXL tab returned `ECHO: <prompt>` text — SDXL's session was wired to the W.0 CPU-echo POC (placeholder; "real SDXL serve-loop is a follow-up"). Only FLUX had a real warm serve-loop. User wants warm image generation for SDXL too (load once → generate many).
 **Built:**
-- `kaggle_templates/image_sdxl_session/n
+- `kaggle_templates/image_sdxl_session/notebook.ipynb` (new): mirrors the FLUX serve-loop structure (cell-0 payload + Supabase REST helpers; cell-1 install; cell-2 load SDXL ONCE via `AutoPipelineForText2Image.from_pretrained(..., torch_dtype=float16, use_safetensors=True, local_files_only=True).to("cuda")` → PATCH `ready`/`error`; cell-3 serve loop with SDXL inference 4 steps / guidance 0 / 512×768 → PATCH job done + PNG, `via kaggle:sdxl-session`).
+- `core/image_models.py`: SDXL entry repointed — `session_template=image_sdxl_session`, `session_slug="pawn-sdxl-session"`, `session_gpu=True` (start_session then mounts the SDXL dataset + T4). Dropped the now-unused `KAGGLE_SESSION_POC_TEMPLATE`/`KAGGLE_SESSION_SLUG` imports (constants + session_poc notebook remain as the W.0 artifact, unreferenced).
+- No frontend change — `ImageGenerator`/`GenerationsPanel` already render PNG vs text by MIME.
+**Decision:** kept the cold path's 4 steps / guidance 0 / 512×768 for consistency (SDXL quality tuning is a separate pre-existing deferred item). The CPU echo POC stays in the repo (W.0 artifact) but is no longer user-facing — both SDXL + FLUX warm sessions are real now. SDXL loads in ~1–2 min (single T4, ~7GB fp16) vs FLUX ~10 min.
+**Tests:** 134 backend passing — rewrote `test_start_session_inserts_row_and_pushes_cpu_notebook` → `test_start_session_sdxl_uses_gpu_serve_loop` (asserts GPU + dataset + `pawn-sdxl-session`); added `test_session_slug_titles_round_trip` (Kaggle title↔slug invariant for session slugs). The anon-key-only security test (runs on sdxl) still passes → no service key in the SDXL session push.
+**Live verify pending:** SDXL → Connect → Warm session → Start → `Warm` in ~1–2 min → Generate returns an image in seconds (`via kaggle:sdxl-session`); thumbnails in Generations.
+**Commit:** (this commit)
+
+---
+
+### 2026-06-30 — Plan 1.0: Generations panel UI fixes [imageLab]
+
+**Why:** Five targeted UX gaps in the Generations monitor panel: (1) "6 active" header conflated queued and running; (2) no way to see how long a generation actually took; (3) style preset not visible on job rows; (4) no way to reuse a prompt; (5) killing a Kaggle notebook externally left running jobs stuck forever in "running" state.
+**Built:**
+- **Fix 1 (header):** Split `N active` into `N running · M queued`; running segment uses amber colour, queued uses muted text; either segment hidden if count is 0.
+- **Fix 2 (gen time):** `⏱ Xm Ys` shown at right of each row's second line — live ticking every second for running jobs (1 s `setInterval` in `JobRow`), fixed `started_at→done_at` duration for done/error jobs, hidden for queued or when `started_at` is null. `started_at` added to `_JOB_LIST_COLUMNS` and `list_jobs` dict (was selected but not mapped); `JobResult.started_at` added to `client.ts`.
+- **Fix 3 (style preset tag):** Small pill badge in the top-right of the first line when `job.params?.style_preset` is set; key inverted to human-readable label via `STYLE_PRESET_LABELS` map in `GenerationsPanel`. `params` added to `_JOB_LIST_COLUMNS`, `list_jobs` dict, and `JobResult` type.
+- **Fix 4 (copy button):** Clipboard icon button per row copies the full `job.prompt`; swaps to a green checkmark for 1.5 s then resets. Timer cancelled on unmount.
+- **Fix 5 (session-death failover):** `reap_stale_jobs` now fetches full session rows and uses `_is_alive()` (which includes heartbeat-stale detection) instead of a structural status check. Running session jobs for non-alive sessions are also failed with "Session terminated unexpectedly" (previously only queued jobs were touched). This handles the case of a notebook being manually killed — on the next 3 s panel poll the job flips to error with `done_at` set.
+- **View/Download buttons:** Stacked vertically (column) at far right of each row with image.
+**Decisions:** Reaping running session jobs is now gated by `_is_alive()` (90 s heartbeat-stale threshold), which provides enough buffer for warm-session FLUX inference (typically seconds, not minutes).
+**Tests:** 136 backend passing (updated `test_reap_stale_jobs_reaps_jobs_of_dead_sessions` to assert both the queued and running reap updates); `npm run build` clean.
+**Commit:** (this commit)
+
+## 2026-07-13 — Full implementation verification of Phase M + Phase A (Cowork session) + sidebar UI fixes
+
+**Verification (code-reading audit, both phases, against their prescriptive plans):**
+- Phase M (M.1–M.7): all invariants confirmed — strict scope-equality SQL functions
+  (+ kind param), add_chunk upsert on (user_id, chunk_id), Drive-first indexer with
+  shared per-(user,conv) lock, scoped retrieve (kind='message'), load_context no
+  longer auto-retrieves, additive memory_hit payload, conversation-delete PG cleanup,
+  on-access legacy Drive migration, idempotent two-way moves + 409 cross-project
+  guard, cascade delete holding all contained chats' locks, embedding =
+  gemini-embedding-2 @ 768 (post-fix), projects UI (ProjectSection/ProjectRow/
+  ProjectPage/dialogs matching plan wording), syncQueue op kinds exactly as planned.
+- Phase A (A.1–A.9): all invariants confirmed — chat_complete in llm_core+normalize
+  only, supports_tools in schema+seed, agent/tools package complete, constants all
+  present (TOOL_TIMEOUT 20 / WEB_SEARCH 5 / FETCH 8000 / ROUTER 1500/200 / AGENT 8 /
+  24000 / SUBAGENT 5 / TRACE 50), SSRF guard incl. IPv4-mapped-IPv6 handling (beyond
+  plan), router ROLE_LEVELS + resolve_final_model, graph v2 (classify →
+  direct_answer | plan → execute → final; budget-exhaustion nudge; digest-not-raw
+  final context), subagents strictly sequential + depth-1 structural, trace
+  persistence (_build_trace + TRACE_MAX_ENTRIES + aget_state), citation_event.
+- No implementation defects found this pass. (Earlier same-day: embedding-swap gap
+  found+fixed; elapsed_ms/elapsedMs CRITICAL found+fixed by code review.)
+
+**UI fixes implemented this session (UNCOMMITTED — commit with next batch):**
+1. KebabMenu.tsx: submenus converted from absolute side-flyouts (clipped by the
+   sidebar's overflow-hidden/auto ancestors; overflowed viewport on the left edge)
+   to inline accordions expanding below the parent item.
+2. ProjectRow/ProjectSection/Sidebar: clicking a project row now navigates to
+   /project/:projectId (ProjectPage in the main content area); the chevron alone
+   toggles sidebar expansion (stopPropagation); active project row highlighted via
+   URL match (useLocation) with the same brand style as the active chat.
+   New props threaded: onOpenProject, activeProjectId.
+   Gate note: verify with `npm run build` on the host (sandbox tsc gave false
+   negatives from a stale file-mount cache; host files verified complete by review).
+
+**Plans relocated** (both phases implemented): `workspace/plan/plan_memory_scoping.md`
+→ `workspace/implemented_phases/phase_11_memory_scoping.md`;
+`workspace/plan/plan_chat_agent_refinement.md` →
+`workspace/implemented_phases/phase_12_chat_agent_refinement.md`. Older tracker/state
+entries still reference the workspace/plan/ paths — historical, per repo precedent.
+Outstanding (unchanged): M.7 + A.9 live verification checklists with the user.
+
+## 2026-07-13 — Test-suite burden investigation + markdown rendering fix (Cowork session)
+
+- **Verdict: the suite is not slow and nothing gets deleted.** A full run of all 364
+  tests completed in ~35s wall-clock in a Linux sandbox (partially degraded env, so
+  treat as approximate — confirm locally with one timed `docker compose exec backend
+  pytest -n auto` run). The felt burden came from running the FULL suite on every
+  edit; the Gate Scoping rule in .claude/rules/testing.md (added earlier today) is
+  the fix: affected files during iteration, full suite once per step.
+- Added `pytest-xdist` to backend/requirements.txt + a rules line: full-suite runs
+  use `pytest -n auto`.
+- **Flagged risk (not fixed): backend/requirements.txt is unpinned.** A fresh
+  Docker rebuild today pulls fastapi 0.139 / langgraph 1.2.9 / pydantic 2.13 —
+  potentially breaking major versions vs. what the running containers were built
+  with. Before the next prod rebuild, pin versions from the known-good container:
+  `docker compose exec backend pip freeze > backend/requirements.lock` and either
+  install from the lock in the Dockerfile or copy the pins into requirements.txt.
+- **Markdown rendering fix (uncommitted):** assistant replies rendered tables as raw
+  pipe text — react-markdown lacks GFM support without the remark-gfm plugin.
+  Added `remark-gfm` to frontend/package.json + `remarkPlugins={[remarkGfm]}` and
+  styled table/thead/th/td/tr/blockquote/hr components in Message.tsx (scrollable
+  bordered tables, striped rows). Requires `docker compose exec frontend npm
+  install` (frontend runs in Docker).
