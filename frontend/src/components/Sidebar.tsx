@@ -5,6 +5,7 @@ import { clearMemory, rebuildMemory } from '../api/client'
 import ConfirmDialog from './ConfirmDialog'
 import KebabMenu from './KebabMenu'
 import ProjectSection from './ProjectSection'
+import SearchResults from './SearchResults'
 import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, FolderIcon } from './icons'
 
 interface Props {
@@ -68,11 +69,18 @@ export default function Sidebar({
   const inputRef = useRef<HTMLInputElement>(null)
 
   const standaloneConversations = conversations.filter((c) => !c.project_id)
-  const filteredConversations = query.trim()
-    ? standaloneConversations.filter((c) =>
-        (c.title || '').toLowerCase().includes(query.trim().toLowerCase())
-      )
-    : standaloneConversations
+
+  // P.3: search spans everything (standalone + project-scoped chats, and
+  // project names themselves) -- it used to only filter standaloneConversations,
+  // so a match inside a project was invisible to search entirely.
+  const trimmedQuery = query.trim().toLowerCase()
+  const isSearching = trimmedQuery.length > 0
+  const matchedProjects = isSearching
+    ? projects.filter((p) => p.name.toLowerCase().includes(trimmedQuery))
+    : []
+  const matchedConversations = isSearching
+    ? conversations.filter((c) => (c.title || '').toLowerCase().includes(trimmedQuery))
+    : []
 
   function handleRequestClearMemory(scopeType: 'chat' | 'project', scopeId: string, label: string) {
     setDialog({ kind: 'clearMemory', scopeType, scopeId, label })
@@ -250,6 +258,24 @@ export default function Sidebar({
               </button>
             </div>
 
+            {/* Search — same size/style as New chat/Image Lab, sits directly below them */}
+            <div className="px-3 pb-2 shrink-0">
+              <div className="relative flex items-center">
+                <MagnifierIcon className="w-4 h-4 text-theme-text-muted absolute left-3 pointer-events-none select-none" />
+                <input
+                  type="text"
+                  placeholder="Search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="
+                    w-full pl-9 pr-3 py-2 rounded-xl text-xs font-semibold bg-theme-bg border border-theme-border/50
+                    text-theme-text placeholder-theme-text-muted shadow-sm
+                    focus:outline-none focus:border-theme-text-muted transition-colors
+                  "
+                />
+              </div>
+            </div>
+
             {/* Offline / unsynced changes banner */}
             {syncError && (
               <div className="px-3 pb-2 shrink-0">
@@ -260,68 +286,59 @@ export default function Sidebar({
               </div>
             )}
 
-            {/* Projects section — above the flat chat list */}
-            <ProjectSection
-              projects={projects}
-              conversations={conversations}
-              activeId={activeId}
-              activeProjectId={activeProjectId}
-              pendingIds={pendingIds}
-              onOpenProject={handleOpenProject}
-              onSelectChat={(id) => {
-                const projectId = conversations.find((c) => c.id === id)?.project_id
-                if (projectId) handleSelectProjectChat(id, projectId)
-                else handleSelectConversation(id)
-              }}
-              onCreateProject={onCreateProject}
-              onNewChatInProject={handleNewChatInProject}
-              onRenameProject={onRenameProject}
-              onRequestDeleteProject={handleRequestDeleteProject}
-              onRequestRemoveChatFromProject={handleRequestRemoveChatFromProject}
-              onClearMemory={handleRequestClearMemory}
-              onRebuildMemory={handleRebuildMemory}
-            />
-
-            {/* Chats section header — mirrors Projects' muted label styling */}
-            <div className="px-3 pt-1 pb-1 shrink-0">
-              <span className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted select-none">
-                Chats
-              </span>
-            </div>
-
-            {/* Search Option */}
-            <div className="px-3 pb-2 shrink-0">
-              <div className="relative flex items-center">
-                <MagnifierIcon className="w-3.5 h-3.5 text-theme-text-muted absolute left-3 pointer-events-none select-none" />
-                <input
-                  type="text"
-                  placeholder="Search chats"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="
-                    w-full pl-9 pr-3 py-1.5 rounded-xl text-xs bg-theme-bg border border-theme-border/50 text-theme-text placeholder-theme-text-muted
-                    focus:outline-none focus:border-theme-text-muted transition-colors
-                  "
+            {isSearching ? (
+              <SearchResults
+                matchedProjects={matchedProjects}
+                matchedConversations={matchedConversations}
+                projects={projects}
+                activeId={activeId}
+                onOpenProject={handleOpenProject}
+                onSelectChat={(id, projectId) => {
+                  if (projectId) handleSelectProjectChat(id, projectId)
+                  else handleSelectConversation(id)
+                }}
+              />
+            ) : (
+              <>
+                {/* Projects section — above the flat chat list */}
+                <ProjectSection
+                  projects={projects}
+                  conversations={conversations}
+                  activeId={activeId}
+                  activeProjectId={activeProjectId}
+                  pendingIds={pendingIds}
+                  onOpenProject={handleOpenProject}
+                  onSelectChat={(id) => {
+                    const projectId = conversations.find((c) => c.id === id)?.project_id
+                    if (projectId) handleSelectProjectChat(id, projectId)
+                    else handleSelectConversation(id)
+                  }}
+                  onCreateProject={onCreateProject}
+                  onNewChatInProject={handleNewChatInProject}
+                  onRenameProject={onRenameProject}
+                  onRequestDeleteProject={handleRequestDeleteProject}
+                  onRequestRemoveChatFromProject={handleRequestRemoveChatFromProject}
+                  onClearMemory={handleRequestClearMemory}
+                  onRebuildMemory={handleRebuildMemory}
                 />
-              </div>
-            </div>
 
-            {/* Conversations List */}
-            <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
-              {filteredConversations.length === 0 ? (
+                {/* Chats section header — mirrors Projects' muted label styling */}
+                <div className="px-3 pt-1 pb-1 shrink-0">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted select-none">
+                    Chats
+                  </span>
+                </div>
+
+                {/* Conversations List */}
+                <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+              {standaloneConversations.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
                   <ChatBubbleIcon className="w-6 h-6 opacity-40" />
-                  {query.trim() ? (
-                    <span className="text-xs">No matching chats</span>
-                  ) : (
-                    <>
-                      <span className="text-xs">No conversations yet</span>
-                      <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
-                    </>
-                  )}
+                  <span className="text-xs">No conversations yet</span>
+                  <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
                 </div>
               ) : (
-                filteredConversations.map((conv) => {
+                standaloneConversations.map((conv) => {
                   const isActive = conv.id === activeId
                   const isEditing = conv.id === editingId
 
@@ -428,7 +445,9 @@ export default function Sidebar({
                   )
                 })
               )}
-            </div>
+                </div>
+              </>
+            )}
 
             {/* User Profile Card */}
             <div className="p-3 border-t border-theme-border/40 bg-theme-surface/30 flex items-center gap-3 shrink-0 select-none">
