@@ -177,8 +177,8 @@ def list_conversations(drive: DriveStorage) -> List[Dict[str, Any]]:
             try:
                 meta = json.loads(drive.download_text(meta_id))
                 results.append(meta)
-            except (json.JSONDecodeError, Exception):
-                pass
+            except Exception as exc:
+                print(f"list_conversations: skipping {folder['id']}, meta.json read/parse failed: {exc}", file=sys.stderr)
     results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return results
 
@@ -214,7 +214,8 @@ def get_conversation_meta(drive: DriveStorage, conv_id: str) -> Optional[Dict[st
         return None
     try:
         return json.loads(drive.download_text(meta_id))
-    except (json.JSONDecodeError, Exception):
+    except Exception as exc:
+        print(f"get_conversation_meta({conv_id}): meta.json read/parse failed, treating as not found: {exc}", file=sys.stderr)
         return None
 
 
@@ -233,7 +234,8 @@ def add_attached_doc(drive: DriveStorage, conv_id: str, doc_id: str, filename: s
         return
     try:
         meta = json.loads(drive.download_text(meta_id))
-    except (json.JSONDecodeError, Exception):
+    except Exception as exc:
+        print(f"add_attached_doc({conv_id}, {doc_id}): meta.json read/parse failed, doc not recorded: {exc}", file=sys.stderr)
         return
     attached = meta.get("attached_docs", [])
     if any(d.get("doc_id") == doc_id for d in attached if isinstance(d, dict)):
@@ -295,8 +297,8 @@ def append_messages(
             meta["message_count"] = len(all_messages)
             meta["updated_at"] = datetime.now(timezone.utc).isoformat()
             drive.upload_text("meta.json", json.dumps(meta, indent=2), folder_id)
-        except (json.JSONDecodeError, Exception):
-            pass
+        except Exception as exc:
+            print(f"append_messages({conv_id}): meta.json update failed, message_count/updated_at now stale: {exc}", file=sys.stderr)
 
 
 def update_conversation_title(
@@ -312,7 +314,8 @@ def update_conversation_title(
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()
         drive.upload_text("meta.json", json.dumps(meta, indent=2), folder_id)
         return meta
-    except (json.JSONDecodeError, Exception):
+    except Exception as exc:
+        print(f"update_conversation_title({conv_id}): meta.json read/parse/write failed: {exc}", file=sys.stderr)
         return None
 
 

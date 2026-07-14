@@ -11,6 +11,8 @@ submenu (see plan_memory_scoping.md §5 M.6):
                           cleared memory cannot resurrect via a later rebuild.
 """
 
+import sys
+
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -50,10 +52,19 @@ def _clear_scope(drive, scope_type: str, scope_id: str) -> None:
 
 
 def _delete_scope_chunks(user_id: str, scope_type: str, scope_id: str) -> None:
-    execute(
-        "delete from memory_chunks where user_id = %s and scope_type = %s and scope_id = %s",
-        (user_id, scope_type, scope_id),
-    )
+    """Best-effort, matching routes/conversations.py's sibling _delete_chunks
+    pattern: memory_chunks is a derived, rebuildable index (POST
+    /memory/rebuild re-derives it from Drive's rag_chunks.jsonl, which
+    _clear_scope above already wiped) -- a Postgres failure here is logged,
+    not surfaced, since clear_memory's Drive-side work already succeeded by
+    the time this runs and there's nothing left to roll back."""
+    try:
+        execute(
+            "delete from memory_chunks where user_id = %s and scope_type = %s and scope_id = %s",
+            (user_id, scope_type, scope_id),
+        )
+    except Exception as exc:
+        print(f"Failed to delete memory chunks for {scope_type} {scope_id}: {exc}", file=sys.stderr)
 
 
 def _validate_scope(req: ScopeRequest) -> None:

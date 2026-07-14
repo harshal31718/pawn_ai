@@ -6,6 +6,72 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Cleanup: §3 of plan_open_issues (secret vestige, swallowed exceptions)
+
+Third and final item picked off `plan_open_issues_2026-07-14.md` this
+session — the three "small cleanups, good filler" entries, all low-risk and
+independent, done together in one pass.
+
+**`EndpointEntry.secret`:** confirmed via grep it was genuinely never read
+anywhere (`grep -rn "\.secret\b" backend/app/` returned nothing) before
+touching anything. Removed from all four places it existed: the Pydantic
+field in `registry/schemas.py`, `registry/seed.py`'s `INITIAL_ENDPOINTS`
+(15 dict entries, via a targeted `sed` matching the exact `"secret":
+"..._api_key",` line shape — verified no other legitimate use of that key
+existed first), the live `data/registry/endpoints.json` (18 entries, same
+approach), and `tests/test_rate_limiter.py`'s 6 direct `EndpointEntry(...)`
+constructions. Validated JSON/Python syntax after the sed edits, rebuilt the
+backend, confirmed clean startup (`Application startup complete` — would
+have failed loudly if the schema/data mismatch broke Pydantic validation at
+registry-load time), and live-verified via the actual UI: opened the model
+switcher and confirmed the Fast/Balanced/Research groups with per-model
+provider lists (e.g. "Llama 3.3 70B — Groq, HuggingFace") still render
+correctly, proving `GET /registry/models` (which reads `EndpointEntry.
+provider` to build that list) is unaffected.
+
+**`conversations_drive.py`'s swallowed exceptions:** 5 call sites
+(`list_conversations`, `get_conversation_meta`, `add_attached_doc`,
+`append_messages`'s meta-update block, `update_conversation_title`) each had
+`except (json.JSONDecodeError, Exception): pass` (or `return None`/`return`).
+The tuple was misleading -- `Exception` alone already subsumes
+`JSONDecodeError`, so it read like "handle parse errors specially" when it
+actually silently ate everything, including real Drive API failures.
+Deliberately did NOT narrow what gets caught (a Drive API error legitimately
+needs the same fallback as a parse error at each of these call sites) --
+only added a `print(..., file=sys.stderr)` naming the function, the
+conv_id, and the actual exception, before the existing fallback. Zero
+change to any return value or control flow; every existing test relying on
+"malformed data -> graceful None/empty/pass" still passes unchanged, since
+that's still exactly what happens -- it's just no longer silent.
+
+**`routes/memory.py`'s `_delete_scope_chunks`:** had no try/except at all,
+unlike `routes/conversations.py`'s sibling `_delete_chunks` for the exact
+same class of operation (best-effort Postgres delete of a derived,
+rebuildable index, run after the authoritative Drive-side work has already
+succeeded). Copied that sibling's pattern exactly, including its doc-comment
+reasoning (why a failure here is safe to log-and-continue rather than
+surface): `memory_chunks` is fully rebuildable via `POST /memory/rebuild`
+from Drive's `rag_chunks.jsonl`, and by the time `_delete_scope_chunks` runs,
+`clear_memory`'s Drive wipe has already committed, so there's nothing left
+to roll back on a Postgres-side failure.
+
+No new tests added for any of the three -- the secret removal changes no
+observable behavior (confirmed via the full suite + live UI check instead of
+new unit tests, since there's no new logic to unit-test, only deleted dead
+schema/data); the two logging additions are pure visibility improvements
+with no new branches or return values to assert on, matching the sibling
+`_delete_chunks`'s own precedent of having no dedicated test either. 415
+backend tests green throughout (`docker compose exec backend pytest -n
+auto`, run after each of the three sub-changes, not just once at the end).
+
+Updated `plan_open_issues_2026-07-14.md` §3 to DONE; `current_state.md`/
+`build_tracker.md` updated. All three items from this session's pass through
+the open-issues plan (§2.1, §2.2's code part, §3) are now closed --
+remaining open items are §1 (Image Lab prod fix, gated on a deployment
+session) and §4 (handed directly to the user, no code involved).
+
+---
+
 ### [2026-07-14] — Fix: deterministic Drive root resolution (plan_open_issues §2.2)
 
 Second item off `plan_open_issues_2026-07-14.md`. The plan's original

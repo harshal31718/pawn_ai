@@ -687,11 +687,13 @@ Plan: `workspace/implemented_phases/plan_consolidated_next_phases_2026-07-14.md`
 All of Phase P verified live via Chrome and committed
 (`6618204`/`b130760`/`09fb4a7`/`d149697`) 2026-07-14.
 
-## Open Issues follow-ups (in progress, from workspace/plan/plan_open_issues_2026-07-14.md)
+## Open Issues follow-ups — §2.1/§2.2(code)/§3 all DONE 2026-07-14 (from workspace/plan/plan_open_issues_2026-07-14.md)
 
 Not a numbered phase — a consolidated audit of previously-deferred gaps,
 worked one item at a time. §2.1 (O.1 mid-loop double-answer) is tracked as
-Phase O's O.5 above, not duplicated here.
+Phase O's O.5 above, not duplicated here. Remaining open: §1 (Image Lab prod
+fix, gated on a deployment session), §2.2's actual folder merge and all of
+§4 (both handed directly to the user, no code involved).
 
 - [x] §2.2 (code part) — deterministic Drive root resolution. `storage/
   drive.py`'s `get_or_create_root()` now orders Drive's `files.list` query
@@ -705,9 +707,19 @@ Phase O's O.5 above, not duplicated here.
   409). **§2.2's actual multi-root merge stays a manual, user-only step**
   (needs judgment about file-tree conflicts, not safely automatable) — see
   `plan_open_issues_2026-07-14.md` §4.
-- [ ] §3 — small cleanups (`EndpointEntry.secret` vestige,
-  `conversations_drive.py`'s broad except pattern, `memory.py`'s missing
-  try/except on `_delete_scope_chunks`). Not started yet.
+- [x] §3 — small cleanups, no behavior change. `EndpointEntry.secret`
+  vestigial field removed entirely (schema + `seed.py`'s 15 entries + the
+  live `data/registry/endpoints.json`'s 18 entries + `test_rate_limiter.py`'s
+  6 constructions — confirmed via grep it was genuinely never read anywhere
+  first). `conversations_drive.py`'s 5 broad `except (json.JSONDecodeError,
+  Exception): pass` sites now log the actual exception to stderr before the
+  same existing fallback (simplified the redundant tuple to plain
+  `Exception`, zero change to control flow/return values). `routes/
+  memory.py`'s `_delete_scope_chunks` gained the same try/except-and-log
+  pattern as its sibling `_delete_chunks` in `conversations.py`. 415 backend
+  tests green (no new tests needed — pure logging/dead-code removal, no new
+  observable behavior); backend rebuilt, confirmed clean startup, live-
+  verified the registry change via the model switcher UI.
 
 ## Image Lab warm-session issues (in progress, independent, user-paced)
 

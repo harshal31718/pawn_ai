@@ -1,10 +1,11 @@
 # Plan: Open Issues & Improvements (post Phase A/M/N/O/P audit)
 
-*Branch: dev. Status: IN PROGRESS — §2.1 (O.1 mid-loop double-answer) and
-§2.2's code part (deterministic Drive root resolution) DONE 2026-07-14,
-both committed and tested. §2.2's actual folder merge stays a manual,
-user-only step (unchanged — see §2.2/§4). Everything else still NOT
-STARTED.*
+*Branch: dev. Status: §2.1 (O.1 mid-loop double-answer), §2.2's code part
+(deterministic Drive root resolution), and §3 (all three small cleanups)
+all DONE 2026-07-14, committed and tested. §2.2's actual folder merge stays
+a manual, user-only step (unchanged — see §2.2/§4). §1 (Image Lab prod fix)
+stays gated until a deployment session. §4 items are handed to the user
+directly, no code involved.*
 *Written 2026-07-14 after auditing `build_tracker.md`, `current_state.md`,
 `dev_log.md`, `workspace/implemented_phases/gap_audit_2026-07-14.md`, and
 `workspace/plan/plan_imagelab_session_issues.md`, then cross-checked each
@@ -228,26 +229,52 @@ far less confusing even before you get to the manual merge. See §4.
 
 ---
 
-## 3. Small cleanups (low risk, low priority — good filler)
+## 3. Small cleanups (low risk, low priority — good filler) — DONE 2026-07-14
 
 - **`EndpointEntry.secret` vestigial field** (`backend/app/registry/schemas.py`) —
   a required `str` field, populated in `registry/seed.py`'s `INITIAL_MODELS`/
   `INITIAL_ENDPOINTS` and in the live `data/registry/endpoints.json`, never
   read anywhere in the app (`Resolver`/`_resolve_key()` only ever use
-  `key_store.get_key(user_id, provider)` — the per-user BYOK key). Confirmed
-  still present. Removing it touches a live data file, not just code — do
-  it deliberately, not as a drive-by.
+  `key_store.get_key(user_id, provider)` — the per-user BYOK key).
+  **Removed** from `schemas.py`'s `EndpointEntry` model, `seed.py`'s
+  `INITIAL_ENDPOINTS` (15 entries), the live `data/registry/endpoints.json`
+  (18 entries), and `tests/test_rate_limiter.py`'s 6 `EndpointEntry(...)`
+  constructions — no drive-by, all four sites cleaned together in one pass
+  as the plan called for. JSON/Python syntax validated after the edit;
+  backend rebuilt and confirmed booting clean (`Application startup
+  complete`, registry loads without a validation error); live-verified via
+  the model switcher UI (per-model provider lists render correctly, proving
+  `GET /registry/models`, which reads `EndpointEntry.provider`, still works).
 - **`conversations_drive.py`'s broad `except (json.JSONDecodeError, Exception): pass`**
-  pattern (several call sites) swallows *any* error, not just parse failures.
+  pattern (5 call sites) swallows *any* error, not just parse failures.
   `routes/memory.py`'s 404 resolution for unknown scopes relies on this
   behavior, so a transient Drive error currently looks identical to "scope
-  not found" — misleading if it ever actually happens. Deferred from M.6
-  code review as low-severity; confirmed still present.
-- **`routes/memory.py`'s `_delete_scope_chunks`** has no try/except, unlike
+  not found" — misleading if it ever actually happens. **Fixed the
+  visibility gap without changing behavior:** kept the broad catch (still
+  correctly needed — Drive API errors must be caught here too, not just
+  JSON errors) but simplified the redundant `(json.JSONDecodeError,
+  Exception)` tuple to plain `Exception` (the former was misleading, since
+  `Exception` alone already subsumes `JSONDecodeError`) and added a
+  `print(..., file=sys.stderr)` at every site naming the function, the
+  conv_id, and the actual exception, before falling through to the existing
+  return/pass — so a real failure is now visible in logs instead of
+  completely silent, with zero change to control flow or return values (all
+  existing call-site contracts, including memory.py's 404-on-not-found
+  behavior, are unchanged on purpose).
+- **`routes/memory.py`'s `_delete_scope_chunks`** had no try/except, unlike
   the sibling `_delete_chunks` pattern in `conversations.py` for the same
-  class of derived-index cleanup. Confirmed still missing. Low severity — a
-  rebuildable index (`POST /memory/rebuild` already exists), not user data
-  loss, but inconsistent with the established pattern elsewhere.
+  class of derived-index cleanup. **Fixed** by applying that exact sibling
+  pattern: wrapped the delete in try/except, logs to stderr on failure
+  (naming scope_type/scope_id + the exception) instead of raising — matches
+  `_delete_chunks`'s own doc comment reasoning verbatim (best-effort,
+  `memory_chunks` is a derived/rebuildable index, and by the time this runs
+  `clear_memory`'s Drive-side work has already succeeded so there's nothing
+  left to roll back on a Postgres failure here).
+
+All three verified together: 415 backend tests green (no new tests needed —
+these are pure logging/hygiene changes with no new observable behavior to
+assert on, consistent with `_delete_chunks`'s own sibling having no
+dedicated test either), backend rebuilt and confirmed booting clean.
 
 ---
 
