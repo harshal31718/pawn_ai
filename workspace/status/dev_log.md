@@ -6,6 +6,24 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Fix: pytest gate closed out (registry seed-data drift + stale test-tmp-dir reuse)
+
+Two more rounds closing the gate after the SQLite fix (16 → 7 → 1 → expected 0):
+`seed.py`'s `INITIAL_MODELS`/`INITIAL_ENDPOINTS` had drifted from
+`data/registry/*.json` (known low-priority debt from an earlier session,
+harmless until `seed_registry()`'s write path actually ran — which the new
+per-worker temp `DATA_DIR` made happen for the first time ever). Synced both
+literals to the real files; also made the write atomic (`os.replace()`) since
+xdist workers bootstrapping a fresh dir concurrently could otherwise catch a
+truncated file mid-write. User re-ran and hit the *same* failure again —
+turned out the fix was correct but never got exercised: the previous
+`conftest.py` fix used a stable path per xdist worker, which persists in the
+container's `/tmp` across separate `pytest` invocations, so the first (stale)
+run's seed data just sat there "already exists" forever after. Switched to
+`tempfile.mkdtemp()` — a fresh directory every process start, no leftover
+possible. Commits: `8a098e3`, `c5a62db`. **Not yet re-confirmed green** — one
+more `docker compose exec backend pytest -n auto` needed.
+
 ### [2026-07-14] — Fix: F-1 crash (unguarded resolver.pick peek) + real pytest gate root cause (SQLite bind-mount contention)
 
 User ran the two commands handed over from the earlier session's gap audit
