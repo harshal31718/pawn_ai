@@ -230,14 +230,14 @@ export default function Sidebar({
               <button
                 onClick={handleNewChat}
                 className="
-                  w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold
+                  w-full h-9 flex items-center gap-3 px-3 rounded-xl text-xs font-semibold
                   text-theme-text bg-theme-bg border border-theme-border/50 hover:bg-theme-surface-hover
                   transition-all active:scale-98 cursor-pointer select-none shadow-sm
                 "
                 id="new-chat-button"
               >
                 <PencilIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
-                <span className="py-1">New chat</span>
+                <span>New chat</span>
               </button>
             </div>
 
@@ -246,7 +246,7 @@ export default function Sidebar({
               <button
                 onClick={handleImageLab}
                 className="
-                  w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold
+                  w-full h-9 flex items-center gap-3 px-3 rounded-xl text-xs font-semibold
                   text-theme-text bg-theme-bg border border-theme-border/50 hover:bg-theme-surface-hover
                   transition-all active:scale-98 cursor-pointer select-none shadow-sm
                 "
@@ -254,7 +254,7 @@ export default function Sidebar({
                 title="Image Lab (experimental)"
               >
                 <BeakerIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
-                <span className="py-1">Image Lab</span>
+                <span>Image Lab</span>
               </button>
             </div>
 
@@ -268,7 +268,7 @@ export default function Sidebar({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   className="
-                    w-full pl-9 pr-3 py-2 rounded-xl text-xs font-semibold bg-theme-bg border border-theme-border/50
+                    w-full h-9 pl-9 pr-3 rounded-xl text-xs font-semibold bg-theme-bg border border-theme-border/50
                     text-theme-text placeholder-theme-text-muted shadow-sm
                     focus:outline-none focus:border-theme-text-muted transition-colors
                   "
