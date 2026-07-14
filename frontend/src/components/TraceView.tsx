@@ -300,6 +300,61 @@ export function TraceEntries({ entries, isStreaming }: { entries: TraceEntry[]; 
   )
 }
 
+/** P.1 — one collapsible "run" of trace entries inside the interleaved
+ *  segments render (Message.tsx's InterleavedContent): the outer, coarser
+ *  toggle level ("multi-consecutive-tool/agent-calls specific"), one level
+ *  above ToolCard/SubagentGroup's per-tool/per-agent toggles. Auto-open
+ *  while this run is the currently-active one (the last chunk, message
+ *  still streaming), auto-collapses to a summary line the instant the run
+ *  ends (a later chunk begins, or the stream finishes) -- same "auto-
+ *  collapse on completion, reopen any time after" contract TraceView's own
+ *  top-level toggle already uses. While active, the header shows the
+ *  in-flight step's own live label (e.g. "Searching the web…") instead of
+ *  the static summary, mirroring Claude's own "Thinking…" affordance. */
+export function TraceRun({ entries, isStreaming, isActive }: { entries: TraceEntry[]; isStreaming: boolean; isActive: boolean }) {
+  const [isOpen, setIsOpen] = useState(isActive)
+  const wasActive = useRef(isActive)
+
+  useEffect(() => {
+    if (wasActive.current && !isActive) setIsOpen(false)
+    wasActive.current = isActive
+  }, [isActive])
+
+  if (entries.length === 0) return null
+
+  const { steps, toolCalls, sources, seconds } = summarize(entries)
+  const runningEntry = isActive
+    ? [...entries].reverse().find((e) => e.kind === 'tool' && e.status === 'running')
+    : undefined
+  const liveLabel = runningEntry ? toolLabel(runningEntry, 'present') : null
+
+  return (
+    <div className="my-1 flex flex-col w-full text-[11px] text-theme-ai-bubble-text/60">
+      <button
+        type="button"
+        onClick={() => setIsOpen((o) => !o)}
+        className="flex items-center gap-1 self-start hover:text-theme-ai-bubble-text transition-colors focus:outline-none cursor-pointer font-medium"
+      >
+        <span>
+          {liveLabel ?? (
+            <>
+              {steps} step{steps === 1 ? '' : 's'} · {toolCalls} tool call{toolCalls === 1 ? '' : 's'} · {sources} source{sources === 1 ? '' : 's'}
+              {seconds > 0 ? ` · ${seconds.toFixed(1)}s` : ''}
+            </>
+          )}
+        </span>
+        <Chevron open={isOpen} />
+      </button>
+
+      <div className={`overflow-hidden transition-all duration-200 grid ${isOpen ? 'grid-rows-[1fr] opacity-100 mt-1' : 'grid-rows-[0fr] opacity-0'}`}>
+        <div className="min-h-0">
+          <TraceEntries entries={entries} isStreaming={isStreaming} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function TraceView({ trace, isStreaming }: Props) {
   const [isOpen, setIsOpen] = useState(isStreaming)
   const wasStreaming = useRef(isStreaming)

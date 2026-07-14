@@ -2,7 +2,7 @@ import { useState, useRef, useLayoutEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message, Segment, TraceEntry } from '../types'
-import TraceView, { TraceEntries } from './TraceView'
+import TraceView, { TraceRun } from './TraceView'
 import CitationChips from './CitationChips'
 
 interface Props {
@@ -120,9 +120,12 @@ function InterleavedContent({ segments, isStreaming }: { segments: Segment[]; is
     <>
       {chunks.map((chunk, i) =>
         chunk.kind === 'trace' ? (
-          <div key={i} className="my-1 text-[11px] text-theme-ai-bubble-text/60">
-            <TraceEntries entries={chunk.entries} isStreaming={isStreaming} />
-          </div>
+          // P.1 — each run of consecutive tool-typed segments gets its own
+          // outer collapsible toggle (auto-open while it's the active/last
+          // run and the message is still streaming, auto-collapse the
+          // instant a later chunk begins), one level above the per-tool/
+          // per-agent toggles TraceEntries already renders inside it.
+          <TraceRun key={i} entries={chunk.entries} isStreaming={isStreaming} isActive={isStreaming && i === chunks.length - 1} />
         ) : (
           <MarkdownContent key={i} content={chunk.content} />
         ),
