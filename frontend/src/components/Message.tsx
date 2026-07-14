@@ -1,9 +1,21 @@
-import { useState, useRef, useLayoutEffect } from 'react'
+import { useState, useRef, useLayoutEffect, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message, Segment, TraceEntry } from '../types'
 import TraceView, { TraceRun } from './TraceView'
 import CitationChips from './CitationChips'
+import { LinkIcon } from './icons'
+
+/** Flattens a react-markdown link's children into plain text, to detect a
+ *  bare-URL autolink (visible text === the URL itself) vs. real anchor text
+ *  like "Statistics Iceland" -- only the former gets swapped for an icon. */
+function textOf(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  if (typeof node === 'object' && 'props' in (node as any)) return textOf((node as any).props.children)
+  return ''
+}
 
 interface Props {
   message: Message
@@ -42,9 +54,16 @@ function chunkSegments(segments: Segment[]): Chunk[] {
   return chunks
 }
 
+// Researcher/synthesis prompts tell the model to bind facts to sources as
+// "(source: <url>)" -- with the inline link now rendered as an icon-only
+// link (below), that wrapper text is just noise; strip it down to the bare
+// URL so only the icon remains, no "(source: ...)" parenthetical around it.
+const _SOURCE_WRAPPER_RE = /\(\s*source:\s*(https?:\/\/[^\s)]+)\s*\)/gi
+
 /** Shared markdown renderer -- used both for the legacy single-block content
  *  render and for each text chunk in the interleaved segments render. */
 function MarkdownContent({ content }: { content: string }) {
+  const cleaned = content.replace(_SOURCE_WRAPPER_RE, '$1')
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -94,14 +113,28 @@ function MarkdownContent({ content }: { content: string }) {
             <code className={className}>{children}</code>
           )
         },
-        a: ({ children, href }) => (
-          <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
-            {children}
-          </a>
-        ),
+        a: ({ children, href }) => {
+          const label = textOf(children).trim()
+          const bareUrl = !!href && (label === href || label.replace(/\/+$/, '') === href.replace(/\/+$/, ''))
+          return bareUrl ? (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={href}
+              className="inline-flex items-center align-text-bottom mx-0.5 text-theme-text-muted hover:text-blue-500 dark:hover:text-blue-400"
+            >
+              <LinkIcon className="w-3.5 h-3.5" />
+            </a>
+          ) : (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 dark:text-blue-400 hover:underline">
+              {children}
+            </a>
+          )
+        },
       }}
     >
-      {content}
+      {cleaned}
     </ReactMarkdown>
   )
 }

@@ -6,6 +6,41 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — UI polish: citation links render as an icon, not a raw URL
+
+Closes a queued user request (noted in the O.3/O.4 session's dev_log entry:
+"pending: the user's UI request to render sources as a link icon instead of
+the full URL text in message content"). The researcher subagent's prompt
+(`subagents.py`) tells the model to bind facts to sources as
+`(source: <url>)`; `remark-gfm`'s autolink-literal support turns that bare
+URL into a real `<a>` whose visible text is the URL itself, which was
+cluttering replies with long raw links.
+
+`Message.tsx`'s `MarkdownContent`'s custom `a` renderer now distinguishes a
+bare-URL autolink (visible text === href, checked via a new `textOf` helper
+that flattens the anchor's `children` to plain text) from a real anchor with
+actual link text (e.g. `[Example Site](url)`). Bare-URL autolinks render as
+an icon-only link (new `LinkIcon` in `components/icons/index.tsx`,
+`theme-text-muted` styling consistent with the rest of the icon set,
+`title={href}` for a hover tooltip); real-text links keep the existing blue
+underline style untouched. A second regex (`_SOURCE_WRAPPER_RE`) strips the
+`(source: <url>)` parenthetical down to the bare URL before rendering, so
+once the icon substitution happens there's no leftover `"(source:"` text
+sitting next to it.
+
+`tsc --noEmit` + `npm run build` both clean. Live-verified against the real
+running dev stack (`docker compose`, frontend on port 5174, hot-reloaded):
+sent a forced test prompt asking the model to echo
+`(source: https://example.com)` and `(source: [Example Site](https://example.com/grass))`
+verbatim — the first rendered as an icon with the `"(source:"` wrapper text
+gone entirely; the second kept its normal blue "Example Site" link text and
+surrounding "(source: ...)" prose, exactly as designed since it's a real
+anchor, not a bare-URL autolink. Not a numbered plan step (ad hoc UI
+request) — no test file added, matching the fact `Message.tsx` had no prior
+`.test.tsx` coverage to extend.
+
+---
+
 ### [2026-07-14] — Phase N verified+committed, O.1 built, all of Phase P built (consolidated plan, one session)
 
 Worked through `plan_consolidated_next_phases_2026-07-14.md`'s sequence in
