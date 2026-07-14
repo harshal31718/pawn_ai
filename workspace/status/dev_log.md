@@ -2336,3 +2336,54 @@ it for later, complete at last").
 **Remaining open:** O.3 (verifier node, not started) is now the only item
 left in `plan_reply_quality.md`. Image Lab production fire-and-forget-writes
 fix and the dev-tunnel restart are both deferred, user-paced.
+
+---
+
+## 2026-07-14 (final) — O.3: plan-as-contract verifier node
+
+Fixes RC-3 from `plan_reply_quality.md`: the plan was decorative -- nothing
+checked a drafted answer against the prompt's explicit, checkable
+requirements, so dropped requirements (the green-hydrogen benchmark's core
+failure) were never caught. New `verify_node` + `route_after_execute`/
+`route_after_verify` in `agent/graph.py`, `VERIFY_MAX_REVISIONS=2` in
+`constants.py`: one research-tier check per pass against the original
+request + plan; PASS accepts, gaps append a specific system nudge and loop
+back into `execute` for another pass, up to 2 total. Gated to deep-research
+turns only (`difficulty="heavy"` AND actually used web_search/fetch_url/
+delegate_researcher) via `_used_research_tools` -- a heavy-but-non-research
+turn (e.g. a code task) is unaffected.
+
+Key correctness detail beyond the plan doc's own spec: a verify-gated turn's
+closing synthesis is now **buffered, not streamed live**, until the
+verifier accepts it (`stream_iteration`'s new `emit_tokens` param). `chat.py`
+builds the persisted assistant message purely from dispatched `token` SSE
+events -- without this, a draft the verifier goes on to reject would
+already have reached the user before being "discarded," which isn't
+discarding at all. Only the eventually-accepted draft is ever dispatched.
+
+9 new unit tests (gating, buffering, verify_node's PASS/gaps-found/budget-
+exhausted/upstream-failure outcomes). 407 backend tests green. Live-verified
+end-to-end: a population/percentage-calculation prompt routed through
+plan -> delegate_researcher -> calculator -> buffered synthesis ->
+"Verifying answer against the plan" -> "Verification passed" -> draft
+emitted. This live check also surfaced a real, separate, pre-existing O.1
+gap: the mid-loop model had already streamed a complete answer (after the
+calculator tool call) before the mandatory closing synthesis independently
+re-answered the same question, producing two similar-but-differently-worded
+answers in one message. Not caused by O.3 (the same double-answer was
+already possible via two live streams before O.3 existed) -- documented in
+`plan_reply_quality.md` under O.1 with a fix sketch, deliberately not fixed
+now (needs its own investigation). Committed `a4e2584`.
+
+**`plan_reply_quality.md` is now fully done** (O.1-O.4) -- moved to
+`workspace/implemented_phases/`, along with `plan_consolidated_next_phases_
+2026-07-14.md` (everything it sequenced is complete; only the separately-
+tracked Image Lab production fix remains open, in its own plan doc).
+`build_tracker.md` updated with corrected cross-references throughout.
+
+**Remaining open across the whole session:** the newly-found O.1 mid-loop-
+vs-closing-synthesis redundancy gap (not started); Image Lab production
+fire-and-forget-writes fix (diagnosed, deliberately not fixed); the dev
+tunnel needs restarting before further local Image Lab testing. Also
+pending: the user's UI request to render sources as a link icon instead of
+the full URL text in message content (queued, not yet started).

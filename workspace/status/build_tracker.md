@@ -589,7 +589,7 @@ and nothing crosses a scope boundary. Prescriptive plan — implement exactly as
 
 Plan: `workspace/implemented_phases/plan_interleaved_agent_streaming.md` (fully
 implemented — see `workspace/implemented_phases/` note below). Sequencing/
-status check: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md`
+status check: `workspace/implemented_phases/plan_consolidated_next_phases_2026-07-14.md`
 §0/§2.
 
 - [x] **N — verified and committed 2026-07-14.** Implementation (built by an
@@ -601,10 +601,10 @@ status check: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md`
   the interleaved `segments` model end to end through `types.ts`/
   `Message.tsx`/`TraceView.tsx`/`ChatPage.tsx`/`useConversationStore.ts`.
 
-## Phase O — Reply generation quality (synthesis, task separation, model use)
+## Phase O — Reply generation quality (synthesis, task separation, model use) — DONE
 
-Plan: `workspace/plan/plan_reply_quality.md`. Sequencing:
-`workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §3/§5.
+Plan: `workspace/implemented_phases/plan_reply_quality.md` (moved here on
+completion). Sequencing: `workspace/implemented_phases/plan_consolidated_next_phases_2026-07-14.md` §3/§5.
 
 - [x] O.1 — dedicated final-synthesis pass on the research tier +
   `ROLE_LEVELS["orchestrator"]` "fast"→"balanced" flip (reverses a live
@@ -621,8 +621,18 @@ Plan: `workspace/plan/plan_reply_quality.md`. Sequencing:
   the outer `TOOL_TIMEOUT_SECONDS=20`, discarding all results — fixed with
   a per-fetch `WEB_SEARCH_FETCH_TIMEOUT_SECONDS=10` bound). Committed
   `dc08569`.
-- [ ] O.3 — plan-as-contract verifier node, deep-research-gated, 1–2
-  revision passes. **Not started** — next up when resumed.
+- [x] O.3 — plan-as-contract verifier node, deep-research-gated
+  (`difficulty="heavy"` AND used web_search/fetch_url/delegate_researcher),
+  1–2 revision passes (`VERIFY_MAX_REVISIONS=2`). A verify-gated turn's
+  closing synthesis is buffered (not streamed live) until the verifier
+  accepts it — a rejected draft is never dispatched as `token` events, so
+  it never reaches the persisted message. 9 new tests, 407 backend tests
+  green. Live-verified (population/percentage prompt: plan → delegate_
+  researcher → calculator → buffered synthesis → verify pass → draft
+  emitted). Also surfaced a real, separate O.1 gap (mid-loop text can
+  already fully answer, then the mandatory closing synthesis redundantly
+  re-answers) — documented in `plan_reply_quality.md`, deferred, not fixed.
+  Committed `a4e2584`.
 - [x] O.4 — decomposition nudge for heavy analytical prompts. `_PLAN_SYSTEM_
   PROMPT` and `execute_node`'s injected plan system message (heavy-only)
   now name `delegate_researcher` as the strong default for distinct research
@@ -632,10 +642,10 @@ Plan: `workspace/plan/plan_reply_quality.md`. Sequencing:
   landing a correctly-sourced comparison. 2 new tests, 395 backend tests
   green. Committed `0a9a9a8`.
 
-## Phase P — UI polish (new 2026-07-14, spec in the consolidated plan)
+## Phase P — UI polish (new 2026-07-14, spec in the consolidated plan) — DONE
 
-Plan: `workspace/plan/plan_consolidated_next_phases_2026-07-14.md` §4 (no
-prior source doc — fully speced there).
+Plan: `workspace/implemented_phases/plan_consolidated_next_phases_2026-07-14.md`
+§4 (no prior source doc — fully speced there).
 
 - [x] P.1 — two-level collapsible trace/agent-activity toggle. New `TraceRun`
   (TraceView.tsx) wraps each interleaved run: auto-open + live status label
