@@ -1,6 +1,8 @@
 # PAWN — Current State
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
+
+**Bugfix (2026-07-14):** the "agent replies feel like two separate blocks" report was a real bug, not a styling nit — `ChatPage.tsx`'s `onProviderSwitch` still spliced a standalone `role:'notice'` chat bubble on every failover, a pre-A.8 mechanism (Step R4) never removed once A.8's `TraceView` started rendering the same event inline. Removed; failover now renders solely inside the trace, same bubble as the reply. Also: `Message.tsx`'s `break-all` narrowed to `break-words` (was force-breaking prose mid-word); `remark-gfm` found missing from `package-lock.json` entirely (present in `package.json`, used by table rendering) — `npm ci` would have failed to resolve it, fixed via `npm install`. Purple assistant-bubble color investigated and confirmed to be the user's own theme accent, not a defect — left alone. `tsc -b` + `vite build` both verified clean. Committed on `dev` as `bc77ba0`. Full detail: `workspace/status/dev_log.md` 2026-07-14 entry, `workspace/plan/gap_audit_2026-07-14.md` F-3–F-7. Still open (need the user's real Docker stack): F-1's backend traceback, full `pytest -n auto` gate, remaining A.9/M.7 live checklist items.
 
 **Bugfix (2026-07-13):** duplicate "PAWN" root folders in Drive — `core/drive_factory.get_drive_for_user` had a concurrent cache-miss race (check-then-act around `_CACHE_LOCK`) where several requests missing the cache at once (e.g. right after Drive linking) each built their own `DriveStorage` and each independently raced `get_or_create_root()`'s find-or-create, both finding no folder yet and both creating one. Fixed with a per-user `threading.Lock` serializing the build (double-checked cache read so waiters reuse the winner's instance). New `backend/tests/test_drive_factory.py` (4 tests, regression-covers the race). 368 backend tests green (up from 364). **Still needs the user:** the two duplicate folders already in Drive from before this fix must be manually merged/cleaned up — not touched automatically.
 
@@ -422,16 +424,4 @@ Test/build status: **132 backend tests passing**; frontend `npm run build` passe
 - ~~SDXL image quality not yet tuned~~ — **CHECKED 2026-07-05.** The warm-session notebook's actual generation defaults (30 steps, guidance 7.5, 1024×1024) already match standard SDXL recommendations — nothing to fix there. The real bug was upstream: `AdvancedParams.tsx`'s inference-steps slider had one flat default (20) shared across models regardless of which model was selected, undercutting SDXL's own 30-step default and overshooting FLUX.1-schnell's 4-step one if a user enabled the slider without moving it. Fixed via `initialAdvanced(modelId)` — SDXL now defaults to 30, FLUX to 4.
 - **imageLab orphan kernel:** the old mismatched FLUX title created a stray `pawn-image-flux-1-schnell` notebook on Kaggle (now unused — title is derived from the slug). Safe to delete manually. Not deleted 2026-07-05 — needs the user's own Kaggle account access (BYOK credentials aren't reachable/decryptable from outside the running app).
 - **Phase M live verification pending:** M.7's checklist (plan_memory_scoping.md §M.7 items 1-7 — legacy-tree migration, cross-chat isolation, long-chat RAG recall, cross-project sharing, add/remove-from-project retrieval transitions, cascade delete, manual-truncate + rebuild) has not been run against a real Drive-linked stack yet. See `build_tracker.md`'s M.7 entry for the exact numbered list.
-- **Embedding gap re-index needed:** any real chat indexed while `text-embedding-004` was dead (shut down 2026-01-14, only just fixed 2026-07-13 by swapping to `gemini-embedding-2`) has `memory_chunks` rows with missing/broken embeddings. `POST /memory/rebuild` per affected scope re-derives them from the Drive `rag_chunks.jsonl` source of truth — not yet run against real Drive data (folded into the M.7 live checklist above).
-- **Two low-severity code-review NOTEs deferred from M.6** (not fixed, judged out of scope/low-severity): `conversations_drive.py`'s `except (json.JSONDecodeError, Exception): pass` pattern (several call sites, pre-existing) swallows any error, not just parse errors — a transient Drive error would look identical to "not found" to `memory.py`'s new 404 checks. `memory.py`'s `_delete_scope_chunks` has no try/except unlike the sibling `_delete_chunks` pattern in `conversations.py` for the same class of derived-index cleanup.
-
----
-
-## Agents to Update This File
-
-After every completed step, update:
-1. "Last updated" date
-2. "Active step" to the next step
-3. Add new items to "What's Built"
-4. Check off items in "What's Working"
-5. Add any deferred issues
+- **Embedding gap re-index needed:** any real ch

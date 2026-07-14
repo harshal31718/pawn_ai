@@ -6,6 +6,58 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-14] — Fix: duplicate failover notice pill (the "separated reply" report), break-all, stale lockfile
+
+User reported agent replies still feel like separate blocks rather than one
+continuous flow, despite A.8's trace-in-bubble design. Root cause: `ChatPage.tsx`'s
+`onProviderSwitch` handler still spliced a standalone `role: 'notice'` chat
+message into the list on every failover — a mechanism predating the A.8 trace
+system (it shipped in Step R4 / Phase 1.6, before `TraceView` existed to render
+`provider_switch` events inline). Nobody removed it when A.8 added the inline
+trace row for the same event, so every failover rendered twice: once as a
+floating pill above the reply, once again inside the collapsible trace. Fixed
+by deleting the pill-splice entirely; failover now only shows inline in the
+trace, inside the same bubble as the reply. Grepped the rest of `ChatPage.tsx`'s
+SSE callbacks (`onStep`/`onToolCall`/`onMemoryHit`/`onModelCall`/`onCitation`/
+`onError`) — none of the others create a separate message, so this was the only
+duplication path. The `role: 'notice'` type/render branch left in place
+(harmless, backward-compat for any already-cached notice messages in a user's
+localStorage).
+
+Also fixed (F-2, minor UI): `Message.tsx`'s bubble used `break-words break-all`
+— `break-all` force-breaks normal prose mid-word at line ends; narrowed to
+`break-words` only (still wraps long unbreakable strings like URLs when
+needed). Left the assistant bubble's purple dark-mode color alone — confirmed
+it's the user's own custom theme accent (`--theme-ai-bubble` set via
+`AppContext.tsx`), not a CSS defect; F-2's flag was a false positive.
+
+Functionality check: `npx tsc -b` clean, `vite build` succeeds (verified
+against a scratch outDir — the real `dist/` couldn't be emptied inside this
+session's sandbox mount, a known permission quirk, not a code issue). Found
+and fixed a real, unrelated gap while running the check: `remark-gfm` was in
+`package.json`'s dependencies (used by `Message.tsx`'s markdown table
+rendering) but entirely absent from `package-lock.json` — `npm ci` against the
+committed lockfile would have failed to resolve it (the Docker build path
+self-heals since its `Dockerfile` runs `npm install`, not `npm ci`, but the
+lockfile drift was still real and worth closing). Ran `npm install` to
+regenerate the lockfile; committed.
+
+Infra note: this session's sandbox mount shows nearly every file in the repo
+as "modified" via `git diff` — confirmed via `git diff -w` that it's 100%
+CRLF/LF line-ending noise from the Windows↔sandbox mount boundary, zero real
+content differences outside the 3 files touched this session. Did not touch
+or commit any of the noise; staged and committed only
+`ChatPage.tsx`/`Message.tsx`/`package-lock.json` explicitly, matching each
+file's existing CRLF convention. `.git/index.lock` was also stale from a prior
+session (same family as the audit's documented mount-desync gotchas) — cleared
+via the Cowork file-delete permission before the commit would succeed.
+Committed on `dev` as `bc77ba0`.
+
+Still open from `workspace/plan/gap_audit_2026-07-14.md`, all needing the
+user's real Docker stack (unreachable from this sandbox): F-1's backend
+traceback, the full `pytest -n auto` gate, and the remaining A.9/M.7 live
+checklist items (need real BYOK/search keys + Drive + browser).
+
 ### [2026-07-13] — Docs: rewrote deployment.md for the real dedicated-VM topology
 
 User asked to check `deployment.md` and either update or delete it. On
@@ -1770,51 +1822,4 @@ Full deploy from scratch on `pawn-temp`: Docker Engine + Compose plugin, a fresh
   only, supports_tools in schema+seed, agent/tools package complete, constants all
   present (TOOL_TIMEOUT 20 / WEB_SEARCH 5 / FETCH 8000 / ROUTER 1500/200 / AGENT 8 /
   24000 / SUBAGENT 5 / TRACE 50), SSRF guard incl. IPv4-mapped-IPv6 handling (beyond
-  plan), router ROLE_LEVELS + resolve_final_model, graph v2 (classify →
-  direct_answer | plan → execute → final; budget-exhaustion nudge; digest-not-raw
-  final context), subagents strictly sequential + depth-1 structural, trace
-  persistence (_build_trace + TRACE_MAX_ENTRIES + aget_state), citation_event.
-- No implementation defects found this pass. (Earlier same-day: embedding-swap gap
-  found+fixed; elapsed_ms/elapsedMs CRITICAL found+fixed by code review.)
-
-**UI fixes implemented this session (UNCOMMITTED — commit with next batch):**
-1. KebabMenu.tsx: submenus converted from absolute side-flyouts (clipped by the
-   sidebar's overflow-hidden/auto ancestors; overflowed viewport on the left edge)
-   to inline accordions expanding below the parent item.
-2. ProjectRow/ProjectSection/Sidebar: clicking a project row now navigates to
-   /project/:projectId (ProjectPage in the main content area); the chevron alone
-   toggles sidebar expansion (stopPropagation); active project row highlighted via
-   URL match (useLocation) with the same brand style as the active chat.
-   New props threaded: onOpenProject, activeProjectId.
-   Gate note: verify with `npm run build` on the host (sandbox tsc gave false
-   negatives from a stale file-mount cache; host files verified complete by review).
-
-**Plans relocated** (both phases implemented): `workspace/plan/plan_memory_scoping.md`
-→ `workspace/implemented_phases/phase_11_memory_scoping.md`;
-`workspace/plan/plan_chat_agent_refinement.md` →
-`workspace/implemented_phases/phase_12_chat_agent_refinement.md`. Older tracker/state
-entries still reference the workspace/plan/ paths — historical, per repo precedent.
-Outstanding (unchanged): M.7 + A.9 live verification checklists with the user.
-
-## 2026-07-13 — Test-suite burden investigation + markdown rendering fix (Cowork session)
-
-- **Verdict: the suite is not slow and nothing gets deleted.** A full run of all 364
-  tests completed in ~35s wall-clock in a Linux sandbox (partially degraded env, so
-  treat as approximate — confirm locally with one timed `docker compose exec backend
-  pytest -n auto` run). The felt burden came from running the FULL suite on every
-  edit; the Gate Scoping rule in .claude/rules/testing.md (added earlier today) is
-  the fix: affected files during iteration, full suite once per step.
-- Added `pytest-xdist` to backend/requirements.txt + a rules line: full-suite runs
-  use `pytest -n auto`.
-- **Flagged risk (not fixed): backend/requirements.txt is unpinned.** A fresh
-  Docker rebuild today pulls fastapi 0.139 / langgraph 1.2.9 / pydantic 2.13 —
-  potentially breaking major versions vs. what the running containers were built
-  with. Before the next prod rebuild, pin versions from the known-good container:
-  `docker compose exec backend pip freeze > backend/requirements.lock` and either
-  install from the lock in the Dockerfile or copy the pins into requirements.txt.
-- **Markdown rendering fix (uncommitted):** assistant replies rendered tables as raw
-  pipe text — react-markdown lacks GFM support without the remark-gfm plugin.
-  Added `remark-gfm` to frontend/package.json + `remarkPlugins={[remarkGfm]}` and
-  styled table/thead/th/td/tr/blockquote/hr components in Message.tsx (scrollable
-  bordered tables, striped rows). Requires `docker compose exec frontend npm
-  install` (frontend runs in Docker).
+  
