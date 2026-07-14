@@ -11,6 +11,18 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
+## Plan: Promote `dev` → `main`, deploy to Oracle (2026-07-14)
+
+*Plan reference: `workspace/plan/deployment.md`. Status: **PLAN ONLY, not
+started** — written 2026-07-14 covering the large dev→main gap (Phases
+A/M/N/O/P + Image Lab fixes, ~70 commits, 27 of them not even pushed to
+`origin/dev` yet). Includes 3 manual DB migrations (one destructive —
+wipes prod's existing `memory_chunks`) that must run in a specific order
+before the backend restarts. Explicitly gated on the user's go-ahead before
+any live step runs — see the plan's "Go/no-go" section.*
+
+---
+
 ## Current Status
 
 **Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **A.1–A.9 fully complete including live verification, 2026-07-14** — + Phase M — Memory Scoping (**M.1–M.7 fully complete including live verification, 2026-07-14** — see `gap_audit_2026-07-14.md` §L for the full record) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
