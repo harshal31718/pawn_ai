@@ -1,9 +1,10 @@
 # Plan: Reply Generation Quality — Synthesis, Task Separation, Model Use
 
-*Branch: dev. Status: IN PROGRESS. O.1 (synthesis pass + orchestrator-tier
-fix), O.2 (fetch+extract deep research), and O.4 (decomposition nudge) DONE,
-live-verified, committed 2026-07-14. Only O.3 (verifier node) remains —
-next up when resumed.*
+*Branch: dev. Status: DONE. O.1 (synthesis pass + orchestrator-tier fix),
+O.2 (fetch+extract deep research), O.3 (plan-as-contract verifier), and O.4
+(decomposition nudge) all live-verified and committed 2026-07-14. One new
+gap found live during O.3 verification, documented under O.1 below, deferred
+to a future session.*
 *Tracker: registered as Phase O in `workspace/status/build_tracker.md`.*
 *Depends on / touches: Phase A (`workspace/implemented_phases/phase_12_chat_agent_refinement.md`) and Phase N (`workspace/implemented_phases/plan_interleaved_agent_streaming.md`) — this plan modifies `agent/graph.py`'s `execute_node`, `agent/tools/web_search.py`, `agent/subagents.py`, `core/router.py`, and `constants.py`.*
 
@@ -98,6 +99,23 @@ labeled rather than silently generic.
 *Files:* `agent/graph.py` (`execute_node` close-out), `core/router.py` (`resolve_final_model`
 already exists — re-wire it), `constants.py` (fallback ordering if needed).
 
+**Gap found live during O.3 verification (2026-07-14, not fixed):** the closing synthesis
+runs *unconditionally* on every heavy turn, even when the mid-loop model already streamed a
+complete, fully-formed prose answer (observed live: a turn that called `delegate_researcher`
+then `calculator` had the model narrate a full "Current population... Calculation...
+Result..." answer as ordinary mid-loop text — Phase N streams that live, unbuffered — and
+then O.1's mandatory closing synthesis independently re-answered the same question from
+scratch, producing two similar-but-differently-worded answers back to back in one message).
+This is pre-existing to O.1, not something O.3 introduced — O.3's buffer-then-verify-then-
+emit only changed *how* the closing synthesis's text reaches the user, not whether a
+redundant one gets generated in the first place; the same double-answer was already possible
+via two live streams before O.3 existed. Fix sketch for later: detect when the mid-loop's own
+last assistant turn already reads as a complete answer (e.g. no trailing tool-call-seeking
+phrasing, sufficient length) and skip the closing synthesis in that case, or restructure so
+mid-loop text before a *final* clean stop is never itself treated as answer-shaped (e.g.
+suppress its live streaming and always route through one designated synthesis step). Deferred
+— out of scope for O.3, needs its own investigation.
+
 ### O.2 — Deep research: fetch + extract, not snippets *(fixes RC-2, RC-5)*
 
 - Add an "auto-fetch top-N" step so `web_search` results feed `fetch_url` (already
@@ -112,7 +130,19 @@ already exists — re-wire it), `constants.py` (fallback ordering if needed).
 *Files:* `agent/tools/web_search.py`, `agent/tools/fetch_url.py` (reuse), `agent/subagents.py`,
 `constants.py`.
 
-### O.3 — Plan-as-contract + verifier node *(fixes RC-3)* — **LOCKED: deep-research only, 1–2 passes**
+### O.3 — Plan-as-contract + verifier node *(fixes RC-3)* — **LOCKED: deep-research only, 1–2 passes** — **DONE**
+
+**Implemented 2026-07-14.** `verify_node` + `route_after_execute`/`route_after_verify` in
+`agent/graph.py`, `VERIFY_MAX_REVISIONS=2` in `constants.py`. Key implementation detail beyond
+the spec below: a verify-gated turn's closing synthesis is **buffered, not streamed live**
+(`stream_iteration`'s new `emit_tokens` param) until the verifier accepts it — otherwise a
+draft the verifier goes on to reject would already have reached the user (chat.py builds the
+persisted message purely from dispatched `token` SSE events, so an un-dispatched buffered
+draft is genuinely invisible, not just hidden after the fact). 9 new unit tests (gating,
+buffering, PASS/FAIL/budget-exhausted/upstream-failure paths) + a live end-to-end check
+(Iceland-population-vs-EU-percentage prompt: plan → delegate_researcher → calculator →
+buffered synthesis → "Verifying answer against the plan" → "Verification passed" → draft
+emitted). Live check also surfaced a real, separate O.1 gap — documented above, not fixed here.
 
 **Decision (2026-07-14):** include the verifier for **deep-research requirements only** — not
 every heavy turn, and never on the light/direct-answer path. Allow **one to two** revision passes

@@ -35,7 +35,7 @@ from app.agent.subagents import DELEGATE_PREFIX, delegate_tool_specs, run_subage
 from app.agent.tools.base import ToolContext
 from app.agent.tools.execute import run_tool
 from app.agent.tools.registry import get_tools
-from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS
+from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS, VERIFY_MAX_REVISIONS
 from app.core import normalize
 from app.core.router import classify as router_classify, resolve_final_model
 from app.resolver.resolver import Resolver
@@ -85,6 +85,16 @@ class AgentState(TypedDict):
     tokens_used: int
     citations: List[Dict[str, str]]
     final_answer: Optional[str]
+    # O.3 (reply-quality plan, RC-3 fix): plan-as-contract verifier state.
+    # revision_count tracks completed verify->execute loops (bounded by
+    # VERIFY_MAX_REVISIONS). needs_revision is verify_node's transient signal
+    # to route_after_verify. verify_draft holds a gated turn's closing-
+    # synthesis text *before* it's shown to the user (see execute_node) --
+    # None on non-gated turns, where the closing synthesis streams live as
+    # before and this is never set.
+    revision_count: int
+    needs_revision: bool
+    verify_draft: Optional[str]
 
 
 def _resolve_deps(resolver: Optional[Resolver], rate_limiter: Optional[EndpointRateLimiter]):
@@ -281,6 +291,18 @@ def _memory_hit_lines(observation: str) -> List[Dict[str, str]]:
     return hits
 
 
+_RESEARCH_TOOL_NAMES = frozenset({"web_search", "fetch_url", f"{DELEGATE_PREFIX}researcher"})
+
+
+def _used_research_tools(tool_log: List[Dict[str, Any]]) -> bool:
+    """O.3 deep-research gate (shared by execute_node's buffering decision
+    and route_after_execute): True if this turn actually did research work
+    (web_search/fetch_url, directly or via delegate_researcher) -- a
+    heavy-but-non-research turn (e.g. a long code task) shouldn't pay for the
+    verifier at all."""
+    return any(t.get("name") in _RESEARCH_TOOL_NAMES for t in tool_log)
+
+
 async def execute_node(
     state: AgentState,
     resolver: Optional[Resolver] = None,
@@ -315,7 +337,11 @@ async def execute_node(
 
     working_messages = list(state["messages"])
     plan = state.get("plan") or []
-    if plan:
+    # O.3: on a verify-triggered revision pass, state["messages"] already has
+    # the first pass's plan message baked in (persisted from that pass's own
+    # working_messages) -- only prepend a fresh one on the first pass, or it
+    # would duplicate on every revision loop.
+    if plan and state.get("revision_count", 0) == 0:
         plan_message = "Plan:\n" + "\n".join(plan)
         if state["difficulty"] == "heavy":
             # O.4 (reply-quality plan, RC-4 fix): decomposition is otherwise left
@@ -370,6 +396,7 @@ async def execute_node(
         use_tools: bool,
         override_model_id: Optional[str] = None,
         override_on_model_switch=None,
+        emit_tokens: bool = True,
     ):
         """Runs one streaming call, forwarding content live as SSE `token`
         events and accumulating tokens_used from real usage when the provider
@@ -377,7 +404,15 @@ async def execute_node(
         (content, tool_calls). `override_model_id`/`override_on_model_switch`
         let the O.1 closing-synthesis call run on a different (upgraded)
         model with its own switch-detection hook, without duplicating the
-        rest of this bookkeeping."""
+        rest of this bookkeeping. `emit_tokens=False` (O.3): still generates
+        and returns the content, but neither dispatches `token` SSE events
+        nor appends to full_response -- used to buffer a verify-gated turn's
+        closing synthesis so a draft the verifier goes on to reject was never
+        shown to the user (chat.py builds the persisted message purely from
+        dispatched `token` events, so an un-dispatched draft is truly
+        invisible, not just visually hidden). Also does NOT set
+        content_reached_user_this_call, since nothing actually reached the
+        user -- a failure mid-buffered-call is safe to fail over normally."""
         nonlocal tokens_used, full_response, content_reached_user_this_call
         content_reached_user_this_call = False
         content = ""
@@ -389,10 +424,11 @@ async def execute_node(
             on_model_switch=override_on_model_switch or on_model_switch,
         ):
             if event["type"] == "content":
-                content_reached_user_this_call = True
                 content += event["delta"]
-                full_response += event["delta"]
-                await adispatch_custom_event("token", {"delta": event["delta"]})
+                if emit_tokens:
+                    content_reached_user_this_call = True
+                    full_response += event["delta"]
+                    await adispatch_custom_event("token", {"delta": event["delta"]})
             else:  # "done"
                 tool_calls = event.get("tool_calls")
                 real_total = (event.get("usage") or {}).get("total_tokens")
@@ -507,6 +543,8 @@ async def execute_node(
     if budget_exhausted:
         working_messages.append({"role": "system", "content": "budget exhausted — answer with what you have"})
 
+    verify_draft: Optional[str] = None
+
     if state["difficulty"] == "heavy":
         # O.1 (reply-quality plan, RC-1 fix): heavy/deep-research turns always
         # get a dedicated closing-synthesis pass on the upgraded research
@@ -533,11 +571,22 @@ async def execute_node(
             synthesis_switched_away = True
             await on_model_switch(from_m, to_m)
 
+        # O.3: this turn will be checked by the verifier (route_after_execute
+        # applies the same gate) iff it actually did research work. Buffer
+        # the closing synthesis instead of streaming it live in that case --
+        # see stream_iteration's emit_tokens docstring for why a rejected
+        # draft must never be dispatched as `token` events in the first
+        # place, not just hidden after the fact.
+        will_verify = _used_research_tools(tool_log)
+
         await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
         content, _ = await stream_iteration(
             use_tools=False, override_model_id=final_model_id, override_on_model_switch=on_synthesis_model_switch,
+            emit_tokens=not will_verify,
         )
         working_messages.append({"role": "assistant", "content": content})
+        if will_verify:
+            verify_draft = content
 
         if synthesis_switched_away:
             await adispatch_custom_event(
@@ -566,6 +615,124 @@ async def execute_node(
         "citations": citations,
         "tokens_used": tokens_used,
         "final_answer": full_response,
+        "verify_draft": verify_draft,
+    }
+
+
+# ── verify: plan-as-contract check for deep-research turns (O.3) ───────────
+
+_VERIFY_SYSTEM_PROMPT = (
+    "You are checking whether a drafted answer satisfies the user's explicit, "
+    "checkable requirements -- required calculations, named entities, specific "
+    "data points, comparisons, per-source citations, and anything else the "
+    "request explicitly asked for. Judge only whether concrete requirements "
+    "were met, not prose quality or style. If every explicit requirement is "
+    "satisfied, respond with exactly the single word PASS and nothing else. "
+    "Otherwise respond with a short numbered list (at most 5 items) of the "
+    "SPECIFIC gaps -- what was asked for but is missing, vague, or unverified "
+    "in the draft."
+)
+
+
+def route_after_execute(state: AgentState) -> str:
+    """O.3 deep-research gate: only heavy turns that actually did research
+    work pay for the verifier -- everything else (light turns, heavy-but-
+    non-research turns like a long code task) goes straight to END,
+    unchanged from pre-O.3 behavior."""
+    if state["difficulty"] == "heavy" and _used_research_tools(state.get("tool_log", [])):
+        return "verify"
+    return "end"
+
+
+def route_after_verify(state: AgentState) -> str:
+    return "execute" if state.get("needs_revision") else "end"
+
+
+async def verify_node(
+    state: AgentState,
+    resolver: Optional[Resolver] = None,
+    rate_limiter: Optional[EndpointRateLimiter] = None,
+) -> dict:
+    """O.3 (reply-quality plan, RC-3 fix): the "critic loop" -- one research-
+    tier check of the buffered closing-synthesis draft (execute_node's
+    verify_draft, never yet shown to the user -- see stream_iteration's
+    emit_tokens) against the original request + plan's explicit, checkable
+    requirements. PASS: dispatch the draft as the user-visible answer now.
+    Gaps found (and revision budget remaining): dispatch nothing, append a
+    specific system nudge, and loop back into execute for another pass --
+    up to VERIFY_MAX_REVISIONS times total. Never raises -- any failure here
+    accepts the draft as-is rather than losing the turn's work."""
+    resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
+    user_id = state.get("user_id")
+    revision_count = state.get("revision_count", 0)
+    draft = state.get("verify_draft") or ""
+
+    async def accept() -> dict:
+        if draft:
+            await adispatch_custom_event("token", {"delta": draft})
+        return {"needs_revision": False}
+
+    if revision_count >= VERIFY_MAX_REVISIONS:
+        # Already spent the revision budget -- accept without spending
+        # another check we wouldn't act on anyway.
+        return await accept()
+
+    original_request = ""
+    for msg in reversed(state["messages"]):
+        if msg.get("role") == "user":
+            original_request = msg.get("content") or ""
+            break
+    plan_text = "\n".join(state.get("plan") or [])
+
+    try:
+        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["final_heavy"], user_id=user_id, require_tools=False)
+    except NoEndpointError:
+        model_id = state["user_model_id"]
+
+    messages = [
+        {"role": "system", "content": _VERIFY_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"Original request:\n{original_request}\n\nPlan:\n{plan_text}\n\nDrafted answer:\n{draft}",
+        },
+    ]
+
+    await adispatch_custom_event("step", {"label": "Verifying answer against the plan", "detail": "", "agent": "main"})
+
+    tokens_used = state.get("tokens_used", 0)
+    try:
+        result = await normalize.chat_complete(
+            model_id, messages, resolver, rate_limiter, user_id=user_id,
+            on_provider_switch=_on_provider_switch_events,
+            on_model_switch=_on_provider_switch_events,
+        )
+    except (ProviderError, NoEndpointError) as e:
+        print(f"Verify step failed (upstream), accepting the draft: {e}", file=sys.stderr)
+        return {**(await accept()), "tokens_used": tokens_used}
+    except Exception as e:
+        print(f"Verify step failed (unexpected), accepting the draft: {e}", file=sys.stderr)
+        return {**(await accept()), "tokens_used": tokens_used}
+
+    tokens_used += (result.get("usage") or {}).get("total_tokens", 0) or 0
+    verdict = (result.get("content") or "").strip()
+
+    if verdict.upper().startswith("PASS"):
+        await adispatch_custom_event("step", {"label": "Verification passed", "detail": "", "agent": "main"})
+        return {**(await accept()), "tokens_used": tokens_used}
+
+    await adispatch_custom_event("step", {"label": "Verification found gaps", "detail": verdict, "agent": "main"})
+    nudge = {
+        "role": "system",
+        "content": (
+            "The drafted answer above has specific gaps versus the original "
+            "request -- address these directly, using tools again if needed:\n" + verdict
+        ),
+    }
+    return {
+        "needs_revision": True,
+        "revision_count": revision_count + 1,
+        "messages": state["messages"] + [nudge],
+        "tokens_used": tokens_used,
     }
 
 
@@ -582,6 +749,7 @@ def build_agent_graph(
     graph.add_node("direct_answer", partial(direct_answer_node, resolver=resolver, rate_limiter=rate_limiter))
     graph.add_node("plan", partial(plan_node, resolver=resolver, rate_limiter=rate_limiter))
     graph.add_node("execute", partial(execute_node, resolver=resolver, rate_limiter=rate_limiter))
+    graph.add_node("verify", partial(verify_node, resolver=resolver, rate_limiter=rate_limiter))
 
     graph.set_entry_point("classify")
     graph.add_conditional_edges(
@@ -589,6 +757,10 @@ def build_agent_graph(
     )
     graph.add_edge("direct_answer", END)
     graph.add_edge("plan", "execute")
-    graph.add_edge("execute", END)
+    # O.3: deep-research turns route through the verifier before END; every
+    # other turn (light, or heavy-but-non-research) skips straight to END,
+    # unchanged from pre-O.3 behavior.
+    graph.add_conditional_edges("execute", route_after_execute, {"verify": "verify", "end": END})
+    graph.add_conditional_edges("verify", route_after_verify, {"execute": "execute", "end": END})
 
     return graph

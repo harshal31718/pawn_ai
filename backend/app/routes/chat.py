@@ -244,6 +244,9 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "tokens_used": 0,
         "citations": [],
         "final_answer": None,
+        "revision_count": 0,
+        "needs_revision": False,
+        "verify_draft": None,
     }
     
     thread_id = f"{user_id}:{req.conversation_id}" if req.conversation_id else f"{user_id}:stateless"

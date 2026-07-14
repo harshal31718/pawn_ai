@@ -135,3 +135,9 @@ SUBAGENT_MAX_ITERATIONS = 5
 # growth for a chat with a very long tool-log.
 TRACE_MAX_ENTRIES = 50
 
+# O.3 (reply-quality plan, RC-3 fix): plan-as-contract verifier. Bounds how
+# many times the verify->execute revision loop can run for one turn (deep-
+# research turns only -- see graph.py's route_after_execute gate) so a
+# stubborn gap can't run away the request.
+VERIFY_MAX_REVISIONS = 2
+

@@ -1,9 +1,9 @@
 """Tests for the graph v2 orchestrator (Phase A / A.6; execute/final merged
-in Phase N): classify -> direct_answer | plan -> execute -> END. The old
-ReAct protocol (parser.py, routing.py, build_agent_prompt, route_action) is
-deleted, not tested here. final_node no longer exists (Phase N merged it
-into execute_node's own streaming tool loop) -- there is no separate
-final_node test section."""
+in Phase N; verify added in O.3): classify -> direct_answer | plan -> execute
+-> [verify -> execute]* -> END. The old ReAct protocol (parser.py, routing.py,
+build_agent_prompt, route_action) is deleted, not tested here. final_node no
+longer exists (Phase N merged it into execute_node's own streaming tool loop)
+-- there is no separate final_node test section."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -13,13 +13,17 @@ from app.agent.graph import (
     DummyResolver,
     _estimate_tokens,
     _memory_hit_lines,
+    _used_research_tools,
     classify_node,
     direct_answer_node,
     execute_node,
     plan_node,
     route_after_classify,
+    route_after_execute,
+    route_after_verify,
+    verify_node,
 )
-from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS
+from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, VERIFY_MAX_REVISIONS
 from app.exceptions import ProviderError
 
 
@@ -39,6 +43,9 @@ def _state(**overrides):
         "tokens_used": 0,
         "citations": [],
         "final_answer": None,
+        "revision_count": 0,
+        "needs_revision": False,
+        "verify_draft": None,
     }
     base.update(overrides)
     return base
@@ -571,6 +578,170 @@ async def test_execute_node_heavy_closing_call_degraded_emits_warning_step():
     assert any(
         name == "step" and data.get("label") == "Synthesis quality may be degraded" for name, data in dispatched
     )
+
+
+# ── O.3: verify node + deep-research gating ─────────────────────────────────
+
+def test_used_research_tools_true_for_web_search():
+    assert _used_research_tools([{"name": "web_search"}]) is True
+
+
+def test_used_research_tools_true_for_delegate_researcher():
+    assert _used_research_tools([{"name": "delegate_researcher"}]) is True
+
+
+def test_used_research_tools_false_for_non_research_tools_only():
+    """A heavy-but-non-research turn (e.g. a long code task via
+    delegate_coder) must not trigger the verifier."""
+    assert _used_research_tools([{"name": "delegate_coder"}, {"name": "calculator"}]) is False
+
+
+def test_used_research_tools_false_for_empty_log():
+    assert _used_research_tools([]) is False
+
+
+def test_route_after_execute_gates_on_heavy_and_research_tools():
+    assert route_after_execute(_state(difficulty="heavy", tool_log=[{"name": "web_search"}])) == "verify"
+    assert route_after_execute(_state(difficulty="heavy", tool_log=[{"name": "delegate_coder"}])) == "end"
+    assert route_after_execute(_state(difficulty="light", tool_log=[{"name": "web_search"}])) == "end"
+
+
+def test_route_after_verify_follows_needs_revision():
+    assert route_after_verify(_state(needs_revision=True)) == "execute"
+    assert route_after_verify(_state(needs_revision=False)) == "end"
+
+
+@pytest.mark.asyncio
+async def test_execute_node_buffers_closing_synthesis_when_research_tools_used():
+    """O.3: a heavy turn that used web_search must NOT have its closing
+    synthesis dispatched as `token` events (chat.py builds the persisted
+    message purely from those) -- it's held in verify_draft for verify_node
+    to check first."""
+    state = _state(
+        difficulty="heavy", needs_agent=True,
+        tool_log=[{"name": "web_search", "args": {}, "observation": "...", "elapsed_ms": 1, "agent": "main"}],
+    )
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    # Turn 1: the loop's own iteration (clean stop, no tool_calls). Turn 2:
+    # the mandatory O.1 closing synthesis -- this is what must be buffered.
+    fake = _fake_stream_with_tools([("no tools needed", None), ("Draft answer text.", None)])
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)
+
+    assert res["verify_draft"] == "Draft answer text."
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert "Draft answer text." not in token_deltas  # the buffered draft, never dispatched
+    assert token_deltas == ["no tools needed"]  # only the main loop's own text streamed live
+    assert res["messages"][-1] == {"role": "assistant", "content": "Draft answer text."}
+
+
+@pytest.mark.asyncio
+async def test_execute_node_streams_live_when_no_research_tools_used():
+    """Regression guard: a heavy turn that did NOT use research tools (e.g. a
+    code task) keeps pre-O.3 behavior -- closing synthesis streams live,
+    verify_draft stays None."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    fake = _fake_stream_with_tools([("no tools needed", None), ("Live answer.", None)])
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)
+
+    assert res["verify_draft"] is None
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert "".join(token_deltas) == "no tools neededLive answer."
+
+
+@pytest.mark.asyncio
+async def test_verify_node_pass_emits_draft_and_stops():
+    state = _state(difficulty="heavy", verify_draft="A complete, sourced answer.", revision_count=0)
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake_complete(*args, **kwargs):
+        return {"content": "PASS", "usage": {"total_tokens": 20}}
+
+    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)
+
+    assert res["needs_revision"] is False
+    assert ("token", {"delta": "A complete, sourced answer."}) in dispatched
+    assert any(name == "step" and data.get("label") == "Verification passed" for name, data in dispatched)
+
+
+@pytest.mark.asyncio
+async def test_verify_node_gaps_found_nudges_and_loops_back():
+    state = _state(
+        difficulty="heavy", verify_draft="An incomplete answer.", revision_count=0,
+        messages=[{"role": "user", "content": "research X and Y"}],
+    )
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake_complete(*args, **kwargs):
+        return {"content": "1. Missing Y's figures entirely.", "usage": {"total_tokens": 20}}
+
+    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)
+
+    assert res["needs_revision"] is True
+    assert res["revision_count"] == 1
+    assert not any(name == "token" for name, data in dispatched)  # rejected draft never shown
+    assert res["messages"][-1]["role"] == "system"
+    assert "Missing Y's figures" in res["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_verify_node_stops_at_max_revisions_without_another_llm_call():
+    state = _state(difficulty="heavy", verify_draft="Still imperfect.", revision_count=VERIFY_MAX_REVISIONS)
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.core.normalize.chat_complete", new=AsyncMock()) as mock_complete:
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)
+
+    mock_complete.assert_not_called()  # budget spent -- don't pay for a check we won't act on
+    assert res["needs_revision"] is False
+    assert ("token", {"delta": "Still imperfect."}) in dispatched
+
+
+@pytest.mark.asyncio
+async def test_verify_node_upstream_failure_accepts_draft_gracefully():
+    state = _state(difficulty="heavy", verify_draft="Draft under a flaky provider.", revision_count=0)
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def failing_complete(*args, **kwargs):
+        raise RuntimeError("upstream down")
+
+    with patch("app.core.normalize.chat_complete", side_effect=failing_complete):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)  # must not raise
+
+    assert res["needs_revision"] is False
+    assert ("token", {"delta": "Draft under a flaky provider."}) in dispatched
 
 
 # ── _memory_hit_lines ────────────────────────────────────────────────────────
