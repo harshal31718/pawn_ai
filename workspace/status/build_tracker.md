@@ -31,6 +31,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 - `[ ]` **Feature additions F-1/F-2** — `workspace/plan/plan_feature_additions_2026-07-15.md`.
   F-1 chat image-gen agent tool; F-2 search-tab ModelSwitcher (needs lock-vs-switch call).
   `[x]` F-3 docs wording done 2026-07-15; F-4/F-5 parked, not registered.
+- `[ ]` **Generations tab management (G1)** — `workspace/plan/imageLab/phase_G1_generations_management.md`
+  (registered 2026-07-15, user-requested feature). Delete (queued/done/error; never running),
+  edit a queued prompt, reorder the queue — needs a new `queue_pos` column + backend
+  routes + notebook dequeue-order change (see plan §4/§5). **3 open questions for the user
+  before building** (plan §7): queue/history panel split, arrows-vs-drag-and-drop for
+  reorder, prompt-only vs full-params edit.
 
 *(Superseded/archived this date: `plan_open_issues_2026-07-14.md` →
 `implemented_phases/plan_open_issues_2026-07-14_resolved.md`;

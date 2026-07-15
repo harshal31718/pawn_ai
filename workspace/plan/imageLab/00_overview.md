@@ -33,6 +33,7 @@ research-backed quality program executed entirely on the existing Kaggle pipelin
 | `phase_Q2_realism_models.md` | photoreal checkpoints as new model rows (Juggernaut/RealVis), FLUX guidance |
 | `phase_Q3_prompting_presets.md` | LLM prompt enhancer, negative defaults/embeddings, preset rework |
 | `phase_Q4_detail_post.md` | two-pass hires fix, face detailer, refiner, FreeU — the polish layer |
+| `phase_G1_generations_management.md` | feature (not quality): delete/edit/reorder generations in the Generations tab, requested 2026-07-15 |
 
 Related but living elsewhere: **F-1 chat image-gen tool** in
 `plan/plan_feature_additions_2026-07-15.md` (feature, not quality — unchanged);
