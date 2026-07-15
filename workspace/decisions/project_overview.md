@@ -41,8 +41,11 @@ The user always sees "Llama 3.3 70B" — not "HuggingFace" or "Cerebras". The ho
 implementation detail.
 
 **Your data, your Drive.**
-The platform stores nothing. All memory, conversation logs, and uploaded documents live on
-the user's own Google Drive.
+The platform durably stores nothing. All memory, conversation logs, and uploaded documents
+live on the user's own Google Drive — the single source of truth. (The backend keeps a
+rebuildable search index — embedded chunks in self-hosted Postgres/pgvector — derived
+entirely from Drive content; `rebuild_index` can re-create it from Drive at any time.
+Losing the index loses nothing.)
 
 **BYOK.**
 User's API spend. User's compute. User's storage. Platform is the product.

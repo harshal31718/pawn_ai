@@ -6,7 +6,61 @@ This becomes your interview script and project history.
 
 ---
 
-### [2026-07-14] — Deployment: dev -> main promoted, live on the pawn Oracle VM
+### [2026-07-15] — Planning session: videoLab + videoLab 2.0 plans, plan-folder triage, F-3 docs fix
+
+Planning-only session (no code, no tests needed). Three deliverables:
+
+1. **videoLab plan** written at `workspace/plan/videoLab/` (8 files): merge of imageLab's
+   Kaggle delivery mechanism + BEAM repo's (reference-only, external) video-generation
+   knowledge. Phases V1–V6: cold T2V with Wan2.2 TI2V-5B via Diffusers (research found this
+   post-BEAM model fits one T4 and unifies T2V+I2V — simpler than BEAM's Wan2GP-for-everything
+   stack), warm serve-loop sessions with video-tuned heartbeats (in-generation heartbeat
+   thread — pre-empts imageLab's #1 live bug at video timescales), Higgsfield-inspired
+   mobile-first UI, I2V + cross-lab "Animate", Wan2GP/GGUF quality tier, deferred reels.
+2. **videoLab 2.0 plan** at `workspace/plan/videoLab/v2/` (9 files): compute-unconstrained
+   premium tier. Key research insight: Higgsfield ships no foundation models — it's
+   aggregation (Seedance/Kling/Veo/Wan-hosted) + preset library + consistency + post chain,
+   i.e. PAWN's BYOK playbook applied to video. Phases P1–P7: executor abstraction
+   (kaggle|api|gpu), fal/Replicate api tier, RunPod/Modal serverless ComfyUI workers,
+   preset registry, SeedVR2/RIFE/MMAudio post chain, judge + draft→final orchestration,
+   characters/LoRA/lipsync. Hard-stop cost ledger designed in from P1.
+3. **Plan-folder triage** (user request: verify-then-streamline): audited the 3 non-videoLab
+   files in `workspace/plan/` against the actual dev tree. `plan_open_issues_2026-07-14.md`
+   (§2.1/§2.2-code/§3 all verified DONE) → archived as
+   `implemented_phases/plan_open_issues_2026-07-14_resolved.md`;
+   `plan_imagelab_session_issues.md` (all 6 steps verified code-complete; FLUX notebook
+   confirmed still `device_map="balanced"` with the fix unmerged on `worktree-flux-oom-fix`)
+   → archived as `implemented_phases/plan_imagelab_session_issues_history.md`. Live remnants
+   consolidated into new `plan/plan_imagelab_open_items.md` (I-1 FLUX OOM merge+verify,
+   I-2 real-Kaggle smoke test, I-3 prod-gated deploy items, I-4 stop hypotheses, I-5
+   stopping-branch probe). `plan_findings.md`'s 5 user ideas verified against code (no image
+   tool in agent/tools/ = Milestone B still open; ModelSwitcher prop-gated out of the search
+   tab; cold-generate guard works as designed) and converted into
+   `plan/plan_feature_additions_2026-07-15.md` (F-1 chat image-gen tool, F-2 search-tab
+   switcher, F-3 docs wording, F-4 public-mirror runbook [parked], F-5 kaggle-LLM-API
+   [parked, assessed low-value]); findings notepad reset for fresh notes.
+4. **F-3 executed** (docs-only, the one recommended item safe without a running test gate):
+   `project_overview.md` pitch + `phase_10_drive_mandatory.md` §"needs reconciling" updated —
+   Drive = durability/source of truth, pgvector = derived rebuildable index; the old open
+   question is marked RESOLVED with the adopted wording. No code touched anywhere this
+   session; dev remains as deployed.
+5. **imageLab quality plan** written at `workspace/plan/imageLab/` (7 files) after the user
+   reported bad/unreal/half-generated images. Code audit found the smoking guns BEFORE
+   research: `AdvancedParams.tsx`'s `RATIO_TO_SIZE` uses SD1.5-era sizes (512×512,
+   576×1024… — SDXL off-bucket generation is the textbook cause of cropped/deformed
+   bodies), notebooks load fp16 with the stock SDXL VAE (known fp16 overflow → black/
+   corrupt frames; fix = `madebyollin/sdxl-vae-fp16-fix`), and no scheduler is configured.
+   Web research (Juggernaut XL/RealVisXL recipes, DPM++ Karras stability flags, FLUX
+   prompting, ADetailer-style face detailing) compiled into `01_research_quality.md` with
+   sources. Phases: Q1 correctness fixes (buckets/VAE/scheduler/seed — should kill the
+   reported flaws alone), Q2 photoreal checkpoint rows via the existing registry+dataset
+   pattern, Q3 LLM prompt enhancer (via normalize.chat_complete) + default negatives +
+   preset registry, Q4 hires-fix/face-detailer/FreeU behind a single "Quality boost"
+   toggle. Fixed-seed benchmark set (Q1.5) gates every claim. `plan_imagelab_open_items.md`
+   moved to `plan/imageLab/open_items.md`; tracker updated (path fix + Q-phase
+   registration).
+
+
 
 User approved the plan in workspace/plan/deployment.md and said to proceed
 end-to-end, including: no real users yet so the destructive memory_chunks

@@ -188,6 +188,13 @@ the pgvector chunk index is a separate, intentionally-additional system not
 covered by this plan's "Drive is the only backend" claim — or (b) this plan's
 scope statement is stale/imprecise now that the pgvector index exists.
 `project_overview.md`'s pitch ("the platform stores nothing, all memory lives
-on Drive") has the same gap. Worth reconciling the wording in both docs so the
-Drive-mandatory claim's actual scope is unambiguous — not urgent, not
-blocking, just flagging so it doesn't get treated as a settled non-issue.
+on Drive") has the same gap.
+
+**RESOLVED 2026-07-15 (F-3, `plan_feature_additions_2026-07-15.md`):** reading (a) is
+correct, with sharper wording adopted everywhere: **Drive = durability / source of truth**
+(raw summary text, `rag_chunks.jsonl`, uploads, conversation logs); **Postgres/pgvector =
+derived, rebuildable search index** — `memory/indexer.py`'s `rebuild_index` re-derives it
+from Drive, and the M.3 write path guarantees Drive is written BEFORE any Postgres row.
+"Drive is the only backend" means "the only *durable* backend for user data"; the pgvector
+index is cache-class, intentionally additional, and its loss loses nothing.
+`project_overview.md`'s pitch updated to say exactly this.

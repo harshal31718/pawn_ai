@@ -11,6 +11,34 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
+## Registered plans awaiting build (2026-07-15) — planning only, no steps started
+
+- `[ ]` **videoLab V1–V4** — `workspace/plan/videoLab/` (read `00_overview.md` first;
+  V5 gated on the v2 decision point, V6 deferred). Steps V1.1–V4.4 get registered here
+  individually when a build session picks them up.
+- `[ ]` **videoLab 2.0 P1–P7** — `workspace/plan/videoLab/v2/` (after basic V1–V3 live;
+  recommended order P1 → P2 → P4 → P6-core → P3 → P5 → P7).
+- `[ ]` **Image Lab open items I-1..I-5** — `workspace/plan/imageLab/open_items.md`
+  (moved into the imageLab plan folder 2026-07-15). I-1 (FLUX OOM: rebase
+  `worktree-flux-oom-fix`, live-verify, merge) is the headline; I-2/I-4 need the user +
+  real Kaggle; I-3 is deployment-session-gated.
+- `[ ]` **imageLab Quality Q1–Q4** — `workspace/plan/imageLab/` (read `00_overview.md`
+  first). Root-caused the "bad/unreal/half-generated images" report: SD1.5-era resolution
+  sizes in `AdvancedParams.tsx` (Q1.1 headline fix), stock fp16 SDXL VAE (black images,
+  Q1.2), no scheduler configured (Q1.3), base-SDXL realism ceiling (Q2 photoreal
+  checkpoint rows), no prompt scaffolding/negatives (Q3), no face/detail pass (Q4).
+  Order Q1 → Q2 → Q3 → Q4; every step gated on the Q1.5 fixed-seed benchmark A/B.
+- `[ ]` **Feature additions F-1/F-2** — `workspace/plan/plan_feature_additions_2026-07-15.md`.
+  F-1 chat image-gen agent tool; F-2 search-tab ModelSwitcher (needs lock-vs-switch call).
+  `[x]` F-3 docs wording done 2026-07-15; F-4/F-5 parked, not registered.
+
+*(Superseded/archived this date: `plan_open_issues_2026-07-14.md` →
+`implemented_phases/plan_open_issues_2026-07-14_resolved.md`;
+`plan_imagelab_session_issues.md` → `implemented_phases/plan_imagelab_session_issues_history.md`
+— all their completed work remains recorded there.)*
+
+---
+
 ## Deployment: dev -> main promoted, live on the pawn Oracle VM (2026-07-14) -- DONE
 
 Plan reference: workspace/plan/deployment.md (drafted on a not-yet-merged
