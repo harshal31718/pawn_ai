@@ -18,9 +18,9 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   individually when a build session picks them up.
 - `[ ]` **videoLab 2.0 P1–P7** — `workspace/plan/videoLab/v2/` (after basic V1–V3 live;
   recommended order P1 → P2 → P4 → P6-core → P3 → P5 → P7).
-- `[ ]` **Image Lab open items I-1..I-5** — `workspace/plan/imageLab/open_items.md`
-  (moved into the imageLab plan folder 2026-07-15). I-1 (FLUX OOM: rebase
-  `worktree-flux-oom-fix`, live-verify, merge) is the headline; I-2/I-4 need the user +
+- `[ ]` **Image Lab open items I-2..I-5** — `workspace/plan/imageLab/open_items.md`
+  (moved into the imageLab plan folder 2026-07-15). `[x]` I-1 FLUX OOM merged + live-verified
+  2026-07-15 (real Kaggle FLUX generation succeeded, no CUDA OOM); I-2/I-4 need the user +
   real Kaggle; I-3 is deployment-session-gated.
 - `[ ]` **imageLab Quality Q1–Q4** — `workspace/plan/imageLab/` (read `00_overview.md`
   first). Root-caused the "bad/unreal/half-generated images" report: SD1.5-era resolution

@@ -12,19 +12,16 @@ no refactors of working paths.**
 
 ---
 
-## I-1 — FLUX CUDA OOM on generate (code, ready to land)
+## I-1 — FLUX CUDA OOM on generate — DONE (2026-07-15)
 
-**Status:** fix already written on branch `worktree-flux-oom-fix` (commit `ac1390b`,
-re-applies the `max_memory` cap to `image_flux_session/notebook.ipynb`) — unmerged because
-it is Kaggle-unverified (an earlier draft `84c0a4d` was reverted in `d96c1c6`).
-
-**Steps:**
-1. Rebase `worktree-flux-oom-fix` onto current `dev`; template tests + full suite green.
-2. Live-verify on a real Kaggle FLUX warm session (needs user creds + fresh tunnel):
-   model loads, then ≥2 consecutive generations succeed with no CUDA OOM.
-3. Merge to `dev`; delete the worktree branch; update docs.
-
-**Gate:** step 2 is mandatory before merge — this exact fix was reverted once already.
+Merged `worktree-flux-oom-fix` (commit `ac1390b`, `max_memory={0:"13GiB",1:"13GiB"}` cap +
+`local_files_only=True`) into `dev`; branch deleted. Full backend suite (438 tests) green
+post-merge. Live-verified same day on a real Kaggle FLUX warm session over a fresh
+`cloudflared` tunnel (the prior stale tunnel URL was the actual blocker on an earlier
+attempt, not this fix) — a FLUX.1-schnell generation completed successfully with no CUDA
+OOM. Note: that first slow run also had "Inference Steps" manually overridden to 45 —
+schnell is distilled for ~4 steps and gains nothing from more; leave the slider unchecked
+(model-aware default) or set to ~4 for FLUX.
 
 ## I-2 — Real-Kaggle live smoke test for the dead-session-detection work (manual + user)
 

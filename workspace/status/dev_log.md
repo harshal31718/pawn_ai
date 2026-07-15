@@ -6,6 +6,35 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-15] — Branch cleanup (docs/deployment-plan, worktree-flux-oom-fix merged + deleted) + FLUX OOM fix live-verified
+
+Repo housekeeping: 4 branches existed (`dev`, `main`, `docs/deployment-plan`,
+`worktree-flux-oom-fix`); user asked to keep only `dev`/`main`. Diffed both extras against
+`dev` first — neither was merged, both had real unmerged content (not stale). Merged both
+into `dev` (one `dev_log.md` conflict on the planning-doc merge, resolved by keeping both
+log entries; one `build_tracker.md` conflict on the deployment-plan merge, resolved by
+keeping `dev`'s already-deployed entry over the branch's stale "plan only" note), pushed,
+deleted both branches locally + on `origin` (also found and pruned a stale git worktree at
+`.claude/worktrees/flux-oom-fix` that was blocking one branch delete). Also found and
+deleted a third remote-only branch, `origin/imageLab` — already fully merged (verified via
+`merge-base --is-ancestor`), stale ref only, no local copy existed. Full 438-test backend
+suite green post-merge.
+
+**FLUX OOM fix (I-1) live-verified same session:** first Kaggle run failed, but root cause
+was the `cloudflared` tunnel never establishing on the network in use at the time (TLS
+handshake `i/o timeout` on port 7844, both QUIC and the http2 fallback dial the edge on the
+same port — the 2026-07-14 protocol fix only changed transport, not the blocked port) —
+unrelated to the merged fix. On a working network, `docker compose --profile tunnel up -d
+cloudflared` connected cleanly; updated `docker-compose.override.yml`'s
+`POSTGREST_PUBLIC_URL` to the new `trycloudflare.com` URL, restarted backend. SDXL generate
+confirmed working immediately. First FLUX attempt was very slow — traced to the user having
+manually overridden the UI's Inference Steps slider to 45 (FLUX.1-schnell is distilled for
+~4 steps and gains nothing from more, per the existing `DEFAULT_STEPS` model-aware default
+in `AdvancedParams.tsx`) — with steps back to a sane range, a real FLUX generation completed
+with no CUDA OOM. I-1 marked done in `plan/imageLab/open_items.md` and the build tracker.
+
+---
+
 ### [2026-07-15] — Planning session: videoLab + videoLab 2.0 plans, plan-folder triage, F-3 docs fix
 
 Planning-only session (no code, no tests needed). Three deliverables:
