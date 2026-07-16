@@ -231,6 +231,27 @@ Full backend suite green (467); `tsc --noEmit` + `npm run build` clean.
 Live-verified by the user directly against the real `docker compose watch`
 stack ("works, i tested it").
 
+**Same-session follow-up UI polish, all user-reported live:**
+- `EditProjectDetailsModal`'s overlay was `fixed inset-0` (centers over the
+  whole viewport, sidebar included) instead of centering within the content
+  area next to the sidebar. Fixed: `ProjectPage.tsx`'s root wrapper gained
+  `relative`, the modal's overlay switched to `absolute inset-0` (containing
+  block is now that wrapper, which is exactly the visible content region's
+  height regardless of its own inner `overflow-y-auto` scroll).
+- `ChatPage.tsx`'s `{project}/{chat}` header title was one plain concatenated
+  string with no spacing and no click target. Split into structured JSX: a
+  clickable project-name button (navigates to `/project/:id`) + a spaced `/`
+  separator + the chat title, matching the same visual language used
+  elsewhere.
+- `ProjectPage.tsx`'s "← All projects" was a plain in-flow breadcrumb line,
+  inconsistent with the floating top-left pill tab `ChatPage.tsx`/
+  `SettingsPage.tsx` both already use. Replaced with the same floating
+  `bg-theme-surface border rounded-full` pill (back-arrow + project name),
+  absolutely positioned exactly like the other two pages.
+
+`tsc --noEmit` + `npm run build` clean; each fix live-verified via Chrome
+against the real stack.
+
 ---
 
 ### [2026-07-16] — F-2 skipped (needs the user); F-1 chat image-gen tool + a user-reported auto-title bug fixed

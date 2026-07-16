@@ -84,6 +84,7 @@ export default function ChatPage() {
 
   const {
     conversations,
+    projects,
     activeConvId,
     messages,
     streamingConvIds,
@@ -440,7 +441,11 @@ export default function ChatPage() {
   }
 
   const activeConv = conversations.find((c) => c.id === activeConvId)
+  const activeConvProject = activeConv?.project_id
+    ? projects.find((p) => p.id === activeConv.project_id)
+    : undefined
   const headerTitle = activeConv ? activeConv.title : 'PAWN Chat'
+  const headerTitleForAttr = activeConvProject ? `${activeConvProject.name} / ${headerTitle}` : headerTitle
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -465,8 +470,26 @@ export default function ChatPage() {
               </svg>
             </button>
           )}
-          <h1 className="text-xs font-semibold text-theme-text truncate max-w-[150px] md:max-w-xs select-none" title={headerTitle}>
-            {headerTitle}
+          <h1
+            className="flex items-center gap-1.5 text-xs font-semibold text-theme-text truncate max-w-[150px] md:max-w-xs select-none"
+            title={headerTitleForAttr}
+          >
+            {activeConvProject && (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    navigate(`/project/${activeConvProject.id}`)
+                  }}
+                  className="text-theme-text-muted hover:text-theme-text hover:underline truncate transition-colors cursor-pointer"
+                >
+                  {activeConvProject.name}
+                </button>
+                <span className="text-theme-text-muted/50 select-none shrink-0">/</span>
+              </>
+            )}
+            <span className="truncate">{headerTitle}</span>
           </h1>
         </div>
       </header>

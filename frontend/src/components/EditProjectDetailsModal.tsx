@@ -37,8 +37,13 @@ export default function EditProjectDetailsModal({
   }
 
   return (
+    // absolute (not fixed) so this centers within the page's own content area
+    // (excludes the sidebar) rather than the whole viewport -- its containing
+    // block is ProjectPage's `relative` root wrapper, which is exactly the
+    // visible content region's own height (not affected by that div's inner
+    // overflow-y-auto scroll).
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 animate-in fade-in duration-150"
+      className="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 animate-in fade-in duration-150"
       onClick={onCancel}
     >
       <div

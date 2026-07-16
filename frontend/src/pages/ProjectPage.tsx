@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, useOutletContext, useNavigate, Link } from 'react-router-dom'
+import { useParams, useOutletContext, useNavigate } from 'react-router-dom'
 import { ChatBubbleIcon, FolderIcon } from '../components/icons'
 import EditProjectDetailsModal from '../components/EditProjectDetailsModal'
 import KebabMenu from '../components/KebabMenu'
@@ -73,15 +73,28 @@ export default function ProjectPage() {
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto">
-      <div className="w-full max-w-2xl mx-auto px-6 pt-16 pb-12">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-1 text-xs text-theme-text-muted mb-3 select-none">
-          <Link to="/projects" className="hover:text-theme-text transition-colors">
-            ← All projects
-          </Link>
+    <div className="relative flex-1 flex flex-col h-full overflow-y-auto">
+      {/* Floating Top Header — same pill pattern as ChatPage/SettingsPage,
+          replacing the old plain in-flow breadcrumb line (F-10 follow-up). */}
+      <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center w-full">
+        <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
+          <button
+            type="button"
+            onClick={() => navigate('/projects')}
+            className="px-0.5 py-0 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
+            title="All projects"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+          <h1 className="text-xs font-semibold text-theme-text select-none truncate max-w-[150px] md:max-w-xs">
+            {project?.name ?? 'Project'}
+          </h1>
         </div>
+      </header>
 
+      <div className="w-full max-w-2xl mx-auto px-6 pt-16 pb-12">
         {/* Header */}
         <div className="flex items-center gap-3 mb-1">
           <FolderIcon className="w-6 h-6 text-theme-text-muted shrink-0" />
