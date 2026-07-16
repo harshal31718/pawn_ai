@@ -12,15 +12,61 @@ To add a model: drop a notebook under `kaggle_templates/image_<id>/notebook.ipyn
 short-circuit) and add one row below. No other backend code changes.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from app.constants import (
     KAGGLE_RUN_TIMEOUT_SECONDS,
     KAGGLE_TEMPLATES_DIR,
 )
 from app.exceptions import UnknownModelError
+
+
+@dataclass(frozen=True)
+class PromptSchema:
+    """Q3.1/Q3.3: the target shape a vision enhancer call should rewrite a raw
+    prompt into for one generation model. `system_prompt` is generated from
+    the other fields at registration time (below) rather than hand-authored
+    separately, per plan_vision_prompt_enhancement.md §3.3 -- one source of
+    truth, no drift between schema and prose."""
+    format: Literal["keyword_scaffold", "natural_language", "cinematic_grammar"]
+    max_length: Optional[int]
+    wants_negative: bool
+    vocabulary_hints: list[str] = field(default_factory=list)
+    system_prompt: str = ""
+
+
+def _build_enhancer_system_prompt(
+    target_model: str, schema_format: str, medium_hint: str, dof_line: str,
+    wants_negative: bool, vocabulary_hints: list[str], max_length: Optional[int],
+) -> str:
+    """Fills the shared template from phase_Q3_prompting_presets.md §3.1.2. Called
+    once per model row below, not per-request -- the resulting text is static."""
+    format_instruction = {
+        "keyword_scaffold": "keyword-scaffold (comma-separated phrases, not full sentences)",
+        "natural_language": "flowing natural-language sentence (no comma-separated keyword lists)",
+        "cinematic_grammar": "cinematic-grammar description",
+    }[schema_format]
+    negative_instruction = (
+        "Also produce a separate negative-prompt list of what to avoid."
+        if wants_negative else ""
+    )
+    length_line = f" Keep the rewritten prompt under {max_length} words." if max_length else ""
+    return (
+        f"Your objective is to rewrite the user's image description into a highly "
+        f"detailed, {format_instruction} prompt optimized for {target_model}.\n\n"
+        f"Cover, in order: Subject (detailed description of the main subject/scene), "
+        + (f"Medium ({medium_hint}), " if medium_hint else "")
+        + f"Style (visual treatment), Lighting (specific setup, not vague), "
+        + (f"{dof_line} " if dof_line else "")
+        + f"Color (palette/grading), Composition/Background.\n\n"
+        f"{negative_instruction}\n\n"
+        f"Preserve the user's original intent and any explicit details they gave — "
+        f"add, don't replace. Vocabulary to draw from when it fits: "
+        f"{', '.join(vocabulary_hints)}.{length_line} Output ONLY the rewritten "
+        f"prompt text, nothing else — no preamble, no explanation, no quotes."
+    )
 
 
 # SDXL is trained on ~1024²-area buckets; off-bucket sizes (e.g. the old
@@ -66,6 +112,8 @@ class ImageModel:
     # negative prompt server-side. None for models that don't accept negatives at
     # all (FLUX is guidance-free — Q1.4 already hides the UI field for it).
     default_negative: Optional[str] = None
+    # Q3.1: target shape for the vision-grounded prompt enhancer's rewrite.
+    prompt_schema: Optional[PromptSchema] = None
 
 
 IMAGE_MODELS: dict[str, ImageModel] = {
@@ -89,6 +137,31 @@ IMAGE_MODELS: dict[str, ImageModel] = {
             "unrealistic proportions, extra fingers, low quality, deformed, "
             "extra limbs, bad anatomy, blurry, watermark, text"
         ),
+        prompt_schema=PromptSchema(
+            format="keyword_scaffold",
+            max_length=150,
+            wants_negative=True,
+            vocabulary_hints=[
+                "shot on Canon EOS 5D Mark IV, 85mm lens", "Sony A7 III, 50mm f/1.8",
+                "100mm macro", "Rembrandt lighting", "Butterfly lighting",
+                "Split lighting", "Rim lighting", "natural golden hour light",
+                "f/1.8 shallow depth of field, bokeh background",
+                "f/11 deep focus", "skin pores, film grain",
+                "silk", "denim", "leather", "brushed metal",
+            ],
+            system_prompt=_build_enhancer_system_prompt(
+                target_model="SDXL",
+                schema_format="keyword_scaffold",
+                medium_hint="photography, illustration, or render",
+                dof_line="Depth of field (shallow/deep, with f-stop),",
+                wants_negative=True,
+                vocabulary_hints=[
+                    "camera/lens", "named lighting setups", "depth of field",
+                    "texture/material words",
+                ],
+                max_length=150,
+            ),
+        ),
     ),
     "flux": ImageModel(
         id="flux",
@@ -104,6 +177,24 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         session_slug="pawn-flux-session",
         session_gpu=True,
         resolution_buckets=_SDXL_NATIVE_BUCKETS,
+        prompt_schema=PromptSchema(
+            format="natural_language",
+            max_length=100,
+            wants_negative=False,
+            vocabulary_hints=[
+                "realism descriptors", "natural lighting", "rich color grading",
+                "atmospheric effect",
+            ],
+            system_prompt=_build_enhancer_system_prompt(
+                target_model="FLUX.1-schnell",
+                schema_format="natural_language",
+                medium_hint="",
+                dof_line="",
+                wants_negative=False,
+                vocabulary_hints=["realism descriptors", "natural lighting", "color grading"],
+                max_length=100,
+            ),
+        ),
     ),
 }
 

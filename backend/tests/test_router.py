@@ -248,6 +248,8 @@ def test_role_levels_matches_plan_spec():
         "subagent_summarizer": "fast",
         # F-11: direct_answer_node's image-attached branch, require_vision=True.
         "vision_answer": "balanced",
+        # Q3.1: vision_enhance.enhance_with_vision's Groq-then-Gemini chain.
+        "vision_enhancer_primary": "balanced",
     }
 
 

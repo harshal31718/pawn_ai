@@ -355,6 +355,35 @@ async def _complete_one_model(
     raise _ModelExhausted(last_error or NoEndpointError(f"No available endpoint for model '{model_id}'"))
 
 
+async def chat_complete_single_model(
+    model_id: str,
+    messages: list,
+    resolver: Resolver,
+    rate_limiter: EndpointRateLimiter,
+    user_id: str | None = None,
+) -> dict:
+    """Non-streaming completion restricted to ONE model's own endpoints --
+    endpoint-level failover only, no cross-model fallback. `chat_complete`
+    below can't be used when the caller picked `model_id` for a reason its
+    `resolver.fallback_models()` fallback can't respect -- e.g. Q3.1's
+    vision_enhance.py, which requires `require_vision=True`, but
+    fallback_models() returns every other same-capability-level model with no
+    vision filter and would silently hand an image-containing prompt to a
+    text-only model. Raises ProviderError/NoEndpointError if every endpoint of
+    this model fails; callers wanting a different model must pick one
+    explicitly (e.g. via a fresh `pick_model_by_capability` call) and call
+    this again -- there is no automatic model-level failover here.
+    """
+    try:
+        return await _complete_one_model(
+            model_id, messages, resolver, rate_limiter, user_id, tools=None, tool_choice="auto",
+        )
+    except _ModelExhausted as me:
+        if isinstance(me.error, (ProviderError, NoEndpointError)):
+            raise me.error
+        raise ProviderError(kind="upstream_error", message=str(me.error))
+
+
 async def chat_complete(
     model_id: str,
     messages: list,

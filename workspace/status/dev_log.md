@@ -4357,3 +4357,83 @@ fire-and-forget-writes fix (diagnosed, deliberately not fixed); the dev
 tunnel needs restarting before further local Image Lab testing. Also
 pending: the user's UI request to render sources as a link icon instead of
 the full URL text in message content (queued, not yet started).
+
+## 2026-07-16 — imageLab Q3.1 pass 1: vision-grounded prompt enhancer, backend plumbing
+
+Before starting, resolved the 3 open questions blocking
+`plan_vision_prompt_enhancement.md` (§5) -- all three turned out to already
+be answered by code shipped for F-11 (chat's image-attach feature), which
+landed after that plan was drafted: the Groq vision model id (`llama-4-scout`,
+already registered), the default-on scope (both text-only and image+text,
+confirmed), and the provider-pinning mechanism (reuse the existing
+`ROLE_LEVELS` + `resolver.pick_model_by_capability(require_vision=True)`
+pattern F-11 already established -- no new mechanism needed). Updated that
+plan file's §2/§5 in place to mark items superseded rather than leaving them
+stale.
+
+Split Q3.1 into two build-step passes since the full scope (backend
+plumbing + routes/generate.py wiring + frontend toggle) was too large for
+one pass. This entry is pass 1, backend plumbing only:
+
+- New `backend/app/core/vision_enhance.py`: `enhance_with_vision(prompt,
+  image_b64, target_model_schema, resolver, rate_limiter, user_id=None)`.
+  Chain: Groq (`llama-4-scout`, preferred automatically by the resolver's
+  existing F-6 Groq-priority sort) -> Gemini (any other vision-capable
+  model) -> raw prompt unchanged if both fail (`degraded=True,
+  used_model=None`). Never raises. Works with `image_b64=None` (text-only
+  enhancement) too. Rule-based gate (`needs_enhancement`/
+  `_looks_already_scaffolded`, new `ENHANCE_SKIP_WORD_THRESHOLD=25` constant)
+  decides whether a prompt is vague enough to warrant the LLM call at all --
+  the free/instant default tier per phase_Q3_prompting_presets.md §3.1.4,
+  with the LLM enhancement itself reserved as the "extra" tier (the
+  Auto/Always/Off 3-state toggle that reads this gate is pass 2's job, in
+  routes/generate.py + the composer).
+- New `PromptSchema` dataclass on `image_models.ImageModel` (`format`,
+  `max_length`, `wants_negative`, `vocabulary_hints`, `system_prompt`) --
+  `sdxl` gets `keyword_scaffold` + `wants_negative=True` (camera/lighting/DOF/
+  texture vocabulary from Q1's research); `flux` gets `natural_language` +
+  `wants_negative=False`. `system_prompt` is generated once at
+  module-registration time from the other fields via
+  `_build_enhancer_system_prompt`, not hand-duplicated prose, per the plan's
+  single-source-of-truth rule.
+- New `ROLE_LEVELS["vision_enhancer_primary"] = "balanced"` in
+  `constants.py`, reusing F-11's `vision_answer` require_vision=True pattern
+  exactly.
+
+**Critical bug found by code-reviewer, fixed before this pass was marked
+done:** the natural first-draft call site used `normalize.chat_complete()`
+for the actual LLM call. That function's own cross-model failover
+(`resolver.fallback_models()`) isn't vision-filtered -- if the picked Groq
+vision model's endpoints failed, `chat_complete` could silently retry
+against any other same-capability-level model, including a text-only one,
+handing it the image content block while still reporting
+`used_model=<the original vision pick>` and `degraded=False`. Fixed by
+adding a new, narrower `normalize.chat_complete_single_model()` (endpoint-
+level failover only for the one given model_id, no cross-model step --
+wraps the existing private `_complete_one_model` helper and converts its
+`_ModelExhausted` into `ProviderError`/`NoEndpointError`) and switching
+`vision_enhance.py` to call that instead. Also added `exclude_model_ids` to
+`resolver.pick_model_by_capability()` so the Groq->Gemini chain can
+explicitly step past a failed pick -- confirmed backward-compatible (every
+existing caller uses keyword args only). Added a regression test
+(`test_chat_complete_single_model_never_falls_over_to_a_different_model`)
+asserting `resolver.fallback_models` is never called, so a future revert to
+`chat_complete` would be caught.
+
+550 backend tests green (up from 549 -- one pre-existing exact-dict-equality
+test in `test_router.py` needed its `ROLE_LEVELS` fixture updated). Noted but
+not fixed: `app/registry/seed.py` (the fixture registry every test actually
+resolves against) predates F-11 and has no vision-capable models or
+`supports_vision` field at all -- a pre-existing staleness gap between the
+test fixture and the real `data/registry/*.json` files, worked around here
+by mocking the resolver in the one test that needed a real chain (matching
+`test_agent.py`'s existing convention for vision-path tests), not by fixing
+the fixture. code-reviewer: 1 CRITICAL found -> fixed, re-reviewed PASS.
+security-auditor light-touch pass (no new secret surface; base64 image bytes
+are only ever embedded in an LLM request body, never written to disk) --
+PASS. build-validator PASS.
+
+Not done in this pass, deliberately: `routes/generate.py` wiring (calling
+`enhance_with_vision` before building `params_dict`, storing both
+`original_prompt`/`enhanced_prompt` on the job) and the frontend composer's
+Auto/Always/Off 3-state toggle -- both are pass 2, not yet started.

@@ -120,6 +120,7 @@ class Resolver:
         user_id: Optional[str] = None,
         require_tools: bool = False,
         require_vision: bool = False,
+        exclude_model_ids: Optional[set[str]] = None,
     ) -> str:
         """
         Selects the first canonical model_id matching the capability level that has
@@ -128,7 +129,10 @@ class Resolver:
         models with supports_tools=False are excluded (used for orchestrator/agent
         picks that need native tool calling). When require_vision is True, models with
         supports_vision=False are excluded (used for the vision-grounded prompt
-        enhancer — see plan_vision_prompt_enhancement.md).
+        enhancer — see plan_vision_prompt_enhancement.md). exclude_model_ids skips
+        models already tried by the caller -- used by vision_enhance.py to step past
+        a Groq pick (preferred by the F-6 sort below when the user holds a Groq key)
+        onto the next vision-capable model (effectively Gemini) after Groq fails.
         """
         matching = (
             self._registry.internal_models(level)
@@ -151,6 +155,8 @@ class Resolver:
             if require_tools and not model.supports_tools:
                 continue
             if require_vision and not model.supports_vision:
+                continue
+            if exclude_model_ids and model.id in exclude_model_ids:
                 continue
             if self._has_usable_endpoint(model.id, user_id):
                 return model.id

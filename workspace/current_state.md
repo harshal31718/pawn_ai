@@ -2,6 +2,44 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q3.1 pass 1 — Vision-grounded prompt enhancer, backend plumbing —
+DONE (2026-07-16). Not yet wired into routes/generate.py or the frontend
+(pass 2, separate step).** New `backend/app/core/vision_enhance.py`:
+`enhance_with_vision(prompt, image_b64, target_model_schema, resolver,
+rate_limiter, user_id=None)` rewrites a raw imageLab prompt via a
+vision-capable LLM, chain Groq (`llama-4-scout`, preferred by the resolver's
+existing F-6 Groq-priority sort) → Gemini → raw prompt unchanged on both
+failing (`degraded=True`) — never raises. Rule-based gate
+(`needs_enhancement`/`_looks_already_scaffolded`, `ENHANCE_SKIP_WORD_THRESHOLD
+= 25`) decides whether a prompt is vague enough to warrant the LLM call before
+any call happens. New `PromptSchema` dataclass on `image_models.ImageModel`
+(sdxl: `keyword_scaffold` + `wants_negative=True`; flux: `natural_language` +
+`wants_negative=False`), each with a generated (not hand-duplicated)
+`system_prompt`. New `ROLE_LEVELS["vision_enhancer_primary"]` reusing F-11's
+`require_vision=True` resolver filter. **Critical bug found and fixed in code
+review:** the obvious `normalize.chat_complete()` call would have silently
+broken the vision-only guarantee — that function's own cross-model
+`fallback_models()` failover isn't vision-filtered and could hand image
+content to a same-capability-level text-only model, while still reporting
+`degraded=False`/`used_model=<the original vision pick>`. Fixed by adding a
+narrower `normalize.chat_complete_single_model()` (endpoint-level failover
+only, no cross-model step) and switching `vision_enhance.py` to call that
+instead; `resolver.pick_model_by_capability()` also gained an
+`exclude_model_ids` param so the Groq→Gemini chain can step past a failed
+pick without a new provider-pinning mechanism. Also resolved the 3 open
+questions blocking this plan (Groq vision model id, default-on scope,
+provider-pinning mechanism) — see `plan_vision_prompt_enhancement.md` §5,
+all closed by code already shipped for F-11. 550 backend tests green (up
+from 549 — `app/registry/seed.py`, the fixture registry tests actually run
+against, is still stale relative to the real `data/registry/*.json` files
+F-11/this step depend on in production — not fixed here, noted as a gap).
+code-reviewer: 1 CRITICAL found → fixed, re-reviewed PASS. security-auditor:
+light-touch pass (no new secret surface, base64 image bytes only ever
+embedded in an LLM request, never written to disk) — PASS. build-validator
+PASS. See `workspace/plan/plan_vision_prompt_enhancement.md` and
+`workspace/plan/imageLab/phase_Q3_prompting_presets.md` §Q3.1, and
+`dev_log.md`'s 2026-07-16 "imageLab Q3.1 pass 1" entry.
+
 **imageLab Q3.3b — Subject-type axis + per-model preset suffix variants — DONE
 (2026-07-16). Closes Q3.3.** New orthogonal subject-type preset axis (portrait/
 nature/product/architecture), composable with any style preset; 4 new style

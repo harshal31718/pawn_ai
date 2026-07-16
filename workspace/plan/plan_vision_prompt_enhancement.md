@@ -29,32 +29,35 @@ updated to point here once this is approved (see §6).
   (A future videoLab pass would need its own Wan/Kling-class schemas — deferred,
   not designed here.)
 
-## 2. Current state (verified against code, 2026-07-15) — real prerequisite gaps
+## 2. Current state — items 1-4 SUPERSEDED 2026-07-16, shipped by F-11
 
-1. **No multimodal support in the LLM plumbing today.** `llm_core.chat_complete`/
-   `normalize.chat_complete` (the only sanctioned path per `.claude/CLAUDE.md`
-   rule #1) send plain-text `messages` — there is no code path anywhere that
-   builds an OAI-style multimodal `content: [{"type":"text",...},
+Re-verified against code on 2026-07-16: F-11 (chat's image-attach feature,
+shipped after this plan was drafted) already built the exact multimodal
+plumbing items 1-4 called out as gaps. Nothing left to build for the
+plumbing layer itself — only imageLab's own `vision_enhance.py` chain
+(§3.2) and wiring (§3.4) are still net-new. Kept below for history/citation,
+struck through where done:
+
+1. ~~No multimodal support in the LLM plumbing today.~~ **Done.**
+   `direct_answer_node` (`backend/app/agent/graph.py:180-215`) builds an
+   OAI-style multimodal `content: [{"type":"text",...},
    {"type":"image_url","image_url":{"url": "data:image/...;base64,..."}}]`
-   message. This has to be added before any image-aware enhancement can work
-   at all.
-2. **No vision-capable Groq model is registered today.** Every Groq endpoint
-   in `data/registry/endpoints.json` (`llama-3.3-70b`, `gpt-oss-120b`,
-   `deepseek-r1-distill`) is text-only. Groq's free tier does offer
-   vision-capable models (e.g. a Llama-4 Scout/Maverick-class multimodal
-   model, or a Llama-3.2-vision-class model at the time of writing — confirm
-   the exact currently-live Groq model id via `registry-refresh` before
-   building, since Groq's free-tier vision lineup changes). None of this
-   exists in the registry yet — it's a new row, not a flag flip.
+   message today for image-attached chat turns. `chat_complete` passes
+   `content` through untranslated (no provider-specific handling needed,
+   confirming §3.1's original passthrough assumption).
+2. ~~No vision-capable Groq model is registered today.~~ **Done.** `llama-4-scout`
+   (`meta-llama/llama-4-scout-17b-16e-instruct`, endpoint id
+   `ep-llama-4-scout-groq`, `data/registry/endpoints.json:297-309`,
+   `last_verified: 2026-07-15`) is live, `supports_vision: true` in
+   `models.json`.
 3. **Gemini is already multimodal-capable** via the same OAI-compat endpoint
-   (`gemini-2.5-flash`/`gemini-3-flash`, provider `google`) — no new
-   registration needed there, just the multimodal-content plumbing from
-   item 1.
-4. **`ModelEntry` has no vision-capability flag.** Mirrors the existing
-   `supports_tools: bool` pattern (`registry/schemas.py:19`-ish) — a new
-   `supports_vision: bool = False` field is needed so the resolver can filter
-   for it, the same way `require_tools` works today in
-   `pick_model_by_capability`.
+   (`gemini-2.5-flash`/`gemini-2.5-pro`/`gemini-3-flash`, provider `google`,
+   all `supports_vision: true` in `models.json`) — unchanged from the
+   original note, now additionally confirmed live via F-11.
+4. ~~`ModelEntry` has no vision-capability flag.~~ **Done.**
+   `registry/schemas.py:15` — `supports_vision: bool = False`. Resolver
+   filters on it via `require_vision` (`resolver/resolver.py:130-153`),
+   exactly the `require_tools` pattern this plan called for.
 5. **imageLab's own Q3.1 already half-specs a text-only enhancer** (`enhance(
    prompt, model_row, style_preset) -> {prompt, negative}` via
    `normalize.chat_complete`, per-model `prompt_style` field) — this plan
@@ -170,21 +173,35 @@ Left as a note for that future session, not a build target here.
   content-not-secret; still worth a quick note to security-auditor at build
   time given it's a new kind of payload through that path.
 
-## 5. Open questions before this is buildable
+## 5. Open questions — RESOLVED 2026-07-16
 
-1. Exact currently-live Groq vision-capable model id/free-tier availability —
-   needs a `registry-refresh`-style check at build time (Groq's model lineup
-   changes; this plan intentionally doesn't hardcode one to avoid drafting
-   against a stale target).
-2. Does enhancement apply to *every* generation (default-on, per Q3.1's
-   design), or only when an image is attached? The request says "when we
-   take image or/and prompt" — read as: applies to both text-only and
-   image+text cases. Confirm before building if that's not the intent.
-3. Where does `require_vision`-style provider pinning to "Groq specifically,
-   not just any vision-capable model" live cleanly — a new `ROLE_LEVELS`
-   entry, a dedicated `prefer_provider` param, or is capability-level
-   filtering alone sufficient? (Same open design question F-6 already raised
-   for orchestrator-provider pinning — worth resolving once, reused by both.)
+All three blockers below are already closed by code shipped for F-11 (chat's
+image-attach feature), which landed after this plan was first drafted. §3.1's
+"no multimodal plumbing exists" premise is now stale — the plumbing exists;
+only the imageLab-specific `vision_enhance.py` chain + wiring is still net-new.
+
+1. **Groq vision model id — resolved, already registered.** `llama-4-scout`
+   (`meta-llama/llama-4-scout-17b-16e-instruct`) is live on Groq,
+   `endpoints.json` id `ep-llama-4-scout-groq`, `last_verified: 2026-07-15`,
+   `supports_vision: true` in `models.json`. No fresh `registry-refresh`
+   needed to unblock this plan.
+2. **Applies to every generation, both text-only and image+text — resolved,
+   confirmed.** Matches the original request's "when we take image or/and
+   prompt" and Q3.1's default-on design.
+3. **Provider-pinning mechanism — resolved, reuse the F-11/F-6 pattern
+   exactly.** `ROLE_LEVELS["vision_answer"] = "balanced"` +
+   `resolver.pick_model_by_capability(level, require_vision=True)`
+   (`constants.py:141-146`, `resolver/resolver.py:130-153`) already does
+   "pick a vision-capable model" for chat. §3.2's `enhance_with_vision`
+   should add its own `ROLE_LEVELS["vision_enhancer_primary"]` entry and
+   call the same resolver method — no new mechanism, no `prefer_provider`
+   param needed. Groq-first-then-Gemini is expressed as two sequential
+   `pick_model_by_capability(require_vision=True)` calls scoped to
+   provider="groq" then unscoped, not a single call with provider
+   preference baked in (mirrors how F-11 itself has no explicit
+   Groq-vs-Gemini ordering need — this plan's chain is one level more
+   specific than F-11's, so it can't reuse F-11's call site, only its
+   underlying resolver capability).
 
 ## 6. Suggested integration with existing plans
 

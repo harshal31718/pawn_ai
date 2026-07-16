@@ -165,7 +165,30 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     (the style-preset conflict, fixed + re-verified). build-validator PASS. No
     security-auditor run (pure data/param-merge, no secrets/config/auth touched).
     Full record: `dev_log.md`'s 2026-07-16 "imageLab Q3.2" entry, `current_state.md`.
-  - `[ ]` Q3.1 — LLM prompt enhancer (blocked on vision-plumbing prerequisites)
+  - `[~]` **Q3.1 — LLM prompt enhancer** (split into 2 build-step passes; vision-
+    plumbing prerequisites resolved 2026-07-16 — already shipped by F-11, no
+    longer blocked)
+    - `[x]` **Q3.1 pass 1 — backend plumbing** ✓ (2026-07-16)
+      New `core/vision_enhance.py`'s `enhance_with_vision()`: Groq
+      (`llama-4-scout`) → Gemini → raw-prompt chain via
+      `resolver.pick_model_by_capability(require_vision=True,
+      exclude_model_ids=...)`, never raises. New `PromptSchema` dataclass on
+      `image_models.ImageModel` (sdxl: keyword_scaffold+negatives; flux:
+      natural_language, no negatives). New `ROLE_LEVELS["vision_enhancer_
+      primary"]`, `ENHANCE_SKIP_WORD_THRESHOLD`, rule-based gate
+      (`needs_enhancement`/`_looks_already_scaffolded`). **Critical bug found
+      by code-reviewer + fixed:** `normalize.chat_complete()`'s cross-model
+      fallback isn't vision-filtered and could silently swap in a non-vision
+      model while still reporting success — fixed with a new, narrower
+      `normalize.chat_complete_single_model()` (endpoint-level failover only)
+      and a regression test pinning the behavior. 550 backend tests green (up
+      from 549). code-reviewer: 1 CRITICAL → fixed, re-reviewed PASS.
+      security-auditor light-touch PASS (no new secret surface). build-
+      validator PASS. Full record: `dev_log.md`'s 2026-07-16 "imageLab Q3.1
+      pass 1" entry, `current_state.md`.
+    - `[ ]` Q3.1 pass 2 — wire into `routes/generate.py` (call
+      `enhance_with_vision`, store `original_prompt`/`enhanced_prompt` on the
+      job) + frontend composer's Auto/Always/Off 3-state toggle. Not started.
   - `[~]` **Q3.3 — Style + subject-type presets rebuilt** (scoped into sub-steps, like Q3.2)
     - `[x]` **Q3.3a — Registry-load foundation** ✓ (2026-07-16)
       Moved the 5 existing style presets (photorealistic/cinematic/anime/oil_painting/
@@ -217,7 +240,7 @@ done, per the user's instruction (see `workspace/plan/README.md`).
       dropdown shows all 9 presets. Full record: `dev_log.md`'s 2026-07-16
       "imageLab Q3.3b" entry, `current_state.md`. **Q3.3 (a+b) now closed.**
   - `[ ]` Q3.4 — Optional: negative embeddings (spike)
-- `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
+- `[~]` **Vision-grounded prompt enhancement (imageLab)** —
   `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,
   user-requested). Image+prompt → vision model analysis → refined prompt → generation
   model, provider chain Groq (default) → Gemini (fallback) → raw prompt (final
@@ -225,13 +248,13 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   enhancer mechanics (its per-model prompt research is unchanged and feeds this plan's
   §3.3). The plan file also scopes a videoLab reuse of this same plumbing — parked,
   not active, until videoLab is picked back up at the end.
-  **Real prerequisite gaps found:** `llm_core`/`normalize.chat_complete` have no
-  multimodal (`image_url` content-part) support today; no vision-capable Groq model is
-  registered (current Groq rows are text-only); `ModelEntry` has no `supports_vision`
-  flag. **3 open questions for the user before building** (plan §5): exact live Groq
-  vision model id (registry-refresh at build time), default-on-for-every-generation vs
-  image-only trigger, and where Groq-specific provider-pinning logic should live (same
-  open question F-6 raised for orchestrator routing).
+  **Prerequisite gaps + 3 open questions — RESOLVED 2026-07-16, all already shipped
+  by F-11** (chat's image-attach feature, landed after this plan was drafted):
+  multimodal message building, `ModelEntry.supports_vision`, and
+  `resolver.pick_model_by_capability(require_vision=True)` all exist today; the Groq
+  vision model (`llama-4-scout`) is already registered. See this plan file's §2/§5 for
+  the resolution detail. Implementation is tracked under imageLab Q3.1 above (pass 1
+  done 2026-07-16, pass 2 not started) rather than duplicated here.
 - `[ ]` **Generations tab management (G1)** — `workspace/plan/imageLab/phase_G1_generations_management.md`
   (registered 2026-07-15, user-requested feature). Delete (queued/done/error; never running),
   edit a queued prompt, reorder the queue — needs a new `queue_pos` column + backend
