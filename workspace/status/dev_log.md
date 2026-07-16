@@ -124,6 +124,61 @@ Projects/Chats lists are no longer pushed down.
 
 ---
 
+### [2026-07-16] — F-6 Groq priority in the model resolver
+
+**Plan premise turned out wrong, caught before writing any code:** §2
+assumed `ModelEntry` already carries a `provider` field, so the fix could be
+a one-line `model.provider == "groq"` filter. Checked `registry/schemas.py`
+directly — `provider` only exists on `EndpointEntry`; a single `ModelEntry`
+can span several providers via its endpoints (e.g. `llama-3.3-70b` has
+cerebras/github/groq/huggingface/openrouter endpoints under one model id).
+Implemented instead via a new `Resolver._has_groq_endpoint(model_id)` (True
+if any of the model's *active* endpoints — `registry.endpoints_for()`
+already filters to active — are on Groq), feeding a stable `sorted(...,
+key=lambda m: not self._has_groq_endpoint(m.id))` right before the existing
+per-model loop in `pick_model_by_capability`, only when the user holds a
+Groq key. The existing `require_tools`/`require_vision`/
+`_has_usable_endpoint` fallback loop underneath is completely untouched, so
+a prioritized-but-currently-rate-limited/keyless Groq endpoint still
+correctly falls through to the next model for free.
+
+`pick_by_capability` (the list-returning plural sibling) confirmed
+untouched, per the plan's own scope note — it has no real production
+caller today.
+
+3 new tests in `test_resolver.py` against the seeded test registry
+(`app/registry/seed.py`'s `INITIAL_MODELS`/`INITIAL_ENDPOINTS`, not the real
+`data/registry/*.json` — conftest.py isolates every test worker into its own
+temp `DATA_DIR` that `seed_registry()` populates fresh, a detail worth
+re-learning each time since it means `test_resolver.py`'s registry shape is
+whatever seed.py hardcodes, not the current production catalog).
+code-reviewer found 1 real WARN: one of the 3 tests
+(`..._falls_through_normally`) would have passed identically even with the
+reorder logic deleted, since the seed data's only Groq-having balanced
+model (`llama-3.3-70b`) already sits before the other unusable candidates
+in plain file order — a redundant, misleadingly-documented non-regression-
+guard. Removed rather than kept. 1 NOTE fixed: `_has_groq_endpoint`'s
+docstring corrected to acknowledge `endpoints_for()` already filters to
+active endpoints (it previously claimed active status wasn't checked at
+all). Full backend suite green (445, down from 446 after the removed test).
+
+**Scope confirmed as the plan's own note flagged:** this does affect
+final-synthesis and subagent model choice too, not just the orchestrator's
+own plan/execute-loop step — every one of them routes through
+`pick_model_by_capability`, and no narrower `prefer_provider` param was
+requested, so the global reorder stands as designed.
+
+**Manual live verification intentionally not done this session** — adding
+a real Groq API key into Settings is a standing prohibited action (entering
+API keys/credentials into any field, regardless of context) per this
+project's safety rules, so that check stays with the user: add a Groq key,
+ask a heavy/agentic question, and confirm the trace shows "via Groq".
+
+**Next up:** F-2 (search-tab ModelSwitcher, needs re-verification first) and
+F-1 (chat image-gen tool), per `plan/chat/00_overview.md`'s suggested order.
+
+---
+
 ### [2026-07-15] — Registry refresh: full provider catalog sweep + benchmark-grounded tiering + `registry-refresh` skill rewrite
 
 User-requested: the registry was under-using free-tier providers (only Gemini

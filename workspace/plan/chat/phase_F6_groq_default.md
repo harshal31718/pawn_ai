@@ -60,3 +60,47 @@ This also changes final-synthesis and subagent model choice (they all route thro
 before building, since "default orchestrator" in the title is narrower than the actual
 effect. If the user only wants the plan/execute-loop model affected, `pick_model_by_capability`
 would need a `prefer_provider` param instead of a global change — worth a quick confirm.
+
+## 4. DONE (2026-07-16)
+
+**Plan premise corrected during implementation:** §2 assumed `ModelEntry`
+already carries a `provider` field directly (`model.provider == "groq"`).
+That's factually wrong against current code — `provider` only exists on
+`EndpointEntry`; one `ModelEntry` can span several providers via its
+endpoints (e.g. `llama-3.3-70b` has cerebras/github/groq/huggingface/
+openrouter endpoints under one model). Implemented instead as:
+
+- New `Resolver._has_groq_endpoint(model_id)` — True if any of the model's
+  active endpoints (`registry.endpoints_for()` already filters to active)
+  are on Groq.
+- In `pick_model_by_capability`, right after computing `matching`: if the
+  user holds a Groq key, `matching = sorted(matching, key=lambda m: not
+  self._has_groq_endpoint(m.id))` — a stable sort promoting Groq-endpoint-
+  having models first, otherwise preserving file order. The existing
+  per-model `require_tools`/`require_vision`/`_has_usable_endpoint` loop is
+  completely untouched, so the fallback-to-next-model guarantee (rate-
+  limited/cooled-down/keyless Groq endpoint) still holds for free.
+- `pick_by_capability` (plural, no real production caller) left untouched
+  per the plan's own scope note.
+
+3 new tests in `test_resolver.py` (later trimmed to 2 after code-reviewer
+flagged one as a no-op that would pass even with the reorder logic
+deleted — removed rather than kept as a misleading regression guard).
+Full backend suite green (445, `docker compose exec backend pytest -n auto`
+— required the now-familiar `docker compose build backend` + container
+recreate since `backend/tests/` isn't bind-mounted). code-reviewer PASS
+(1 WARN fixed — the no-op test, above; 1 NOTE fixed — `_has_groq_endpoint`'s
+docstring corrected to acknowledge `endpoints_for()` already filters to
+active endpoints).
+
+**Scope confirmed as originally noted:** this does affect final-synthesis
+and subagent model choice too, not just the plan/execute-loop step — all of
+them route through `pick_model_by_capability`, and no narrower
+`prefer_provider` param was requested, so the global reorder stands.
+
+**Manual live verification still needs the user** — adding a real Groq API
+key in Settings is something this session must not do itself (entering API
+keys/credentials is a prohibited action regardless of context per this
+project's standing safety rules). Automated tests + code review are the
+verification for this step; the user can confirm live by adding their own
+Groq key and checking the trace's "via Groq" tag on a heavy/agentic turn.

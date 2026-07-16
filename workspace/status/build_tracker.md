@@ -25,9 +25,14 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   - `[ ]` F-2 search-tab ModelSwitcher (`phase_F2_model_switcher.md`) — re-verified
     2026-07-15, original premise did not reproduce against current code; needs the
     user to re-confirm live before this is buildable.
-  - `[ ]` F-6 Groq default model (`phase_F6_groq_default.md`) — refined 2026-07-15,
-    scope narrowed to `pick_model_by_capability` only (its `pick_by_capability`
-    sibling has no production caller).
+  - `[x]` F-6 Groq default model (`phase_F6_groq_default.md`) — done 2026-07-16
+    in `resolver.py`'s `pick_model_by_capability` only (its `pick_by_capability`
+    sibling untouched, no production caller). Plan's premise that `ModelEntry`
+    carries a `provider` field was wrong (only `EndpointEntry` does) — fixed
+    via a new `_has_groq_endpoint(model_id)` check instead. 2 new tests, full
+    suite green (445). code-reviewer PASS (1 WARN + 1 NOTE fixed). Manual
+    live verification needs the user's own Groq key (entering API keys is a
+    standing prohibited action for this session).
   - `[x]` F-7 agent half-generation fix (`phase_F7_agent_half_generation_fix.md`) —
     fixed 2026-07-16 in `agent/graph.py`: a heavy turn's clean-stop draft is now
     appended as a `system` context note instead of a trailing `assistant`
