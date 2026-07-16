@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams, useOutletContext, useNavigate, Link } from 'react-router-dom'
-import { ChatBubbleIcon, ChevronRightIcon, FolderIcon } from '../components/icons'
+import { ChatBubbleIcon, FolderIcon } from '../components/icons'
+import EditProjectDetailsModal from '../components/EditProjectDetailsModal'
 import KebabMenu from '../components/KebabMenu'
 import MessageInput from '../components/MessageInput'
 import { clearMemory, rebuildMemory } from '../api/client'
@@ -19,13 +20,15 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const { store } = useOutletContext<LayoutContext>()
-  const { projects, conversations, createConversation, renameProject } = store
+  const { projects, conversations, createConversation, renameProject, updateProjectDescription } = store
   const { displayName, availableModels } = useAppContext()
 
   const [draft, setDraft] = useState('')
   const [selectedProvider, setSelectedProvider] = useState(availableModels[0]?.model_id || 'gemini-2.5-flash')
   const [isEditingName, setIsEditingName] = useState(false)
   const [nameValue, setNameValue] = useState('')
+  const [isEditingDetails, setIsEditingDetails] = useState(false)
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false)
 
   const project = projects.find((p) => p.id === projectId)
   const chats = conversations
@@ -49,6 +52,13 @@ export default function ProjectPage() {
     setIsEditingName(false)
   }
 
+  function saveDetails(name: string, description: string) {
+    if (!projectId) return
+    if (name && name !== project?.name) renameProject(projectId, name)
+    if (description !== (project?.description ?? '')) updateProjectDescription(projectId, description)
+    setIsEditingDetails(false)
+  }
+
   function handleSend(content: string) {
     if (!content.trim()) return
     const newId = createConversation(projectId)
@@ -67,15 +77,13 @@ export default function ProjectPage() {
       <div className="w-full max-w-2xl mx-auto px-6 pt-16 pb-12">
         {/* Breadcrumb */}
         <div className="flex items-center gap-1 text-xs text-theme-text-muted mb-3 select-none">
-          <Link to="/chat" className="hover:text-theme-text transition-colors">
-            Chats
+          <Link to="/projects" className="hover:text-theme-text transition-colors">
+            ← All projects
           </Link>
-          <ChevronRightIcon className="w-3 h-3" />
-          <span className="text-theme-text font-medium truncate max-w-[220px]">{project?.name ?? 'Project'}</span>
         </div>
 
         {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-1">
           <FolderIcon className="w-6 h-6 text-theme-text-muted shrink-0" />
           {isEditingName ? (
             <input
@@ -100,7 +108,7 @@ export default function ProjectPage() {
           <KebabMenu
             title="Project options"
             items={[
-              { label: 'Rename', onClick: startRename },
+              { label: 'Edit details', onClick: () => setIsEditingDetails(true) },
               {
                 label: 'Memory',
                 submenu: [
@@ -111,6 +119,23 @@ export default function ProjectPage() {
             ]}
           />
         </div>
+
+        {/* Description (F-10) */}
+        {project?.description && (
+          <div className="mb-6 text-sm text-theme-text-muted leading-relaxed max-w-xl">
+            <p className={descriptionExpanded ? '' : 'line-clamp-2'}>{project.description}</p>
+            {project.description.length > 140 && (
+              <button
+                type="button"
+                onClick={() => setDescriptionExpanded((v) => !v)}
+                className="text-xs underline text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer mt-0.5"
+              >
+                {descriptionExpanded ? 'Show less' : 'Show more'}
+              </button>
+            )}
+          </div>
+        )}
+        {!project?.description && <div className="mb-6" />}
 
         {/* Composer — same component ChatPage uses, creates+navigates on first send/upload */}
         <div className="mb-8">
@@ -155,6 +180,14 @@ export default function ProjectPage() {
           </div>
         )}
       </div>
+
+      <EditProjectDetailsModal
+        open={isEditingDetails}
+        initialName={project?.name ?? ''}
+        initialDescription={project?.description ?? ''}
+        onSave={saveDetails}
+        onCancel={() => setIsEditingDetails(false)}
+      />
     </div>
   )
 }

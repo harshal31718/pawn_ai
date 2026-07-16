@@ -90,10 +90,19 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     against both the trigger and the portaled dropdown, since they're no longer in
     the same DOM subtree). `tsc --noEmit` + `npm run build` clean; live-verified via
     Chrome — the dropdown now renders cleanly above the sticky "Projects" label.
-  - `[ ]` F-10 Projects gallery page + sidebar cap (`phase_F10_projects_gallery_page.md`)
-    — plan-only, from the user's follow-up request; needs 3 open questions answered
-    (where description is edited, sidebar trigger for the gallery, card layout) before
-    it's buildable. Individual sidebar project-row click behavior must stay unchanged.
+  - `[x]` F-10 Projects gallery page + project descriptions (`phase_F10_projects_gallery_page.md`)
+    — done 2026-07-16, all 3 open questions answered live by the user. Backend:
+    `description` field end-to-end (`projects_drive.py`, `routes/projects.py`), 4 new
+    tests. Frontend: new `ProjectsGalleryPage.tsx` (`/projects` route — sort, search,
+    card grid), new `EditProjectDetailsModal.tsx` wired into `ProjectPage.tsx`'s kebab
+    (Name + Description, no Archive per the user's instruction), full sync-queue op
+    for `updateProjectDescription` mirroring `renameProject`'s pattern. Sidebar's
+    "Projects" label now navigates to the gallery (collapse toggle split into its own
+    chevron so neither behavior was lost). Also fixed, found live while testing this:
+    `ModelSwitcher.tsx`'s dropdown always opened upward, overflowing off-screen when
+    the trigger wasn't near the viewport bottom — now flips direction + caps height
+    based on actual available space. `tsc`/build clean, full backend suite green
+    (467). Live-verified by the user directly.
   - `[x]` F-3 docs wording done 2026-07-15; F-4/F-5 parked, not registered.
   - `[x]` **Chat auto-title fix (not a numbered F-item — user-requested live 2026-07-16,
     from a screenshot showing every chat stuck as "New Chat")**. Root cause: `routes/

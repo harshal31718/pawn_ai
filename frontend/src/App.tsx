@@ -6,6 +6,7 @@ import PrivacyPolicyPage from './pages/PrivacyPolicyPage'
 import Layout from './pages/Layout'
 import ChatPage from './pages/ChatPage'
 import ProjectPage from './pages/ProjectPage'
+import ProjectsGalleryPage from './pages/ProjectsGalleryPage'
 import SettingsPage from './pages/SettingsPageWrapper'
 import ImageLabPage from './pages/ImageLabPageWrapper'
 
@@ -40,6 +41,7 @@ function AppRoutes() {
         <Route element={<AuthedShell />}>
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:id" element={<ChatPage />} />
+          <Route path="/projects" element={<ProjectsGalleryPage />} />
           <Route path="/project/:projectId" element={<ProjectPage />} />
           <Route path="/project/:projectId/chat/:id" element={<ChatPage />} />
           <Route path="/imagelab" element={<ImageLabPage />} />

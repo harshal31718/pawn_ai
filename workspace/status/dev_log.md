@@ -179,6 +179,60 @@ F-1 (chat image-gen tool), per `plan/chat/00_overview.md`'s suggested order.
 
 ---
 
+### [2026-07-16] — F-2 closed (not a bug), F-10 built end-to-end, live UI fixes
+
+**F-2 re-investigated live** with the user's concrete example (Groq configured,
+some models missing from the switcher): traced end to end via Chrome + Settings
++ the registry data. The only models missing are the 6 whose sole provider is
+OpenRouter, which has no key configured — both the frontend's provider-based
+filter (`AppContext.tsx`) and the backend's `pick_model_by_capability`
+(confirmed against F-6's same-session investigation) are correctly and
+consistently gated on the same BYOK constraint. Not a bug — closed with no
+code changes.
+
+**F-10 — Projects gallery page + project descriptions**, both open questions
+answered live by the user (with reference screenshots from Claude's own
+Projects UI):
+- Backend: `description` field added end-to-end —
+  `projects_drive.py`'s `create_project` gained the param; `rename_project`
+  generalized into `update_project(name=None, description=None)`, either
+  field independently updatable; `routes/projects.py`'s Pydantic models
+  extended to match. 4 new/updated tests.
+- Frontend: `Project`/`CachedProject` gained `description?`; a full
+  `updateProjectDescription` sync-queue op added (types.ts, useConversation
+  Store, syncQueue.ts) mirroring `renameProject`'s exact optimistic-update/
+  offline-retry shape, not bolted on separately. New
+  `EditProjectDetailsModal.tsx` (Name + Description, no Archive — the user
+  explicitly said to skip it after seeing the reference UI's Archive option)
+  wired into `ProjectPage.tsx`'s kebab, replacing "Rename". New
+  `ProjectsGalleryPage.tsx` at `/projects` — sort (last-updated/name), search,
+  responsive card grid (name, 2-line-clamped description, date). Sidebar's
+  "Projects" label now navigates there directly; its collapse toggle was
+  split into its own small chevron button so that behavior wasn't lost.
+
+**Also fixed live during F-10 testing (found by the user, root-caused and
+fixed same session):**
+- `ModelSwitcher.tsx`'s dropdown always opened upward, assuming the trigger
+  sits near the viewport bottom (true in the main chat composer, not
+  guaranteed on `ProjectPage` or a short window) — overflowed off the top
+  of the screen. Now computes open direction and a capped max-height from
+  the trigger's own `getBoundingClientRect()` at open time.
+- `KebabMenu.tsx`'s dropdown was getting hidden behind F-9's sticky
+  "Projects"/"Chats" section labels — root cause: a `position: sticky` +
+  `z-index` element always paints above any *non-positioned* ancestor's
+  entire subtree per CSS stacking rules, so the kebab's own `z-50` could
+  never out-rank the sticky labels while nested inside the (non-positioned)
+  scrollable list, no matter how high its z-index was set locally. Fixed by
+  rendering the open dropdown through a React portal into `document.body`
+  (`position: fixed`, computed from the trigger's bounding rect) — escapes
+  the ancestor stacking-context problem entirely rather than fighting it.
+
+Full backend suite green (467); `tsc --noEmit` + `npm run build` clean.
+Live-verified by the user directly against the real `docker compose watch`
+stack ("works, i tested it").
+
+---
+
 ### [2026-07-16] — F-2 skipped (needs the user); F-1 chat image-gen tool + a user-reported auto-title bug fixed
 
 **F-2 skipped again**, per its own plan file's explicit gate: the file-level

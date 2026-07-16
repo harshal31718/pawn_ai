@@ -77,6 +77,7 @@ export interface ConversationStore {
   quietTitleRefresh: () => void
   createProject: (name?: string) => string
   renameProject: (id: string, name: string) => void
+  updateProjectDescription: (id: string, description: string) => void
   deleteProject: (id: string) => void
   moveChatToProject: (convId: string, projectId: string) => void
   removeChatFromProject: (convId: string) => void
@@ -354,6 +355,13 @@ export function useConversationStore(
     syncRef.current?.enqueue({ kind: 'renameProject', projectId: id, name })
   }, [])
 
+  const updateProjectDescription = useCallback((id: string, description: string) => {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, description, _localUpdatedAt: Date.now() } : p)),
+    )
+    syncRef.current?.enqueue({ kind: 'updateProjectDescription', projectId: id, description })
+  }, [])
+
   // Cascade, mirroring the backend: removes the project and every chat inside
   // it (their memory chunks go too, server-side) — there is no undo.
   const deleteProject = useCallback(
@@ -454,6 +462,7 @@ export function useConversationStore(
     quietTitleRefresh,
     createProject,
     renameProject,
+    updateProjectDescription,
     deleteProject,
     moveChatToProject,
     removeChatFromProject,

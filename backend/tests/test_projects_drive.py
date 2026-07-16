@@ -130,11 +130,32 @@ def test_rename_project_does_not_move_folder(fake_drive):
     projects_folder = projects_drive._projects_folder(fake_drive)
     folder_id_before = fake_drive.find_file(meta["id"], projects_folder)
 
-    updated = projects_drive.rename_project(fake_drive, meta["id"], "New Name")
+    updated = projects_drive.update_project(fake_drive, meta["id"], name="New Name")
 
     assert updated["name"] == "New Name"
     folder_id_after = fake_drive.find_file(meta["id"], projects_folder)
     assert folder_id_before == folder_id_after
+
+
+def test_create_project_with_description(fake_drive):
+    meta = projects_drive.create_project(fake_drive, name="Has Desc", description="A short blurb")
+    assert meta["description"] == "A short blurb"
+    fetched = projects_drive.get_project_meta(fake_drive, meta["id"])
+    assert fetched["description"] == "A short blurb"
+
+
+def test_update_project_description_only_leaves_name_unchanged(fake_drive):
+    meta = projects_drive.create_project(fake_drive, name="Keep This Name")
+    updated = projects_drive.update_project(fake_drive, meta["id"], description="New description")
+    assert updated["name"] == "Keep This Name"
+    assert updated["description"] == "New description"
+
+
+def test_update_project_name_only_leaves_description_unchanged(fake_drive):
+    meta = projects_drive.create_project(fake_drive, name="Old", description="Keep this")
+    updated = projects_drive.update_project(fake_drive, meta["id"], name="New")
+    assert updated["name"] == "New"
+    assert updated["description"] == "Keep this"
 
 
 def test_delete_project_cascades_to_contained_chats(fake_drive):

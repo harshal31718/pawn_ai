@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { CachedConversation, CachedProject } from '../types'
 import ProjectRow from './ProjectRow'
 import NewProjectRow from './NewProjectRow'
-import { FolderPlusIcon } from './icons'
+import { ChevronRightIcon, FolderPlusIcon } from './icons'
 
 interface Props {
   projects: CachedProject[]
@@ -40,6 +41,7 @@ export default function ProjectSection({
   onClearMemory,
   onRebuildMemory,
 }: Props) {
+  const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [isCreating, setIsCreating] = useState(false)
@@ -61,13 +63,27 @@ export default function ProjectSection({
   return (
     <div className="px-2 pb-1">
       <div className="sticky top-0 z-10 bg-theme-surface flex items-center justify-between px-1 py-1">
-        <button
-          type="button"
-          onClick={() => setCollapsed((v) => !v)}
-          className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer select-none"
-        >
-          Projects
-        </button>
+        <div className="flex items-center gap-0.5 min-w-0">
+          {/* Collapse toggle — split out from the label so the label itself
+              can navigate to the Projects gallery page (F-10) without losing
+              the sidebar's own collapse affordance. */}
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            className="p-0.5 rounded hover:bg-theme-surface-hover text-theme-text-muted hover:text-theme-text transition-colors shrink-0 cursor-pointer"
+            title={collapsed ? 'Expand' : 'Collapse'}
+          >
+            <ChevronRightIcon className={`w-2.5 h-2.5 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/projects')}
+            className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer select-none truncate"
+            title="View all projects"
+          >
+            Projects
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => {

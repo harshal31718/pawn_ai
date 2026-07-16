@@ -571,6 +571,7 @@ export async function updateConversationTitle(convId: string, title: string): Pr
 export interface Project {
   id: string
   name: string
+  description?: string
   created_at: string
   updated_at?: string
   chat_count?: number
@@ -602,6 +603,17 @@ export async function renameProject(projectId: string, name: string): Promise<Pr
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ name }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+export async function updateProjectDescription(projectId: string, description: string): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ description }),
   })
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))

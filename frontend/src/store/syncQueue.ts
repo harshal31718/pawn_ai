@@ -15,6 +15,7 @@ import {
   removeChatFromProject,
   renameProject as renameProjectApi,
   updateConversationTitle,
+  updateProjectDescription as updateProjectDescriptionApi,
 } from '../api/client'
 import type { QueuedOp, SyncOp } from '../types'
 
@@ -63,6 +64,7 @@ function opProjectId(op: SyncOp): string | undefined {
   switch (op.kind) {
     case 'createProject':
     case 'renameProject':
+    case 'updateProjectDescription':
     case 'deleteProject':
       return op.projectId
     case 'moveChat':
@@ -135,6 +137,17 @@ export class SyncQueue {
       } else {
         this.queue.push(this.wrap(op))
       }
+    } else if (op.kind === 'updateProjectDescription') {
+      const existing = this.queue.find(
+        (x) => x.op.kind === 'updateProjectDescription' && x.op.projectId === op.projectId,
+      )
+      if (existing) {
+        existing.op = op
+        existing.attempts = 0
+        existing.nextAttemptAt = 0
+      } else {
+        this.queue.push(this.wrap(op))
+      }
     } else if (op.kind === 'createProject') {
       if (!this.queue.some((x) => x.op.kind === 'createProject' && x.op.projectId === op.projectId)) {
         this.queue.push(this.wrap(op))
@@ -195,7 +208,11 @@ export class SyncQueue {
       this.queue = this.queue.filter((x) => x.id !== item.id)
       if (item.op.kind === 'create' || item.op.kind === 'rename' || item.op.kind === 'moveChat') {
         this.opts.onSynced(item.op.convId)
-      } else if (item.op.kind === 'createProject' || item.op.kind === 'renameProject') {
+      } else if (
+        item.op.kind === 'createProject' ||
+        item.op.kind === 'renameProject' ||
+        item.op.kind === 'updateProjectDescription'
+      ) {
         this.opts.onProjectSynced?.(item.op.projectId)
       }
       this.setStatus(this.queue.length ? this.status : null)
@@ -233,6 +250,8 @@ export class SyncQueue {
       await createProjectApi(op.name, op.projectId)
     } else if (op.kind === 'renameProject') {
       await renameProjectApi(op.projectId, op.name)
+    } else if (op.kind === 'updateProjectDescription') {
+      await updateProjectDescriptionApi(op.projectId, op.description)
     } else if (op.kind === 'deleteProject') {
       await deleteProjectApi(op.projectId) // 404 resolves as success in the client
     } else {

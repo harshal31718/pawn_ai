@@ -86,3 +86,47 @@ Cosmetic/organizational, not a live bug — rank below F-9 (scroll fix, done) an
 reliability-critical items (F-7), similar tier to F-6/F-8. Backend touches Drive
 storage + a Pydantic model (small, additive) but the frontend gallery page is genuinely
 new surface area, sized for its own build-step run rather than a "quick filler" item.
+
+## 6. DONE (2026-07-16) — open questions answered live, then built
+
+User answered the 3 open questions live (with reference screenshots from Claude's own
+Projects UI):
+1. Description is edited via a kebab "Edit details" modal (Name + Description fields,
+   Save/Cancel) on `ProjectPage` — not at creation time. "Archive" (visible in the
+   reference UI) explicitly skipped per the user's instruction.
+2. Clicking the sidebar's "Projects" label itself now navigates to the new gallery
+   page; the collapse toggle was split out into its own small chevron button right
+   before the label so neither behavior was lost.
+3. Card layout: name (uppercase) + description (2-line clamp, no "Show more" needed at
+   card size) + last-updated date, responsive 1/2-column grid, plus a "Sort by"
+   (Last updated / Name) control and a search box — matching the reference screenshots.
+
+**Backend:** `projects_drive.py`'s `create_project` gained `description: str = ""`;
+`rename_project` generalized into `update_project(drive, project_id, name=None,
+description=None)` (either field independently updatable, matching the plan's "extend
+the existing PATCH" call). `routes/projects.py`'s `ProjectCreate`/`ProjectUpdate` gained
+`description`. 4 new/updated tests in `test_projects_drive.py`, full suite green (467).
+
+**Frontend:** `Project`/`CachedProject` gained `description?: string`; new
+`updateProjectDescription` client helper + a full sync-queue op (`SyncOp`,
+`useConversationStore`, `syncQueue.ts`) mirroring `renameProject`'s exact
+optimistic-update/offline-retry pattern — not bolted on ad hoc. New
+`EditProjectDetailsModal.tsx` (Name + Description, no Archive) wired into
+`ProjectPage.tsx`'s kebab menu (replacing "Rename"); description renders under the
+title with a 2-line clamp + "Show more/less" toggle past 140 chars. New
+`ProjectsGalleryPage.tsx` (route `/projects`) — header, sort dropdown, search, card
+grid; "New project" creates + navigates straight to the new project (same
+create-then-navigate pattern `createConversation` already uses). `ProjectSection.tsx`'s
+sticky "Projects" label now navigates there, with collapse split into its own chevron
+button. `tsc --noEmit` + `npm run build` clean.
+
+**Also fixed in the same pass (user-reported live, found while testing this):**
+`ModelSwitcher.tsx`'s dropdown always opened upward assuming the trigger sits near the
+viewport bottom (true in the main chat composer, not true on `ProjectPage` or a short
+window) — overflowed off the top of the screen. Now computes direction (up/down) and a
+capped max-height from the trigger's actual `getBoundingClientRect()` on open, so it's
+never clipped either direction.
+
+Live-verified by the user directly ("works, i tested it") — Edit details modal, the
+Projects gallery navigation, and card rendering all confirmed working against the real
+`docker compose watch` stack.

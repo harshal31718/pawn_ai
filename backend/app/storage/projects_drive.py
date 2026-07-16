@@ -1,7 +1,7 @@
 """Google Drive-backed project storage (Phase M — memory scoping).
 
   PAWN/conversations/projects/{project_id}/
-    project.json            # {id, name, created_at, updated_at}
+    project.json            # {id, name, description, created_at, updated_at}
     {conv_id}/               # per-chat folder, same shape as a standalone chat
       meta.json
       messages.jsonl
@@ -38,6 +38,7 @@ def create_project(
     drive: DriveStorage,
     project_id: Optional[str] = None,
     name: str = "New Project",
+    description: str = "",
 ) -> Dict[str, Any]:
     """Create a project folder + project.json. Client-generated project_id
     supported so a retried request never creates a duplicate project — same
@@ -60,6 +61,7 @@ def create_project(
     meta = {
         "id": project_id,
         "name": name,
+        "description": description,
         "created_at": timestamp,
         "updated_at": timestamp,
     }
@@ -97,9 +99,18 @@ def get_project_meta(drive: DriveStorage, project_id: str) -> Optional[Dict[str,
         return None
 
 
-def rename_project(drive: DriveStorage, project_id: str, new_name: str) -> Optional[Dict[str, Any]]:
+def update_project(
+    drive: DriveStorage,
+    project_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Rewrites project.json only — never relocates the Drive folder
-    (renames must never invalidate the drive_factory file-ID cache)."""
+    (renames must never invalidate the drive_factory file-ID cache).
+    F-10: generalized from the old rename-only `rename_project` to also cover
+    the project description field; either argument left None leaves that
+    field unchanged (so a pure rename and a pure description edit both go
+    through this one function without clobbering the other field)."""
     projects_folder = _projects_folder(drive)
     project_folder_id = drive.find_file(project_id, projects_folder)
     if not project_folder_id:
@@ -109,7 +120,10 @@ def rename_project(drive: DriveStorage, project_id: str, new_name: str) -> Optio
         return None
     try:
         meta = json.loads(meta_content)
-        meta["name"] = new_name
+        if name is not None:
+            meta["name"] = name
+        if description is not None:
+            meta["description"] = description
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()
         drive.upload_text("project.json", json.dumps(meta, indent=2), project_folder_id)
         return meta

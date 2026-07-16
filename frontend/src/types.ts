@@ -129,6 +129,7 @@ export type SyncOp =
   | { kind: 'delete'; convId: string }
   | { kind: 'createProject'; projectId: string; name: string }
   | { kind: 'renameProject'; projectId: string; name: string }
+  | { kind: 'updateProjectDescription'; projectId: string; description: string }
   | { kind: 'deleteProject'; projectId: string }
   | { kind: 'moveChat'; convId: string; projectId: string | null }
 
