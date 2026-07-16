@@ -18,103 +18,30 @@ for now; its plan folder (`workspace/plan/videoLab/`, V1–V6 + `v2/` P1–P7) i
 as-is and will only be picked up at the very end, after chat/ and imageLab/ are both
 done, per the user's instruction (see `workspace/plan/README.md`).
 
-- `[ ]` **Feature additions & fixes F-1/F-2/F-6/F-7/F-8/F-9/F-10** — `workspace/plan/chat/`
-  — **build first, ahead of imageLab** (see `workspace/plan/README.md`).
-  - `[x]` F-1 chat image-gen agent tool (`phase_F1_image_generation.md`) — done
-    2026-07-16: new `agent/tools/generate_image.py`, gated on `key_store.has_kaggle_creds`;
-    new `components/ImageJobChip.tsx` renders the result inline in `TraceView.tsx`.
-    Found + fixed a real cross-module race (code-reviewer WARN) by centralizing the
-    cold-job lock/bg-task registry into `core/image_session.py`, shared by
-    `routes/generate.py` too. 12 new/updated tests, full suite green (464); `tsc`/build
-    clean. Not yet live-verified against a real Kaggle account (needs the user's own
-    creds).
-  - `[x]` F-2 search-tab ModelSwitcher (`phase_F2_model_switcher.md`) — **re-scoped
-    and closed 2026-07-16, not a bug.** User's concrete concern (Groq configured,
-    but some models missing from the switcher) traced live: the only models
-    missing are the 6 whose sole provider is OpenRouter (unconfigured) — `App
-    Context.tsx`'s provider-based filter is working as designed, and the backend
-    orchestrator (`pick_model_by_capability`) isn't more restrictive than the
-    picker either, confirmed against F-6's same-session resolver investigation.
-    No code changes.
-  - `[x]` F-6 Groq default model (`phase_F6_groq_default.md`) — done 2026-07-16
-    in `resolver.py`'s `pick_model_by_capability` only (its `pick_by_capability`
-    sibling untouched, no production caller). Plan's premise that `ModelEntry`
-    carries a `provider` field was wrong (only `EndpointEntry` does) — fixed
-    via a new `_has_groq_endpoint(model_id)` check instead. 2 new tests, full
-    suite green (445). code-reviewer PASS (1 WARN + 1 NOTE fixed). Manual
-    live verification needs the user's own Groq key (entering API keys is a
-    standing prohibited action for this session).
-  - `[x]` F-7 agent half-generation fix (`phase_F7_agent_half_generation_fix.md`) —
-    fixed 2026-07-16 in `agent/graph.py`: a heavy turn's clean-stop draft is now
-    appended as a `system` context note instead of a trailing `assistant`
-    message (the actual root cause — some providers reject/empty-out a
-    completions request whose tail message is already assistant-authored);
-    the closing-synthesis call is now wrapped in the same try/except-and-
-    fall-back-to-loop-draft pattern as the tool loop; a shared
-    `_EMPTY_REPLY_FALLBACK` apology closes the residual double-failure gap
-    (loop never ran + synthesis also failed) in both `execute_node` and
-    `verify_node.accept()`. 6 new tests, full suite green (443,
-    `docker compose exec backend pytest -n auto`, required a
-    `docker compose build backend` + container recreate since `backend/tests/`
-    isn't bind-mounted). code-reviewer PASS (1 WARN found+fixed: the
-    double-failure gap). Live-verified via Chrome: a real heavy/research
-    query (with a genuine mid-flight provider failover) rendered a full
-    synthesized answer end to end, no half-generation.
-  - `[x]` F-8 sync warning relocation (`phase_F8_sync_warning_relocation.md`) —
-    done 2026-07-16, straight cut-paste in `Sidebar.tsx` (banner moved from
-    under Search to directly above the User Profile Card). `tsc --noEmit` +
-    `npm run build` clean; live-verified via Chrome (temporary force-render,
-    reverted, confirmed via `git diff`).
-  - `[x]` F-9 sidebar scroll bug + clumsy project/chat row styling
-    (`phase_F9_sidebar_scroll_and_project_ui.md`) — live-verified 2026-07-16 via
-    Chrome against the real `docker compose watch` stack: expanding both projects
-    with a short viewport pushed the flat chat list out of view, and scrolling the
-    shared region reached it while header/actions/profile stayed pinned; the
-    quieter nested-chat-row active state was confirmed visually. **Same session,
-    user-requested follow-up:** sticky "Projects"/"Chats" section-label rows within
-    that shared scroll region (`ProjectSection.tsx`'s header row and `Sidebar.tsx`'s
-    "Chats" label both gained `sticky top-0 z-10 bg-theme-surface`) — live-verified:
-    scrolling past the `asdgasd` project let `suiiiii` scroll underneath while the
-    "Projects" label stayed stuck to the top. `tsc --noEmit` + `npm run build` clean.
-    **Follow-up bug found live by the user from a screenshot, fixed same session:**
-    the sticky headers' `z-10` broke `KebabMenu.tsx`'s dropdown — CSS stacking rules
-    mean a `position: sticky` + `z-index` element always paints above any
-    *non-positioned* ancestor's entire subtree, so the kebab's old `z-50` (nested
-    inside the non-positioned scrollable list) could never actually out-rank the
-    sticky labels no matter how high its own z-index was set. Fixed by rewriting
-    `KebabMenu.tsx` to render its open dropdown through a React portal into
-    `document.body` (`position: fixed`, computed from the trigger button's own
-    bounding rect) — escapes the ancestor stacking-context/overflow-clipping
-    problem entirely instead of trying to out-z-index it locally. Closes on
-    scroll/resize (simplest robust choice) as well as outside-click (now checked
-    against both the trigger and the portaled dropdown, since they're no longer in
-    the same DOM subtree). `tsc --noEmit` + `npm run build` clean; live-verified via
-    Chrome — the dropdown now renders cleanly above the sticky "Projects" label.
-  - `[x]` F-10 Projects gallery page + project descriptions (`phase_F10_projects_gallery_page.md`)
-    — done 2026-07-16, all 3 open questions answered live by the user. Backend:
-    `description` field end-to-end (`projects_drive.py`, `routes/projects.py`), 4 new
-    tests. Frontend: new `ProjectsGalleryPage.tsx` (`/projects` route — sort, search,
-    card grid), new `EditProjectDetailsModal.tsx` wired into `ProjectPage.tsx`'s kebab
-    (Name + Description, no Archive per the user's instruction), full sync-queue op
-    for `updateProjectDescription` mirroring `renameProject`'s pattern. Sidebar's
-    "Projects" label now navigates to the gallery (collapse toggle split into its own
-    chevron so neither behavior was lost). Also fixed, found live while testing this:
-    `ModelSwitcher.tsx`'s dropdown always opened upward, overflowing off-screen when
-    the trigger wasn't near the viewport bottom — now flips direction + caps height
-    based on actual available space. `tsc`/build clean, full backend suite green
-    (467). Live-verified by the user directly.
-  - `[x]` F-3 docs wording done 2026-07-15; F-4/F-5 parked, not registered.
-  - `[x]` **Chat auto-title fix (not a numbered F-item — user-requested live 2026-07-16,
-    from a screenshot showing every chat stuck as "New Chat")**. Root cause: `routes/
-    chat.py`'s `generate_title` called `resolver.pick_model_by_capability("fast")`
-    **without `user_id`**, so it could pick a model the user holds no BYOK key for;
-    the follow-up `chat_stream` call (which DOES get the real `user_id`) then failed
-    on the missing key, the exception was silently swallowed, and the hardcoded
-    `"New Chat"` was returned forever. Fixed: passes `user_id` through; new
-    `core/title.py`'s `derive_fallback_title(first_prompt)` (whitespace-collapsed,
-    word-boundary-truncated, no LLM call) is now the fallback instead of the bare
-    literal, so a chat gets a real prompt-derived name even if every model call
-    fails. 8 new tests (`test_title.py`), full suite green.
+- `[x]` **F-1/F-2/F-3/F-6/F-7/F-8/F-9/F-10 (2026-07-15/16 batch)** — all done/closed.
+  Closed-out record: `workspace/implemented_phases/phase_13_chat_feature_fixes.md`.
+  F-4 moved into root `deployment.md` §8 (pre-public-launch step); F-5 scrapped.
+  Plan files removed from `workspace/plan/chat/` (folder kept for future plans).
+- `[~]` **F-11 — Chat I/O formats: attach image + forced-SDXL session**
+  (`workspace/plan/chat/phase_F11_chat_io_formats.md`, registered 2026-07-16,
+  user-requested). Two changes: (1) composer `+`/kebab menu with "Attach PDF"
+  (unchanged) and new "Attach image" (vision Q&A, not RAG-indexed, not image
+  generation) — needs new multimodal content-part plumbing in
+  `llm_core`/`normalize` (built once, shared with `plan_vision_prompt_
+  enhancement.md`'s imageLab use case). (2) chat's `generate_image` tool
+  hardcoded to `sdxl` only (drops the LLM-controlled `model` param that caused
+  a live hallucination bug) and always starts/reuses a 30-minute warm session
+  instead of ever falling back to a cold one-shot — confirmed already
+  cross-platform-shared with Image Lab by construction (one `(user_id, model)`
+  Postgres row, no per-origin partitioning) in both directions (start in
+  either surface, continue in the other; Generations/job history is one
+  global queue, not synced copies) — chat and Image Lab stay separate
+  components with their own settings, only the session/job data is shared.
+  Also folds in a related live-found bug: `deepseek-r1`'s HuggingFace endpoint
+  is mislabeled `supports_tools: true` (leaks a malformed textual tool-call
+  instead of a real one) — flip to `false` for now. Suggested build order in
+  the plan's §6: multimodal plumbing → registry fix → generate_image rewrite
+  → vision-answer path → frontend composer UI.
 - `[ ]` **Image Lab open items I-2..I-5** — `workspace/plan/imageLab/open_items.md`
   (moved into the imageLab plan folder 2026-07-15). `[x]` I-1 FLUX OOM merged + live-verified
   2026-07-15 (real Kaggle FLUX generation succeeded, no CUDA OOM); I-2/I-4 need the user +

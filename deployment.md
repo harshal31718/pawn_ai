@@ -342,3 +342,10 @@ Against `https://pawnai.duckdns.org`:
   closed before ever flipping it to Production/public.**
 - Client-side encryption of stored data is foundation-only and unwired (see
   `implemented_phases/phase_8_encryption.md` on `dev`).
+- **Private/public repo mirror (chat F-4, parked 2026-07-15/16):** if this repo
+  is ever made public, don't just flip GitHub visibility on the existing
+  `origin` — rename it to `private`, add a separate `public` remote, and only
+  ever `git push public main` (which already strips workspace docs via
+  `scripts/promote-to-main.sh`). Do this **before** ever flipping the OAuth
+  consent screen to Production/public, same trigger as the PostgREST item
+  above.

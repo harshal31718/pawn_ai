@@ -4,25 +4,25 @@ Entry point for any agent picking up planned work. Every plan folder is self-con
 (read its `00_overview*.md` first); this file only adds the cross-plan ordering and the
 human-dependency list that lives nowhere else.
 
-> **Top recommendation: start with `chat/`.** Cross-plan order is now: **chat → imageLab**.
+> **`chat/` is done — cross-plan order is now: imageLab next.** All of chat/'s
+> 2026-07-15/16 batch (F-1/F-2/F-3/F-6/F-7/F-8/F-9/F-10) shipped; see
+> `workspace/implemented_phases/phase_13_chat_feature_fixes.md` for the closed-out
+> record. `chat/` stays as a folder for whatever gets planned there next.
 > **videoLab is deferred — no plans to implement it for now; it will only be picked up
-> at the very end**, once `chat/` and `imageLab/` are both done. Its plan files stay put
+> at the very end**, once `imageLab/` is also done. Its plan files stay put
 > in `videoLab/` untouched; nothing else in this workspace should reference it in the
 > meantime.
 
 ## Recommended cross-plan order
 
-1. **chat/ F-9** (sidebar scroll bug) — **fixes already applied in code 2026-07-15**,
-   only needs live re-verification. **F-1 / F-2 / F-6 / F-7 / F-8 / F-10** — remaining
-   filler/feature items in `chat/`, see its own `00_overview.md` for order.
-2. **imageLab Q1** (`imageLab/phase_Q1_generation_fixes.md`) — smallest diffs, biggest
+1. **imageLab Q1** (`imageLab/phase_Q1_generation_fixes.md`) — smallest diffs, biggest
    user-visible win (fixes half-generated/black/soft images).
-3. **imageLab I-1** (`imageLab/open_items.md`) — FLUX OOM: rebase `worktree-flux-oom-fix`,
+2. **imageLab I-1** (`imageLab/open_items.md`) — FLUX OOM: rebase `worktree-flux-oom-fix`,
    live-verify, merge. Quick, already written.
-4. **imageLab Q2 → Q3 → Q4** — realism checkpoints, prompting, polish. Q3.1's enhancer
+3. **imageLab Q2 → Q3 → Q4** — realism checkpoints, prompting, polish. Q3.1's enhancer
    mechanics are superseded by `plan_vision_prompt_enhancement.md` (below) — build the
    shared vision plumbing there first if Q3 is picked up after it lands.
-5. **Vision-grounded prompt enhancement** (`plan_vision_prompt_enhancement.md`) — imageLab
+4. **Vision-grounded prompt enhancement** (`plan_vision_prompt_enhancement.md`) — imageLab
    plumbing (image+prompt → vision-model refine → generation model, Groq→Gemini→raw
    chain); build before/alongside imageLab Q3 once its 3 open questions are answered.
    (The plan file's own text also scopes a videoLab reuse of this plumbing — out of
@@ -49,9 +49,6 @@ it as self-contained and not to be cross-referenced from other plan files.
 - Kaggle creds + a restarted cloudflared tunnel for ALL live verifications
   (imageLab I-2/I-4, Q-phase A/Bs).
 - Publishing Kaggle weight datasets (one-time per model: Juggernaut, RealVis…).
-- F-2 decision: search-tab model switcher — re-verify it still reproduces before
-  deciding lock-with-tooltip vs switchable (didn't reproduce against current code as
-  of 2026-07-15).
 - Vision prompt enhancement: confirm the currently-live free-tier Groq vision model id,
   whether enhancement is default-on for every generation or image-only, and where
   Groq-specific provider-pinning logic should live (`plan_vision_prompt_enhancement.md` §5).
@@ -61,7 +58,8 @@ it as self-contained and not to be cross-referenced from other plan files.
 
 ## Folder map
 
-- `chat/` — feature additions + bug fixes F-1/F-2/F-6..F-10 + open items
+- `chat/` — no active plans (last batch shipped 2026-07-16, see
+  `implemented_phases/phase_13_chat_feature_fixes.md`); kept for future plans
 - `imageLab/` — quality program Q1–Q4 + open items (I-1..I-5)
 - `plan_vision_prompt_enhancement.md` — imageLab vision-grounded prompt-enhancement
   plumbing (supersedes imageLab Q3.1 mechanics)
