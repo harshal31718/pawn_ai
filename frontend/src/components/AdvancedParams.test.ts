@@ -1,0 +1,54 @@
+import { describe, it, expect } from 'vitest'
+import { initialAdvanced, deriveParams, DEFAULT_STEPS } from './AdvancedParams'
+
+describe('Q1.1 — SDXL-native resolution buckets', () => {
+  it('defaults aspect ratio to 3:4 portrait, not the old 1:1 square', () => {
+    const s = initialAdvanced('sdxl')
+    expect(s.aspectRatio.value).toBe('3:4')
+  })
+
+  it('derives the new 3:4 bucket size (896x1152), not the old SD1.5-era size', () => {
+    const s = initialAdvanced('sdxl')
+    s.aspectRatio.enabled = true
+    const params = deriveParams(s)
+    expect(params.width).toBe(896)
+    expect(params.height).toBe(1152)
+  })
+
+  it('exposes all six SDXL-native buckets with /16-aligned dimensions', () => {
+    const s = initialAdvanced('sdxl')
+    s.aspectRatio.enabled = true
+    const sizes: Record<string, { width: number; height: number }> = {}
+    for (const ratio of ['1:1', '3:4', '4:5', '4:3', '16:9', '9:16']) {
+      s.aspectRatio.value = ratio
+      const p = deriveParams(s)
+      sizes[ratio] = { width: p.width!, height: p.height! }
+    }
+    expect(sizes).toEqual({
+      '1:1': { width: 1024, height: 1024 },
+      '3:4': { width: 896, height: 1152 },
+      '4:5': { width: 832, height: 1216 },
+      '4:3': { width: 1152, height: 896 },
+      '16:9': { width: 1344, height: 768 },
+      '9:16': { width: 768, height: 1344 },
+    })
+    for (const { width, height } of Object.values(sizes)) {
+      expect(width % 16).toBe(0)
+      expect(height % 16).toBe(0)
+    }
+  })
+
+  it('keeps model-aware step defaults unrelated to the bucket change', () => {
+    expect(DEFAULT_STEPS.sdxl).toBe(30)
+    expect(DEFAULT_STEPS.flux).toBe(4)
+  })
+
+  it('resolves buckets per-model, like initialAdvanced, not from one shared global', () => {
+    const s = initialAdvanced('flux')
+    s.aspectRatio.enabled = true
+    s.aspectRatio.value = '9:16'
+    const params = deriveParams(s, 'flux')
+    expect(params.width).toBe(768)
+    expect(params.height).toBe(1344)
+  })
+})

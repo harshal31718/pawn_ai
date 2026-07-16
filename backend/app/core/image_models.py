@@ -23,6 +23,20 @@ from app.constants import (
 from app.exceptions import UnknownModelError
 
 
+# SDXL is trained on ~1024²-area buckets; off-bucket sizes (e.g. the old
+# SD1.5-era 576×1024) are the classic cause of half-generated/deformed bodies.
+# All six values are already multiples of 16, so the same table also satisfies
+# FLUX's "round to /16" requirement — no separate FLUX table needed.
+_SDXL_NATIVE_BUCKETS: dict[str, tuple[int, int]] = {
+    "1:1": (1024, 1024),
+    "3:4": (896, 1152),
+    "4:5": (832, 1216),
+    "4:3": (1152, 896),
+    "16:9": (1344, 768),
+    "9:16": (768, 1344),
+}
+
+
 @dataclass(frozen=True)
 class ImageModel:
     id: str                 # stable key used by the frontend + API ("sdxl", "flux")
@@ -40,6 +54,9 @@ class ImageModel:
     session_template: Optional[Path] = None
     session_slug: Optional[str] = None
     session_gpu: bool = False  # FLUX needs the GPU + dataset; the CPU echo doesn't
+    # Model-native resolution buckets, keyed by aspect-ratio label (Q1.1).
+    # Server-side param snapping picks the nearest one by aspect-ratio distance.
+    resolution_buckets: Optional[dict[str, tuple[int, int]]] = None
 
 
 IMAGE_MODELS: dict[str, ImageModel] = {
@@ -56,6 +73,7 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         session_template=KAGGLE_TEMPLATES_DIR / "image_sdxl_session" / "notebook.ipynb",
         session_slug="pawn-sdxl-session",
         session_gpu=True,
+        resolution_buckets=_SDXL_NATIVE_BUCKETS,
     ),
     "flux": ImageModel(
         id="flux",
@@ -70,6 +88,7 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         session_template=KAGGLE_TEMPLATES_DIR / "image_flux_session" / "notebook.ipynb",
         session_slug="pawn-flux-session",
         session_gpu=True,
+        resolution_buckets=_SDXL_NATIVE_BUCKETS,
     ),
 }
 
@@ -83,3 +102,23 @@ def get_image_model(model_id: str) -> ImageModel:
         known = ", ".join(IMAGE_MODELS)
         raise UnknownModelError(f"Unknown image model '{model_id}'. Available: {known}.")
     return spec
+
+
+def snap_resolution(
+    model_id: str, width: Optional[int], height: Optional[int]
+) -> tuple[Optional[int], Optional[int]]:
+    """Snap an incoming (width, height) to the model's nearest native bucket by
+    aspect-ratio distance. Protects API callers and old cached frontends that
+    still send pre-Q1.1 (SD1.5-era) sizes. Passes `(None, None)` through
+    unchanged so callers that never set a resolution keep the model's own
+    pipeline default."""
+    if width is None or height is None:
+        return width, height
+    buckets = get_image_model(model_id).resolution_buckets
+    if not buckets or width <= 0 or height <= 0:
+        return width, height
+    target_ratio = width / height
+    best_w, best_h = min(
+        buckets.values(), key=lambda wh: abs((wh[0] / wh[1]) - target_ratio)
+    )
+    return best_w, best_h

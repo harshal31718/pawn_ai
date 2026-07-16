@@ -49,7 +49,7 @@ from app.constants import (
     KAGGLE_SESSION_POLL_INTERVAL_SECONDS,
 )
 from app.core import generate, kaggle, key_store
-from app.core.image_models import DEFAULT_IMAGE_MODEL, get_image_model
+from app.core.image_models import DEFAULT_IMAGE_MODEL, get_image_model, snap_resolution
 from app.db.postgres_client import execute, fetchall, fetchone, transaction
 from app.exceptions import NotConfiguredError
 
@@ -70,6 +70,18 @@ _ACTIVE_JOB_STATUSES = ("queued", "running")
 # Statuses that mean a kernel is (or should be) alive and serving.
 # Includes the W.4 startup phases so a kernel mid-install/load isn't reaped.
 _LIVE_STATUSES = frozenset({"starting", "installing", "loading_model", "ready"})
+
+
+def _snap_params(model: str, params: Optional[ImageJobParams]) -> Optional[ImageJobParams]:
+    """Q1.1 server-side guard: snap width/height to the model's nearest native
+    resolution bucket, so old cached frontends / direct API callers can't send
+    off-bucket sizes that produce half-generated/deformed output."""
+    if params is None or (params.width is None and params.height is None):
+        return params
+    w, h = snap_resolution(model, params.width, params.height)
+    if w == params.width and h == params.height:
+        return params
+    return params.model_copy(update={"width": w, "height": h})
 
 
 def _now() -> datetime:
@@ -480,6 +492,7 @@ def submit_session_job(
             raise NotConfiguredError("That session no longer exists. Start a new session.")
         if not _is_alive(sess):
             raise NotConfiguredError("That session isn't running anymore. Start a new session.")
+        params = _snap_params(sess["model"], params)
         row = tx.fetchone(
             """
             insert into image_jobs (user_id, session_id, model, prompt, status, params)
@@ -565,6 +578,7 @@ def create_cold_job(
     existing = _active_cold_job(user_id, model)
     if existing is not None:
         return str(existing["id"]), False
+    params = _snap_params(model, params)
     row = fetchone(
         """
         insert into image_jobs (user_id, session_id, model, prompt, status, params)

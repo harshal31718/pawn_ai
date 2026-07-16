@@ -2,11 +2,29 @@ import { useState, useEffect } from 'react'
 import type { ImageParams } from '../api/client'
 import { STYLE_PRESET_KEY_MAP } from '../types'
 
-const RATIO_TO_SIZE: Record<string, { width: number; height: number }> = {
-  '1:1': { width: 512, height: 512 },
-  '16:9': { width: 1024, height: 576 },
-  '9:16': { width: 576, height: 1024 },
-  '4:3': { width: 768, height: 576 },
+// SDXL-native ~1024²-area buckets (Q1.1). Off-bucket sizes (the old SD1.5-era
+// 512/576/768 values) are the classic cause of half-generated/deformed bodies.
+// All values are multiples of 16, so the same table satisfies FLUX's flexible-
+// but-/16-rounded architecture too.
+const SDXL_NATIVE_BUCKETS: Record<string, { width: number; height: number }> = {
+  '1:1': { width: 1024, height: 1024 },
+  '3:4': { width: 896, height: 1152 },
+  '4:5': { width: 832, height: 1216 },
+  '4:3': { width: 1152, height: 896 },
+  '16:9': { width: 1344, height: 768 },
+  '9:16': { width: 768, height: 1344 },
+}
+
+// Model-aware, like `initialAdvanced` — SDXL and FLUX share the same buckets
+// today (both are /16-aligned), but this is data per model, not one global
+// table, so a future model can get its own without touching call sites.
+const RESOLUTION_BUCKETS: Record<string, Record<string, { width: number; height: number }>> = {
+  sdxl: SDXL_NATIVE_BUCKETS,
+  flux: SDXL_NATIVE_BUCKETS,
+}
+
+function bucketsFor(modelId: string): Record<string, { width: number; height: number }> {
+  return RESOLUTION_BUCKETS[modelId] ?? SDXL_NATIVE_BUCKETS
 }
 
 interface ParamState<T> {
@@ -31,7 +49,7 @@ export const DEFAULT_STEPS: Record<string, number> = { sdxl: 30, flux: 4 }
 
 export function initialAdvanced(modelId: string): AdvancedState {
   return {
-    aspectRatio: { enabled: false, value: '1:1' },
+    aspectRatio: { enabled: false, value: '3:4' },
     steps: { enabled: false, value: DEFAULT_STEPS[modelId] ?? 20 },
     guidanceScale: { enabled: false, value: 7.5 },
     negativePrompt: { enabled: false, value: '' },
@@ -42,10 +60,11 @@ export function initialAdvanced(modelId: string): AdvancedState {
 
 export const INITIAL_ADVANCED: AdvancedState = initialAdvanced('sdxl')
 
-export function deriveParams(s: AdvancedState): ImageParams {
+export function deriveParams(s: AdvancedState, modelId: string = 'sdxl'): ImageParams {
   const p: ImageParams = {}
-  if (s.aspectRatio.enabled && RATIO_TO_SIZE[s.aspectRatio.value]) {
-    const sz = RATIO_TO_SIZE[s.aspectRatio.value]
+  const buckets = bucketsFor(modelId)
+  if (s.aspectRatio.enabled && buckets[s.aspectRatio.value]) {
+    const sz = buckets[s.aspectRatio.value]
     p.width = sz.width
     p.height = sz.height
   }
@@ -80,7 +99,7 @@ export default function AdvancedParams({
   function update<K extends keyof AdvancedState>(key: K, patch: Partial<AdvancedState[K]>) {
     const next = { ...s, [key]: { ...s[key], ...patch } } as AdvancedState
     setS(next)
-    onChange(deriveParams(next))
+    onChange(deriveParams(next, modelId))
     if (key === 'strength' && 'enabled' in patch && onStrengthEnabledChange) {
       onStrengthEnabledChange(!!(patch as Partial<ParamState<number>>).enabled)
     }
@@ -91,11 +110,11 @@ export default function AdvancedParams({
     setS((prev) => {
       if (prev.strength.enabled) return prev
       const next = { ...prev, strength: { ...prev.strength, enabled: true } } as AdvancedState
-      onChange(deriveParams(next))
+      onChange(deriveParams(next, modelId))
       onStrengthEnabledChange?.(true)
       return next
     })
-  }, [showStrength, onChange, onStrengthEnabledChange])
+  }, [showStrength, onChange, onStrengthEnabledChange, modelId])
 
   const rowCls = (enabled: boolean) =>
     `pl-5 space-y-1 transition-opacity ${enabled ? '' : 'opacity-40 pointer-events-none'}`
@@ -119,7 +138,7 @@ export default function AdvancedParams({
             <select value={s.aspectRatio.value}
               onChange={(e) => update('aspectRatio', { value: e.target.value })}
               className={CTL}>
-              {Object.entries(RATIO_TO_SIZE).map(([r, sz]) => (
+              {Object.entries(bucketsFor(modelId)).map(([r, sz]) => (
                 <option key={r} value={r}>{r} — {sz.width}×{sz.height}</option>
               ))}
             </select>

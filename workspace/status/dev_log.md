@@ -6,6 +6,75 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q1.1: SDXL-native resolution buckets (headline quality fix)
+
+First step of the imageLab Quality plan (`workspace/plan/imageLab/`), run via the
+build-step skill in auto mode. Root-caused (previous session's code audit) the
+user's "results are not that good, half-generated bodies" report to
+`AdvancedParams.tsx`'s aspect-ratio dropdown sending SD1.5-era resolution sizes
+(512×512, 576×1024, 768×576) at SDXL, which is trained on ~1024²-area buckets —
+off-bucket sizes are the classic cause of exactly this defect class.
+
+**Fix.** Replaced `RATIO_TO_SIZE` (one global constant) with six SDXL-native
+buckets — 1:1→1024×1024, 3:4→896×1152, 4:5→832×1216, 4:3→1152×896,
+16:9→1344×768, 9:16→768×1344 — all six already multiples of 16, so the same
+table satisfies FLUX's "flexible but /16-rounded" requirement without a
+separate table. Made the lookup genuinely model-aware (`bucketsFor(modelId)`,
+mirrors the existing `initialAdvanced(modelId)` pattern) rather than one shared
+constant, per the plan's explicit wording — SDXL and FLUX happen to point at
+the same table today, but each model row owns its own reference. Frontend
+default aspect ratio changed from square 1:1 (512×512) to portrait 3:4
+(896×1152). `deriveParams` gained a `modelId` param (defaults to `'sdxl'` so
+existing call sites/tests didn't need touching); `AdvancedParams.tsx`'s
+`update()`/`useEffect`/dropdown-render call sites all thread `modelId` through.
+
+**Server-side guard.** New `image_models.snap_resolution(model_id, width,
+height)` snaps an incoming (width, height) to the model's nearest bucket by
+aspect-ratio distance — protects old cached frontends and direct API callers
+from ever sending an off-bucket size again. `ImageModel` gained a
+`resolution_buckets: Optional[dict[str, tuple[int,int]]]` field (data, not
+code). Wired in via a new `_snap_params()` helper called from both
+`image_session.create_cold_job` (cold one-shot path) and
+`submit_session_job` (warm-session path) — the two real job-creation entry
+points `routes/generate.py` calls into, so one choke point covers both
+`/generate` and `/session/job`.
+
+**Review findings, both fixed.** code-reviewer 1st pass: PASS with 2 WARN —
+(1) `snap_resolution` divided `width / height` with no zero/negative guard, so
+a malformed caller sending `height=0` would 500 with an uncaught
+`ZeroDivisionError` instead of the intended graceful pass-through; fixed with
+an explicit `width <= 0 or height <= 0` guard + a regression test. (2) the
+`resolution_buckets` field was typed as non-optional `dict[...]` with a `None`
+default suppressed by `# type: ignore` — corrected to `Optional[dict[...]]`.
+build-validator 1st pass: FAIL — flagged that the frontend bucket table
+wasn't actually model-aware yet (still one shared `RATIO_TO_SIZE` global,
+against the plan's explicit "model-aware like `initialAdvanced`" wording) and
+that this doc/tracker update hadn't happened yet. Both closed: frontend
+reworked to `bucketsFor(modelId)` as described above (+1 new test proving FLUX
+resolves its own bucket table independently), and this entry + the
+`current_state.md` entry + `build_tracker.md` mark now exist.
+
+**Tests/gates.** New `backend/tests/test_image_models.py` (11 tests: bucket
+contents, /16-alignment, snap correctness across all 6 ratio directions,
+exact-bucket no-op, zero/negative-dimension safety, unknown-model error) +
+regression tests added to `test_image_jobs.py`/`test_image_session.py`
+proving the snap is actually applied on both job-creation paths, not just
+unit-tested in isolation. 488 backend tests green (up from 476,
+`docker compose exec backend pytest -q` — needed a `docker compose build
+backend` first, `backend/tests/` isn't bind-mounted). 5 new frontend vitest
+tests in `AdvancedParams.test.ts` (no `@testing-library/react`/jsdom infra
+exists in this repo yet — only `crypto.test.ts` precedent — so these are
+logic-level tests against the exported pure functions, not DOM-rendering
+tests); `tsc --noEmit` + `npm run build` clean. No security-auditor run (pure
+data/param-clamping logic touching no secrets/config/auth).
+
+**Not yet done:** live verification against a real Kaggle SDXL warm session —
+that's Q1.5's fixed-seed A/B benchmark (`imageLab/benchmarks.md`, not yet
+created), deliberately deferred until Q1.2-Q1.4 land too so the full Q1
+correctness pass gets one combined live check rather than four separate ones.
+
+---
+
 ### [2026-07-16] — Composer rework: merged attach flow, removed model switcher, added Fast/Pro/Create Image mode hint
 
 User-requested composer changes, done in three steps in one session.

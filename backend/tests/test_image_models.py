@@ -1,0 +1,63 @@
+"""Tests for Q1.1 — SDXL-native resolution buckets + server-side snapping.
+
+Pure logic, no external calls — `image_models.py` is a static registry.
+"""
+
+import pytest
+
+from app.core.image_models import IMAGE_MODELS, snap_resolution
+from app.exceptions import UnknownModelError
+
+
+def test_sdxl_and_flux_have_six_native_buckets():
+    for model_id in ("sdxl", "flux"):
+        buckets = IMAGE_MODELS[model_id].resolution_buckets
+        assert set(buckets) == {"1:1", "3:4", "4:5", "4:3", "16:9", "9:16"}
+
+
+def test_all_bucket_dimensions_are_multiples_of_16():
+    for model in IMAGE_MODELS.values():
+        for w, h in model.resolution_buckets.values():
+            assert w % 16 == 0
+            assert h % 16 == 0
+
+
+def test_snap_resolution_none_passthrough():
+    assert snap_resolution("sdxl", None, None) == (None, None)
+    assert snap_resolution("sdxl", 512, None) == (512, None)
+
+
+def test_snap_resolution_old_sd15_portrait_snaps_to_9_16_bucket():
+    """The exact regression this step exists to fix: the old SD1.5-era default
+    (576x1024, ~9:16) must snap onto the new SDXL-native 9:16 bucket."""
+    assert snap_resolution("sdxl", 576, 1024) == (768, 1344)
+
+
+def test_snap_resolution_old_sd15_square_snaps_to_1_1_bucket():
+    assert snap_resolution("sdxl", 512, 512) == (1024, 1024)
+
+
+def test_snap_resolution_old_sd15_landscape_snaps_to_16_9_bucket():
+    assert snap_resolution("sdxl", 1024, 576) == (1344, 768)
+
+
+def test_snap_resolution_exact_bucket_is_a_noop():
+    assert snap_resolution("sdxl", 896, 1152) == (896, 1152)
+
+
+def test_snap_resolution_flux_uses_same_bucket_table():
+    assert snap_resolution("flux", 576, 1024) == (768, 1344)
+
+
+def test_snap_resolution_unknown_model_raises():
+    with pytest.raises(UnknownModelError):
+        snap_resolution("nope", 512, 512)
+
+
+def test_snap_resolution_zero_or_negative_dimension_passes_through():
+    """A malicious/malformed caller sending height=0 must not 500 the request
+    with a ZeroDivisionError -- pass the (invalid) value through unchanged and
+    let it fail downstream validation instead."""
+    assert snap_resolution("sdxl", 512, 0) == (512, 0)
+    assert snap_resolution("sdxl", 0, 512) == (0, 512)
+    assert snap_resolution("sdxl", -100, 512) == (-100, 512)

@@ -95,6 +95,25 @@ def test_create_cold_job_unknown_model_raises():
         image_session.create_cold_job("user-1", "nope", "x")
 
 
+def test_create_cold_job_snaps_old_sd15_resolution_to_native_bucket():
+    """Q1.1 server-side guard: an old cached frontend (or a direct API caller)
+    sending the pre-fix 576x1024 size gets snapped to SDXL's native 9:16
+    bucket (768x1344), not stored as-is."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(width=576, height=1024),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj  # psycopg.types.json.Json wraps the dict
+    assert stored_params["width"] == 768
+    assert stored_params["height"] == 1344
+
+
 # --- run_cold_job (the background worker) ------------------------------------
 
 

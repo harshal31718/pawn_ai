@@ -48,12 +48,26 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   (moved into the imageLab plan folder 2026-07-15). `[x]` I-1 FLUX OOM merged + live-verified
   2026-07-15 (real Kaggle FLUX generation succeeded, no CUDA OOM); I-2/I-4 need the user +
   real Kaggle; I-3 is deployment-session-gated.
-- `[ ]` **imageLab Quality Q1–Q4** — `workspace/plan/imageLab/` (read `00_overview.md`
+- `[~]` **imageLab Quality Q1–Q4** — `workspace/plan/imageLab/` (read `00_overview.md`
   first). Root-caused the "bad/unreal/half-generated images" report: SD1.5-era resolution
   sizes in `AdvancedParams.tsx` (Q1.1 headline fix), stock fp16 SDXL VAE (black images,
   Q1.2), no scheduler configured (Q1.3), base-SDXL realism ceiling (Q2 photoreal
   checkpoint rows), no prompt scaffolding/negatives (Q3), no face/detail pass (Q4).
   Order Q1 → Q2 → Q3 → Q4; every step gated on the Q1.5 fixed-seed benchmark A/B.
+  - `[x]` **Q1.1 — SDXL-native resolution buckets (headline fix)** ✓ (2026-07-16)
+    Replaced the SD1.5-era `RATIO_TO_SIZE` global with six SDXL-native, model-aware
+    buckets (`bucketsFor(modelId)`); default aspect ratio 1:1→3:4 portrait; server-side
+    `snap_resolution()` guard on both job-creation paths. 488 backend tests green (up
+    from 476), 5 new frontend tests, `tsc`/build clean. code-reviewer PASS (2 WARN
+    fixed), build-validator PASS on re-check (1st pass FAIL — frontend bucket table
+    wasn't model-aware yet, doc updates pending — both closed). No security-auditor run
+    (no secrets/config/auth touched). Full record: `dev_log.md`'s 2026-07-16 "imageLab
+    Q1.1" entry, `current_state.md`. Not yet live-verified against real Kaggle — folded
+    into Q1.5's combined benchmark once Q1.2–Q1.4 land.
+  - `[ ]` Q1.2 — fp16 VAE fix (black-image killer)
+  - `[ ]` Q1.3 — Scheduler + tuned defaults
+  - `[ ]` Q1.4 — Seed control + FLUX negative-prompt honesty
+  - `[ ]` Q1.5 — A/B benchmark set + live verification
 - `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
   `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,
   user-requested). Image+prompt → vision model analysis → refined prompt → generation

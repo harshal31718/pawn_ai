@@ -2,6 +2,30 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q1.1 — SDXL-native resolution buckets (headline quality fix) — DONE
+(2026-07-16).** Root cause of the user's "half-generated/deformed bodies" report:
+`AdvancedParams.tsx`'s aspect-ratio dropdown sent SD1.5-era sizes (512×512,
+576×1024, 768×576) — off-bucket for SDXL, which is trained on ~1024²-area
+buckets. Replaced with the six SDXL-native buckets (1:1→1024×1024,
+3:4→896×1152, 4:5→832×1216, 4:3→1152×896, 16:9→1344×768, 9:16→768×1344),
+model-aware (`bucketsFor(modelId)`, SDXL/FLUX share the table today — all
+values are /16-aligned so FLUX's flexible architecture is satisfied too — but
+each model row owns its own reference, not one hardcoded global). Frontend
+default aspect ratio changed from square 1:1 (512) to portrait 3:4 (896×1152).
+Added a server-side snap-to-nearest-bucket guard (`image_models.snap_resolution`,
+nearest by aspect-ratio distance, zero/negative-dimension-safe) applied in both
+`image_session.create_cold_job` and `submit_session_job` before the DB insert —
+protects old cached frontends and direct API callers from ever sending an
+off-bucket size again. `resolution_buckets` added to `ImageModel` as data (not
+code). 20 new/changed backend tests (488 total, up from 476) + 5 new frontend
+vitest tests; `tsc`/`npm run build` clean. code-reviewer PASS (1 WARN fixed:
+`snap_resolution` guarded against a `ZeroDivisionError` on
+zero/negative-height input). No security-auditor run (pure data/param-clamping
+logic, no secrets/config/auth touched). Not yet live-verified against a real
+Kaggle SDXL session — that's Q1.5's fixed-seed A/B benchmark, still open. See
+`workspace/plan/imageLab/phase_Q1_generation_fixes.md` §Q1.1 and `dev_log.md`'s
+2026-07-16 "imageLab Q1.1" entry.
+
 **Composer rework (2026-07-16) — DONE.** Three changes to `MessageInput.tsx`: (1) the `+` button's separate "Attach PDF"/"Attach image" flows merged into one "Attach files" file picker (`.pdf,.txt,.png,.jpg,.jpeg,.webp,.gif`), classified client-side and routed to the existing `onUpload`/`onUploadImage` callbacks, invalid formats rejected with an alert. (2) The model-switcher dropdown removed from the composer entirely — model choice now comes solely from the Settings page's `defaultModel` (no per-chat override); `ChatPage.tsx`/`ProjectPage.tsx` dropped their now-dead `selectedProvider` state. (3) New `ModePicker.tsx` (Fast / Pro / Create Image) took the old model-switcher's slot as a real backend routing hint, not cosmetic: `ChatRequest.mode_hint` short-circuits `graph.py`'s `classify_node` — `fast`→direct-answer, `pro`→full agent planning, `image`→agent loop with `difficulty="light"` so `plan_node` skips straight to a single tool-calling turn (`generate_image` bound whenever Kaggle creds exist). Mode id is `'pro'` (not `'research'`) end to end. Backend rebuilt (`docker compose up -d --build backend` — code isn't volume-mounted, only `backend/data` is) before trusting the test run. Full backend suite green (476/476), `tsc`/build clean. See `dev_log.md`'s 2026-07-16 "Composer rework" entry.
 
 **Project UX round (2026-07-16) — DONE, live-verified via Chrome.** Three user-requested changes: (1) "New project" now opens a required-name/optional-description dialog (`NewProjectDialog.tsx`) — a project is never created nameless. (2) Creating a chat from a project's own composer is now race-free: new `createProjectChat` awaits create→move server calls in order and sets `activeConvId` before navigating, replacing the old draft+fire-and-forget-moveChat path that could leave the chat standalone (and, via a stale-activeConvId bug, spawn a second orphaned draft so the message never reached the project chat). Live-verified: message lands in a chat scoped `('project', pid)`, indexed under `scope_type='project'`. (3) The Chats sidebar now lists ALL chats — standalone as the bare title, project-attached as "Project / Title" (routing to `/project/:pid/chat/:id`, with a "Remove from project" kebab action). `tsc`/build clean. See `dev_log.md`'s 2026-07-16 "Project UX" entry.
