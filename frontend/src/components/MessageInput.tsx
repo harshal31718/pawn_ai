@@ -1,5 +1,7 @@
 import { useRef, useState, useEffect, type KeyboardEvent } from 'react'
+import KebabMenu from './KebabMenu'
 import ModelSwitcher from './ModelSwitcher'
+import { PlusIcon } from './icons'
 import type { RegistryModel } from '../api/client'
 
 interface Props {
@@ -10,6 +12,9 @@ interface Props {
   disabled?: boolean
   onUpload?: (file: File) => void
   isUploading?: boolean
+  /** F-11: attach an image for a one-turn vision Q&A (not RAG-indexed, not
+   *  image generation) -- separate from the PDF attach flow above. */
+  onUploadImage?: (file: File) => void
   selectedProvider?: string
   onChangeProvider?: (id: string) => void
   models?: RegistryModel[]
@@ -17,6 +22,12 @@ interface Props {
    *  fix: the chip used to float loose above the input over the canvas). */
   attachment?: { name: string } | null
   onRemoveAttachment?: () => void
+  /** F-11: attached image chip -- shows a thumbnail instead of a filename
+   *  row. Mutually exclusive with `attachment` in practice (one attachment
+   *  per turn), kept as a separate prop pair to mirror the doc attachment's
+   *  own shape rather than overloading one prop with a union. */
+  imageAttachment?: { name: string; previewUrl: string } | null
+  onRemoveImageAttachment?: () => void
 }
 
 export default function MessageInput({
@@ -27,13 +38,17 @@ export default function MessageInput({
   disabled = false,
   onUpload,
   isUploading = false,
+  onUploadImage,
   selectedProvider = '',
   onChangeProvider,
   models = [],
   attachment = null,
   onRemoveAttachment,
+  imageAttachment = null,
+  onRemoveImageAttachment,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isMultiLine, setIsMultiLine] = useState(false)
   const prevDisabledRef = useRef(disabled)
@@ -48,13 +63,14 @@ export default function MessageInput({
   }, [disabled, value])
 
   const showSend = value.trim().length > 0 || disabled
+  const hasAnyAttachment = Boolean(attachment || imageAttachment)
 
   useEffect(() => {
     const textarea = textareaRef.current
     if (textarea) {
       textarea.style.height = 'auto'
       const nextHeight = textarea.scrollHeight
-      
+
       setIsMultiLine((prev) => {
         if (value.trim() === '') return false
         if (nextHeight > 44) return true
@@ -95,6 +111,15 @@ export default function MessageInput({
     }
   }
 
+  function handleImageFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    onUploadImage?.(file)
+    if (imageInputRef.current) {
+      imageInputRef.current.value = ''
+    }
+  }
+
   return (
     <div className="w-full relative animate-in fade-in slide-in-from-bottom-2 duration-300">
       <input
@@ -105,28 +130,46 @@ export default function MessageInput({
         className="hidden"
         id="file-upload-input"
       />
+      <input
+        type="file"
+        ref={imageInputRef}
+        onChange={handleImageFileChange}
+        accept="image/*"
+        className="hidden"
+        id="image-upload-input"
+      />
 
       {/* Unified Connected Island Input */}
       <div className={`
         w-full bg-theme-surface transition-all duration-300
         flex flex-wrap gap-2
         ${disabled ? 'border border-theme-border/40 opacity-75' : 'border border-theme-border'}
-        ${isMultiLine || attachment
+        ${isMultiLine || hasAnyAttachment
           ? 'items-end p-3 rounded-3xl shadow-lg'
           : 'items-center px-3 py-1.5 rounded-full shadow-md'}
       `}>
-        {/* 0. Attached document chip — lives inside the island, above the textarea */}
-        {attachment && (
+        {/* 0. Attached document/image chip — lives inside the island, above the textarea */}
+        {(attachment || imageAttachment) && (
           <div className="w-full order-0 flex">
             <div className="inline-flex items-center gap-1.5 bg-theme-bg border border-theme-border/60 rounded-lg px-2 py-1 text-xs text-theme-text select-none animate-in fade-in zoom-in duration-200">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted shrink-0">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-              </svg>
-              <span className="font-medium truncate max-w-[200px]">{attachment.name}</span>
-              {onRemoveAttachment && (
+              {imageAttachment ? (
+                <img
+                  src={imageAttachment.previewUrl}
+                  alt={imageAttachment.name}
+                  className="w-4.5 h-4.5 rounded object-cover shrink-0"
+                />
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-theme-text-muted shrink-0">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                </svg>
+              )}
+              <span className="font-medium truncate max-w-[200px]">
+                {imageAttachment ? imageAttachment.name : attachment!.name}
+              </span>
+              {(imageAttachment ? onRemoveImageAttachment : onRemoveAttachment) && (
                 <button
                   type="button"
-                  onClick={onRemoveAttachment}
+                  onClick={imageAttachment ? onRemoveImageAttachment : onRemoveAttachment}
                   disabled={disabled}
                   className="ml-1 text-theme-text-muted hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none"
                   title="Remove attachment"
@@ -146,8 +189,8 @@ export default function MessageInput({
           className={`
             resize-none bg-transparent border-none outline-none text-sm text-theme-text
             focus:outline-none max-h-[138px] disabled:opacity-60 disabled:cursor-not-allowed
-            ${isMultiLine 
-              ? 'w-full order-1 px-1 min-h-[44px]' 
+            ${isMultiLine
+              ? 'w-full order-1 px-1 min-h-[44px]'
               : 'flex-1 order-2 py-1.5 min-h-[32px]'}
           `}
           placeholder="Ask anything ..."
@@ -161,31 +204,19 @@ export default function MessageInput({
         {/* 2. Divider line: Visible only in multi-line mode */}
         <div className={`w-full border-t border-theme-border/10 order-2 my-1 ${isMultiLine ? 'block' : 'hidden'}`} />
 
-        {/* 3. Upload Button */}
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || isUploading}
-          className={`
-            rounded-full p-2 text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50
-            disabled:opacity-40 disabled:cursor-not-allowed transition-all
-            shrink-0 flex items-center justify-center h-9 w-9 active:scale-95 cursor-pointer
-            ${isMultiLine ? 'order-3' : 'order-1'}
-          `}
-          title="Upload document (.pdf, .txt)"
-          id="upload-button"
-        >
-          {isUploading ? (
-            <svg className="animate-spin h-4.5 w-4.5 text-theme-text-muted" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-          ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 002.112 2.13" />
-            </svg>
-          )}
-        </button>
+        {/* 3. Attach Button — "+" opens a kebab-style menu (F-11): Attach PDF
+            (unchanged) and Attach image (new, vision Q&A). */}
+        <div className={`shrink-0 ${isMultiLine ? 'order-3' : 'order-1'}`}>
+          <KebabMenu
+            title="Attach"
+            icon={<PlusIcon className="w-5 h-5" />}
+            buttonClassName="rounded-full p-2 text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0 flex items-center justify-center h-9 w-9 active:scale-95 cursor-pointer"
+            items={[
+              { label: 'Attach PDF', onClick: () => fileInputRef.current?.click() },
+              { label: 'Attach image', onClick: () => imageInputRef.current?.click() },
+            ]}
+          />
+        </div>
 
         {/* 4. Layout Spacer: Visible only in multi-line mode to push send button right */}
         <div className={`order-4 flex-1 ${isMultiLine ? 'block' : 'hidden'}`} />
@@ -257,4 +288,3 @@ export default function MessageInput({
     </div>
   )
 }
-

@@ -1,6 +1,9 @@
 # Phase F-11 — Chat Input/Output Formats (Attach Image + Forced-SDXL Session)
 
-**Status:** PLANNED. **Branch:** `dev`. **Folder:** `workspace/plan/chat/`
+**Status:** DONE 2026-07-16 (backend + frontend both built and live-verified
+against the real stack; one infra blocker and one pre-existing frontend gap
+found along the way, both documented in §7 below — neither blocks this
+plan's own code). **Branch:** `dev`. **Folder:** `workspace/plan/chat/`
 **Date:** 2026-07-16, from the user's request. Framed as: what formats can chat
 **take in** (text, PDF, and now image) and what formats it can **give out**
 (text, and image generation — made reliable and cross-platform this pass).
@@ -279,3 +282,134 @@ structurally a sibling to `direct_answer_node`:
 5. §3.3 frontend `+`/kebab/attach-image composer UI (needs §3.2's new
    request field to actually send anywhere) + the `KebabMenu` viewport-flip
    fix (independent, can land anytime).
+
+## 7. DONE (2026-07-16)
+
+**§3.1 multimodal plumbing — turned out to be a non-change.** Checked
+`llm_core.py`/`normalize.py` directly: every function (`chat_complete`,
+`stream_llm`, `chat_stream_with_tools`) already treats `messages` opaquely,
+forwarding whatever `content` shape it's given straight into the JSON
+payload — no provider-specific translation, no type assumptions. A
+multimodal `content: [{"type":"text",...},{"type":"image_url",...}]` list
+already passes through cleanly with zero code changes. This closes the
+prerequisite gap `plan_vision_prompt_enhancement.md` §2 originally
+identified — it's now satisfied for both this plan's use case and that
+plan's img2img enhancer, whenever it's picked up.
+
+**§3.5 registry fix** — `deepseek-r1`'s `supports_tools` flipped to `false`
+in both `data/registry/models.json` and `app/registry/seed.py`'s test
+fixture (its only active endpoint, HuggingFace's router passthrough,
+doesn't reliably turn its tool-call tokens into a real `tool_calls` field).
+
+**§3.4 `generate_image` rewrite** — `GENERATE_IMAGE_PARAMETERS` now exposes
+only `prompt`; the handler hardcodes `sdxl` and always ends up on a warm
+session (`get_session_status` → reuse if alive, else
+`start_session(user_id, "sdxl", 30, None)` → `submit_session_job`) — the old
+`create_cold_job`/`spawn_cold_job_bg` cold-one-shot path is gone from this
+tool entirely. 6 tests rewritten in `test_agent_tools_image.py`.
+
+**§3.2 vision-answer path** — built as a branch inside `direct_answer_node`
+rather than a new graph node: `classify_node` short-circuits to
+light/no-agent the instant `state["has_image"]` is set (skips the
+text-heuristic router entirely, since it assumes plain-string content), and
+`direct_answer_node` then picks a vision-capable model
+(`pick_model_by_capability(ROLE_LEVELS["vision_answer"]="balanced",
+require_vision=True)`) and builds one fresh multimodal message (history
+stays plain-string; only the latest user turn becomes
+`[text, image_url]`) rather than mutating `state["messages"]` — so raw image
+bytes never reach any other node and are never persisted. New
+`ChatRequest.image_b64`/`image_mime` fields thread through
+`routes/chat.py` → `AgentState`. No vision-capable model configured →
+graceful apology reply, not a crash. 4 new tests in `test_agent.py`.
+
+**§3.3 frontend composer UI** — new `PlusIcon`/`ImageIcon`; `KebabMenu.tsx`
+gained `icon`/`buttonClassName` override props (so the composer's `+` button
+can look like the toolbar's other buttons instead of the small "⋮" row
+style) **and** the same up/down viewport-flip logic `ModelSwitcher.tsx`
+already had, fixing a menu-renders-off-screen bug this same fix would
+otherwise have introduced for a bottom-of-viewport trigger. `MessageInput.tsx`'s
+old single upload button is now a `KebabMenu` with "Attach PDF" (unchanged)
+and "Attach image" (new `onUploadImage` prop). `ChatPage.tsx`: image attach
+is client-side only (no backend call at attach time — `FileReader` straight
+to a data URI, held in state), captured and cleared the moment `handleSend`
+fires (one-turn-only, unlike the doc attachment which lingers all
+conversation since `doc_id` is otherwise inert) and threaded into
+`streamChat`'s new optional `image` param.
+
+**Real router gap found and fixed while live-testing this pass (not in the
+original plan, found necessary to make generate_image usable at all):**
+`core/router.py`'s heuristic classifier had no keyword trigger for image-
+generation requests — "generate an image of X" is short, has no URL, no
+heavy keyword, so it classified light+`needs_agent=False`, and
+`direct_answer_node`'s fast path has **no tools bound at all**. Without a
+fix, `generate_image` could never be invoked no matter how well everything
+else worked. Added `_IMAGE_GEN_KEYWORDS` (mirrors the existing
+`_TIME_SENSITIVE_KEYWORDS`/`has_search_key` pattern), gated on
+`has_kaggle_creds` so it only forces agent routing when the tool would
+actually be available. 2 new tests in `test_router.py`.
+
+**Second live bug found and fixed after this doc was first written: closing-
+synthesis hallucination.** Live-testing "its not working" (user report,
+screenshot) showed a follow-up chat turn where `generate_image` was called
+successfully but the model's own reply fabricated a fake image link — first
+seen as a made-up `imgur.com` URL, then (after an initial fix attempt) as a
+markdown `![image](sandbox:/mnt/data/...)` reference to a file that doesn't
+exist. Root cause: nothing in `working_messages` tells the model it can't
+see/link/embed the real generated image, so the very next model turn
+"helpfully" invents one. Two fix attempts:
+1. First attempt added a system nudge (`_IMAGE_GEN_SYNTHESIS_NUDGE`) but only
+   ahead of the heavy-turn closing-synthesis call — missed the case where
+   `generate_image` is invoked on a **light**-agentic turn (short prompt, no
+   heavy keyword), where the model's own next loop iteration inside
+   `execute_node`'s tool loop *is* the final user-facing answer, with no
+   separate closing-synthesis call to gate.
+2. Real fix: the nudge is now appended to `working_messages` immediately
+   after the `generate_image` tool observation is recorded, inside the tool
+   loop itself (`execute_node`, right after the "tool" role message is
+   appended) — covers both the light-turn inline-continuation path and the
+   heavy-turn closing-synthesis path with a single insertion point, since
+   both read from the same `working_messages` list. The old heavy-only
+   insertion (right before the closing-synthesis call) was removed as
+   redundant. `_used_image_gen_tool` is kept (still exercised directly by
+   `test_used_image_gen_tool_true_when_present`/`_false_when_absent`) even
+   though `execute_node` itself no longer calls it.
+Live-reverified after the fix: "generate an image of a dog playing fetch" in
+a fresh chat now correctly replies "I'm generating the image now. It will
+appear automatically in the chat once it's ready." — no fabricated URL,
+markdown, or file path. Full backend suite green (475).
+
+Full backend suite green (472); `tsc --noEmit` + `npm run build` clean.
+
+**Live-verified end to end via Chrome, with one real infra blocker and one
+real pre-existing frontend gap found along the way (both out of this plan's
+scope, documented for the user):**
+- Asking "can you generate an image of a person eating an apple" in a fresh
+  chat correctly triggered `generate_image` (previously it silently didn't,
+  per the router gap above), which started a real 30-minute SDXL session
+  and queued a real job — confirmed via a direct API fetch of the persisted
+  trace (`observation`: "Started a 30-minute SDXL image session and queued
+  your image (job_id=...)").
+- **Cross-platform sharing confirmed live, not just by code inspection:**
+  the exact prompt from the chat-triggered job appeared in Image Lab's own
+  Generations list under the SDXL model, with zero Image Lab-side changes.
+- **Infra blocker (needs the user, not a code bug):** the actual image
+  render failed — the real Kaggle kernel logged
+  `NameResolutionError: ...trycloudflare.com` — the cloudflared tunnel
+  behind `POSTGREST_PUBLIC_URL` has gone stale/rotated (quick tunnels get a
+  new random subdomain on every restart). Needs the user to restart their
+  tunnel and update the backend's `POSTGREST_PUBLIC_URL` if the subdomain
+  changed, then retry.
+- **Pre-existing frontend gap found (not caused by this plan, not fixed
+  this pass):** `ImageJobChip`/the tool-call preview didn't render for the
+  freshly-created chat above even after a true hard reload — traced to
+  `useConversationStore`'s local cache being served instead of a fresh
+  `fetchConversation()` fetch, for a chat created+completed within the same
+  browser session. The cached copy was built from the live SSE trace
+  (which never carries an `observation` field — that's only ever attached
+  server-side in the persisted document), so it shows the tool-call args
+  instead of the result on reload. Confirmed via a direct API fetch that
+  the server's own persisted `observation` field is correct and complete —
+  this is a client-side cache-precedence bug, would affect any tool call
+  viewed again in the same session, not something specific to
+  `generate_image`. Flagged as a follow-up, not fixed in this pass (out of
+  F-11's stated scope).

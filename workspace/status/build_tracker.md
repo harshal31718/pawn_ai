@@ -22,26 +22,28 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   Closed-out record: `workspace/implemented_phases/phase_13_chat_feature_fixes.md`.
   F-4 moved into root `deployment.md` §8 (pre-public-launch step); F-5 scrapped.
   Plan files removed from `workspace/plan/chat/` (folder kept for future plans).
-- `[~]` **F-11 — Chat I/O formats: attach image + forced-SDXL session**
-  (`workspace/plan/chat/phase_F11_chat_io_formats.md`, registered 2026-07-16,
-  user-requested). Two changes: (1) composer `+`/kebab menu with "Attach PDF"
-  (unchanged) and new "Attach image" (vision Q&A, not RAG-indexed, not image
-  generation) — needs new multimodal content-part plumbing in
-  `llm_core`/`normalize` (built once, shared with `plan_vision_prompt_
-  enhancement.md`'s imageLab use case). (2) chat's `generate_image` tool
-  hardcoded to `sdxl` only (drops the LLM-controlled `model` param that caused
-  a live hallucination bug) and always starts/reuses a 30-minute warm session
-  instead of ever falling back to a cold one-shot — confirmed already
-  cross-platform-shared with Image Lab by construction (one `(user_id, model)`
-  Postgres row, no per-origin partitioning) in both directions (start in
-  either surface, continue in the other; Generations/job history is one
-  global queue, not synced copies) — chat and Image Lab stay separate
-  components with their own settings, only the session/job data is shared.
-  Also folds in a related live-found bug: `deepseek-r1`'s HuggingFace endpoint
-  is mislabeled `supports_tools: true` (leaks a malformed textual tool-call
-  instead of a real one) — flip to `false` for now. Suggested build order in
-  the plan's §6: multimodal plumbing → registry fix → generate_image rewrite
-  → vision-answer path → frontend composer UI.
+- `[x]` **F-11 — Chat I/O formats: attach image + forced-SDXL session**
+  (`workspace/plan/chat/phase_F11_chat_io_formats.md`, done 2026-07-16).
+  Composer `+`/kebab menu with "Attach PDF" (unchanged) and new "Attach
+  image" (vision Q&A via a new `direct_answer_node` branch — picks a
+  vision-capable model, builds one fresh multimodal message, never persists
+  the image bytes). `generate_image` hardcoded to `sdxl` only and always
+  starts/reuses a 30-minute warm session (the old cold-one-shot path is
+  gone from this tool). `llm_core`/`normalize` needed zero changes — both
+  already pass `messages` through opaquely. Also fixed: `deepseek-r1`'s
+  mislabeled `supports_tools`, and a real router gap found live (the
+  heuristic classifier had no image-generation keyword trigger, so
+  `generate_image` could never actually be invoked via the fast path —
+  added `_IMAGE_GEN_KEYWORDS` gated on `has_kaggle_creds`). 12 new backend
+  tests, full suite green (472); `tsc`/build clean. **Live-verified via
+  Chrome — cross-platform sharing confirmed for real** (a chat-triggered
+  SDXL job appeared in Image Lab's own Generations list). Two follow-ups
+  found, both out of scope for this pass: an infra blocker (the user's
+  cloudflared tunnel behind `POSTGREST_PUBLIC_URL` has gone stale — needs
+  the user to restart it) and a pre-existing frontend cache-precedence gap
+  (a same-session chat's tool-call preview shows args instead of the
+  result on reload, served from local cache instead of a fresh fetch —
+  confirmed the server's own persisted data is correct).
 - `[ ]` **Image Lab open items I-2..I-5** — `workspace/plan/imageLab/open_items.md`
   (moved into the imageLab plan folder 2026-07-15). `[x]` I-1 FLUX OOM merged + live-verified
   2026-07-15 (real Kaggle FLUX generation succeeded, no CUDA OOM); I-2/I-4 need the user +

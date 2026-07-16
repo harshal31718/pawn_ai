@@ -5,7 +5,7 @@ build_agent_prompt, route_action) is deleted, not tested here. final_node no
 longer exists (Phase N merged it into execute_node's own streaming tool loop)
 -- there is no separate final_node test section."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,7 @@ from app.agent.graph import (
     DummyResolver,
     _estimate_tokens,
     _memory_hit_lines,
+    _used_image_gen_tool,
     _used_research_tools,
     classify_node,
     direct_answer_node,
@@ -24,7 +25,7 @@ from app.agent.graph import (
     verify_node,
 )
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, VERIFY_MAX_REVISIONS
-from app.exceptions import ProviderError
+from app.exceptions import NoEndpointError, ProviderError
 
 
 def _state(**overrides):
@@ -98,6 +99,18 @@ async def test_classify_node_heavy_message():
     assert res == {"difficulty": "heavy", "needs_agent": True}
 
 
+@pytest.mark.asyncio
+async def test_classify_node_image_attached_skips_router_entirely():
+    """F-11: an image-attached turn always forces light/direct-answer without
+    ever calling router_classify -- the router's text heuristics assume
+    plain-string content, which a multimodal turn won't have."""
+    state = _state(has_image=True, image_b64="Zm9v", image_mime="image/png")
+    with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
+        res = await classify_node(state)
+    assert res == {"difficulty": "light", "needs_agent": False}
+    mock_router.assert_not_called()
+
+
 def test_route_after_classify_light_goes_direct():
     assert route_after_classify({"needs_agent": False}) == "direct_answer"
 
@@ -129,6 +142,69 @@ async def test_direct_answer_streams_with_no_step_events():
     assert "step" not in dispatched  # zero agent overhead
     assert "token" in dispatched
     assert "final_provider" in dispatched
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_image_attached_uses_vision_capable_model_and_multimodal_content():
+    """F-11: an image-attached turn overrides the user's own model pick with
+    a vision-capable one (require_vision=True) and sends a multimodal
+    content list (text + image_url), built fresh rather than mutating
+    state["messages"] -- history stays plain-string."""
+    state = _state(
+        has_image=True,
+        image_b64="Zm9v",
+        image_mime="image/png",
+        messages=[
+            {"role": "user", "content": "earlier text turn"},
+            {"role": "assistant", "content": "earlier reply"},
+            {"role": "user", "content": "what's in this image?"},
+        ],
+    )
+    captured = {}
+
+    async def mock_stream(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        captured["model_id"] = kwargs.get("model_id")
+        yield "A cat."
+
+    resolver = MagicMock()
+    resolver.pick_model_by_capability.return_value = "gemini-2.5-flash"
+    resolver.pick.return_value = []
+
+    with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+        with patch("app.core.normalize.chat_stream", side_effect=mock_stream):
+            res = await direct_answer_node(state, resolver=resolver)
+
+    resolver.pick_model_by_capability.assert_called_once_with("balanced", user_id="u1", require_vision=True)
+    assert captured["model_id"] == "gemini-2.5-flash"
+    assert captured["messages"][:-1] == state["messages"][:-1]  # history untouched, plain strings
+    last = captured["messages"][-1]
+    assert last["role"] == "user"
+    assert last["content"] == [
+        {"type": "text", "text": "what's in this image?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,Zm9v"}},
+    ]
+    assert res["final_answer"] == "A cat."
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_image_attached_no_vision_model_falls_back_gracefully():
+    """No vision-capable model available (no matching key configured) must
+    not crash the turn -- dispatches a clear explanation as the answer."""
+    state = _state(has_image=True, image_b64="Zm9v", image_mime="image/png")
+    resolver = MagicMock()
+    resolver.pick_model_by_capability.side_effect = NoEndpointError("no vision model")
+
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+        res = await direct_answer_node(state, resolver=resolver)
+
+    assert "vision-capable model" in res["final_answer"]
+    assert any(name == "token" and "vision-capable model" in data["delta"] for name, data in dispatched)
 
 
 # ── plan_node ────────────────────────────────────────────────────────────────
@@ -740,6 +816,50 @@ async def test_execute_node_heavy_closing_call_degraded_emits_warning_step():
     assert any(
         name == "step" and data.get("label") == "Synthesis quality may be degraded" for name, data in dispatched
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_generate_image_call_gets_synthesis_nudge():
+    """F-11 live bug: the closing-synthesis pass has no tools and no
+    awareness of what generate_image actually returned -- a research-tier
+    model would sometimes fabricate a fake image link (e.g. a made-up
+    imgur.com URL) instead of just relaying that generation is in progress.
+    A system nudge must be appended to the closing call's own messages
+    whenever a generate_image call appears in this turn's tool_log."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    captured_messages = []
+
+    async def fake(*args, **kwargs):
+        captured_messages.append(list(args[1]))
+        if kwargs.get("tools"):
+            yield {
+                "type": "done",
+                "tool_calls": [_tool_call("call_1", "generate_image", '{"prompt": "a cat"}')],
+                "finish_reason": "tool_calls",
+                "usage": None,
+            }
+        else:
+            yield {"type": "content", "delta": "Your image is generating."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            res = await execute_node(state)
+
+    assert res["tool_log"][0]["name"] == "generate_image"
+    closing_call_messages = captured_messages[-1]
+    assert any(
+        m.get("role") == "system" and "Do not invent an image URL" in m.get("content", "")
+        for m in closing_call_messages
+    )
+
+
+def test_used_image_gen_tool_true_when_present():
+    assert _used_image_gen_tool([{"name": "generate_image"}]) is True
+
+
+def test_used_image_gen_tool_false_when_absent():
+    assert _used_image_gen_tool([{"name": "calculator"}]) is False
 
 
 # ── O.3: verify node + deep-research gating ─────────────────────────────────

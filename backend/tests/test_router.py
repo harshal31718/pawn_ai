@@ -109,6 +109,30 @@ async def test_needs_agent_false_for_time_sensitive_without_search_key():
     assert decision["needs_agent"] is False
 
 
+@pytest.mark.asyncio
+async def test_needs_agent_true_for_image_gen_request_with_kaggle_creds():
+    """F-11 regression: 'generate an image of X' is short with no URL/heavy
+    keyword, so without this trigger it would route light+needs_agent=False
+    -- the direct_answer fast path has no tools bound at all, so
+    generate_image could never actually be invoked."""
+    decision = await router.classify(
+        _msgs("can you generate an image of a person eating an apple"),
+        has_doc=False, has_tools_likely=False, has_kaggle_creds=True,
+    )
+    assert decision["needs_agent"] is True
+
+
+@pytest.mark.asyncio
+async def test_needs_agent_false_for_image_gen_request_without_kaggle_creds():
+    """The image-gen trigger only fires when Kaggle creds are configured --
+    otherwise generate_image wouldn't even be in the toolset anyway."""
+    decision = await router.classify(
+        _msgs("can you generate an image of a person eating an apple"),
+        has_doc=False, has_tools_likely=False, has_kaggle_creds=False,
+    )
+    assert decision["needs_agent"] is False
+
+
 # ── LLM fallback tier: only invoked when the heuristic tier abstains ────────
 
 @pytest.mark.asyncio
@@ -222,6 +246,8 @@ def test_role_levels_matches_plan_spec():
         "subagent_researcher": "fast",
         "subagent_coder": "research",
         "subagent_summarizer": "fast",
+        # F-11: direct_answer_node's image-attached branch, require_vision=True.
+        "vision_answer": "balanced",
     }
 
 

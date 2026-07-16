@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRightIcon, KebabIcon } from './icons'
 
@@ -13,6 +13,13 @@ interface Props {
   items: MenuItem[]
   className?: string
   title?: string
+  /** Override the trigger's icon (defaults to the "⋮" KebabIcon) -- e.g. the
+   *  composer's attach menu (F-11) uses a "+" instead. */
+  icon?: ReactNode
+  /** Override the trigger button's own classes (defaults to the small "⋮"
+   *  row-action style) -- e.g. the composer's attach menu (F-11) needs the
+   *  bigger circular button size the rest of its toolbar uses. */
+  buttonClassName?: string
 }
 
 /** Small "..." dropdown menu with one level of submenu, used for both chat
@@ -39,11 +46,21 @@ interface Props {
  *  portaled dropdown, since they're no longer in the same DOM subtree) and
  *  on scroll/resize (position is computed once on open, not tracked live —
  *  simplest robust choice given how short-lived this menu is). Stops
- *  row-click propagation so opening it never selects the row underneath. */
-export default function KebabMenu({ items, className, title = 'More options' }: Props) {
+ *  row-click propagation so opening it never selects the row underneath.
+ *
+ *  Opens downward by default, but flips upward when there's more room above
+ *  the trigger than below (same viewport-flip logic `ModelSwitcher.tsx`
+ *  gained after an identical live bug: a trigger near the bottom of the
+ *  viewport -- e.g. a composer's `+` button -- would otherwise render the
+ *  menu partly/fully off-screen). Anchored via `top`/`bottom` (whichever
+ *  matches the chosen direction) rather than a fixed height, so it still
+ *  grows correctly from that edge if a submenu expands after opening. */
+export default function KebabMenu({ items, className, title = 'More options', icon, buttonClassName }: Props) {
   const [open, setOpen] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
-  const [coords, setCoords] = useState<{ top: number; right: number } | null>(null)
+  const [coords, setCoords] = useState<
+    { direction: 'down'; top: number; right: number } | { direction: 'up'; bottom: number; right: number } | null
+  >(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -80,7 +97,14 @@ export default function KebabMenu({ items, className, title = 'More options' }: 
   function handleTriggerClick() {
     if (!open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
-      setCoords({ top: rect.bottom + 4, right: window.innerWidth - rect.right })
+      const right = window.innerWidth - rect.right
+      const spaceBelow = window.innerHeight - rect.bottom
+      const spaceAbove = rect.top
+      if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+        setCoords({ direction: 'down', top: rect.bottom + 4, right })
+      } else {
+        setCoords({ direction: 'up', bottom: window.innerHeight - rect.top + 4, right })
+      }
     }
     setOpen((v) => !v)
     setExpandedIdx(null)
@@ -92,16 +116,21 @@ export default function KebabMenu({ items, className, title = 'More options' }: 
         ref={triggerRef}
         type="button"
         onClick={handleTriggerClick}
-        className="p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-theme-text transition-all active:scale-95"
+        className={buttonClassName ?? 'p-1 rounded hover:bg-theme-surface text-theme-text-muted hover:text-theme-text transition-all active:scale-95'}
         title={title}
       >
-        <KebabIcon className="w-3.5 h-3.5" />
+        {icon ?? <KebabIcon className="w-3.5 h-3.5" />}
       </button>
       {open && coords && createPortal(
         <div
           ref={dropdownRef}
-          style={{ position: 'fixed', top: coords.top, right: coords.right, zIndex: 9999 }}
-          className="w-48 bg-theme-bg border border-theme-border rounded-lg shadow-lg py-1 animate-in fade-in zoom-in-95 duration-100"
+          style={{
+            position: 'fixed',
+            right: coords.right,
+            zIndex: 9999,
+            ...(coords.direction === 'down' ? { top: coords.top } : { bottom: coords.bottom }),
+          }}
+          className="w-48 max-h-[70vh] overflow-y-auto bg-theme-bg border border-theme-border rounded-lg shadow-lg py-1 animate-in fade-in zoom-in-95 duration-100"
           onClick={(e) => e.stopPropagation()}
         >
           {items.map((item, i) => (

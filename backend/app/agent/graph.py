@@ -76,6 +76,14 @@ class AgentState(TypedDict):
     # memory.indexer.resolve_scope. None for stateless chats.
     scope_type: Optional[str]
     scope_id: Optional[str]
+    # F-11: an image attached to this turn (vision Q&A, not RAG-indexed).
+    # image_b64/image_mime are only ever read inside direct_answer_node to
+    # build one multimodal message for this turn's own call -- never
+    # touched by classify's router (has_image short-circuits it) or
+    # persisted anywhere past this request.
+    has_image: bool
+    image_b64: Optional[str]
+    image_mime: Optional[str]
     # Router (A.5) output.
     difficulty: str
     needs_agent: bool
@@ -112,13 +120,23 @@ async def classify_node(
     resolver: Optional[Resolver] = None,
     rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
+    # F-11: an image-attached turn always takes the direct vision-answer path
+    # (direct_answer_node's has_image branch) -- never the tool-calling agent
+    # loop this pass, so there's no need to run the text-heuristic router at
+    # all (it also assumes plain-string message content, which a multimodal
+    # turn won't have once direct_answer_node builds it).
+    if state.get("has_image"):
+        return {"difficulty": "light", "needs_agent": False}
+
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
 
     has_search_key = False
+    has_kaggle_creds = False
     if user_id:
         from app.core import key_store
         has_search_key = key_store.has_search_key(user_id)
+        has_kaggle_creds = key_store.has_kaggle_creds(user_id)
 
     decision = await router_classify(
         state["messages"],
@@ -130,6 +148,7 @@ async def classify_node(
         rate_limiter=rate_limiter,
         user_id=user_id,
         has_search_key=has_search_key,
+        has_kaggle_creds=has_kaggle_creds,
     )
     return {"difficulty": decision["difficulty"], "needs_agent": decision["needs_agent"]}
 
@@ -146,10 +165,43 @@ async def direct_answer_node(
     rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
     """needs_agent=False path: one streaming call, no tools, no plan, no
-    extra step events -- this must incur genuinely zero agent overhead."""
+    extra step events -- this must incur genuinely zero agent overhead.
+
+    F-11: an image-attached turn (classify_node already forced difficulty=
+    light/needs_agent=False for these) picks a vision-capable model instead
+    of the user's own selection -- the user's picked model may not support
+    vision at all -- and sends a multimodal message (text + image_url) built
+    fresh here rather than mutating state["messages"], so the raw image
+    bytes never reach any other node or get persisted."""
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
-    model_id = state["user_model_id"]
+
+    if state.get("has_image"):
+        try:
+            model_id = resolver.pick_model_by_capability(
+                ROLE_LEVELS["vision_answer"], user_id=user_id, require_vision=True,
+            )
+        except NoEndpointError:
+            no_vision_msg = (
+                "I don't have a vision-capable model configured to look at images "
+                "right now — add a Google, Groq, or Cerebras key in Settings."
+            )
+            await adispatch_custom_event("token", {"delta": no_vision_msg})
+            return {"final_answer": no_vision_msg}
+        history = state["messages"][:-1]
+        last = state["messages"][-1]
+        image_mime = state.get("image_mime") or "image/png"
+        multimodal_last = {
+            "role": last["role"],
+            "content": [
+                {"type": "text", "text": last.get("content") or ""},
+                {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{state.get('image_b64')}"}},
+            ],
+        }
+        messages = history + [multimodal_last]
+    else:
+        model_id = state["user_model_id"]
+        messages = state["messages"]
 
     # Best-effort "which provider is about to stream" peek for the UI's initial
     # badge -- NOT the real availability check. It only looks at model_id's own
@@ -175,7 +227,7 @@ async def direct_answer_node(
     full_response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
-        messages=state["messages"],
+        messages=messages,
         resolver=resolver,
         rate_limiter=rate_limiter,
         on_provider_switch=_on_provider_switch_events,
@@ -309,6 +361,30 @@ def _used_research_tools(tool_log: List[Dict[str, Any]]) -> bool:
     heavy-but-non-research turn (e.g. a long code task) shouldn't pay for the
     verifier at all."""
     return any(t.get("name") in _RESEARCH_TOOL_NAMES for t in tool_log)
+
+
+# F-11 (live bug found + fixed): the heavy-turn closing synthesis runs with
+# tools=None and no awareness of what generate_image actually returned --
+# a research-tier model with no image capability of its own would sometimes
+# "helpfully" fabricate a markdown image link (a fake imgur.com URL, seen
+# live) instead of just relaying that generation is already in progress.
+# The real job_id/status is already in working_messages (the tool's own
+# observation), so this is a pure prompting fix: tell the closing model
+# explicitly not to invent image content, only reference what's really there.
+_IMAGE_GEN_TOOL_NAME = "generate_image"
+_IMAGE_GEN_SYNTHESIS_NUDGE = (
+    "You already called generate_image above -- its real result (a job id) "
+    "is in the tool response. The actual image renders automatically on the "
+    "frontend once ready; you cannot see, link to, or embed it yourself. "
+    "Do not invent an image URL, markdown image syntax, or any image "
+    "hosting link (e.g. imgur) -- there is no such link. Just tell the user "
+    "in plain text that the image is generating and will appear "
+    "automatically; do not regenerate or call the tool again."
+)
+
+
+def _used_image_gen_tool(tool_log: List[Dict[str, Any]]) -> bool:
+    return any(t.get("name") == _IMAGE_GEN_TOOL_NAME for t in tool_log)
 
 
 async def execute_node(
@@ -588,6 +664,16 @@ async def execute_node(
                 "tool_call_id": call.get("id", ""),
                 "content": observation,
             })
+
+            # F-11 (live bug, second occurrence): the heavy-only nudge below
+            # (kept for the closing-synthesis pass) never ran for light-agentic
+            # turns, whose own next loop iteration IS the final user-facing
+            # content -- that's the path that was still hallucinating a fake
+            # `sandbox:/mnt/data/...` markdown image link. Inject the nudge
+            # right after the tool call itself so it's in context for whichever
+            # call answers next, light or heavy.
+            if name == _IMAGE_GEN_TOOL_NAME:
+                working_messages.append({"role": "system", "content": _IMAGE_GEN_SYNTHESIS_NUDGE})
     else:
         budget_exhausted = True
 

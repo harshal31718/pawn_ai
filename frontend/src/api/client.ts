@@ -334,6 +334,9 @@ export async function streamChat(
   docId?: string,
   conversationId?: string,
   signal?: AbortSignal,
+  /** F-11: a one-turn image attachment (vision Q&A) -- never persisted,
+   *  sent once alongside this request only. */
+  image?: { b64: string; mime: string },
 ): Promise<void> {
   const { onToken, onDone, onError, onRateLimit, onStep, onToolCall, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
     callbacks
@@ -348,6 +351,7 @@ export async function streamChat(
         ...(modelId ? { model_id: modelId } : {}),
         ...(docId ? { doc_id: docId } : {}),
         ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(image ? { image_b64: image.b64, image_mime: image.mime } : {}),
       }),
       signal,
     })

@@ -132,6 +132,10 @@ ROLE_LEVELS = {
     "subagent_researcher": "fast",
     "subagent_coder": "research",
     "subagent_summarizer": "fast",
+    # F-11: direct_answer_node's image-attached branch -- always overrides
+    # the user's own model pick with a vision-capable one, filtered via
+    # Resolver.pick_model_by_capability(require_vision=True).
+    "vision_answer": "balanced",
 }
 
 # Orchestrator (A.6) execute-loop bounds. Iteration cap stops a runaway tool

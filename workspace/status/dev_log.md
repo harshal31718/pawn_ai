@@ -6,6 +6,130 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — F-11: attach-image (vision Q&A) + forced-SDXL/session generate_image
+
+Closed out the 2026-07-15/16 chat batch into
+`implemented_phases/phase_13_chat_feature_fixes.md` (single record for F-1/
+F-2/F-3/F-6/F-7/F-8/F-9/F-10), removed the individual plan files from
+`plan/chat/` (kept the folder for future plans), moved F-4 into root
+`deployment.md` §8 as a pre-public-launch step, scrapped F-5 outright. Then
+built F-11 end to end, per the user's own explicit framing: what formats
+chat can take in (text, PDF, now image) and give out (text, image
+generation — made reliable and cross-platform this pass).
+
+**Multimodal plumbing (§3.1) turned out to already exist.** Checked
+`llm_core.py`/`normalize.py` directly before writing anything: every
+function already forwards `messages` opaquely into the JSON payload, no
+type assumptions on `content`. A multimodal content-part list needed zero
+code changes — closes the exact prerequisite gap
+`plan_vision_prompt_enhancement.md` had flagged, for both this plan and
+that one's eventual imageLab enhancer.
+
+**Attach-image (vision Q&A):** built as a branch inside `direct_answer_node`
+rather than a new graph node — `classify_node` short-circuits to
+light/no-agent the instant an image is attached (skips the text-heuristic
+router, which assumes plain-string content), then `direct_answer_node`
+picks a vision-capable model (new `ROLE_LEVELS["vision_answer"]="balanced"`,
+`require_vision=True`) and builds one fresh multimodal message — history
+stays plain-string, only the latest turn becomes `[text, image_url]` — so
+raw image bytes never reach any other node or get persisted. Frontend:
+`MessageInput.tsx`'s old single upload button is now a `+`-icon `KebabMenu`
+with "Attach PDF" (unchanged) and "Attach image" (new, client-side only —
+`FileReader` straight to a data URI, no backend call at attach time,
+captured and cleared the instant `handleSend` fires so it's never silently
+resent with a later message). `KebabMenu.tsx` gained `icon`/`buttonClassName`
+override props for this, plus the same up/down viewport-flip logic
+`ModelSwitcher.tsx` already had (a composer `+` button near the viewport
+bottom would otherwise render the menu off-screen — same bug class, fixed
+the same way).
+
+**`generate_image` forced-SDXL + forced-session (F-1 follow-up):** dropped
+the `model` param from the tool schema entirely (closes the exact
+hallucination bug found live earlier — the LLM could pick `flux` or
+malform the call). Rewrote the warm/cold decision: reuse a live session if
+one exists, else `start_session(user_id, "sdxl", 30, None)` then
+`submit_session_job` — the old `create_cold_job`/`spawn_cold_job_bg`
+cold-one-shot path is gone from this tool completely. Cross-platform
+sharing needed zero new code: `image_session.start_session` is keyed
+purely by `(user_id, model)` in Postgres, Image Lab's own UI already polls
+that same row, and `GET /generate/jobs?model=` already returns every job
+regardless of origin — confirmed by direct code reading before building,
+then confirmed again live (see below).
+
+**Two real bugs found and fixed along the way, neither in the original
+plan:**
+- `deepseek-r1`'s active endpoint (HuggingFace's router passthrough)
+  mislabeled `supports_tools: true` — its own special tool-call tokens
+  don't reliably become a real `tool_calls` field there, leaking as visible
+  garbage text instead of triggering a tool (this was the exact live bug
+  reported earlier this session). Flipped to `false` in both
+  `data/registry/models.json` and `seed.py`'s test fixture.
+  Correspondingly F-1 skipped its plans -- flagged for a future
+  `registry-refresh` pass to find a real working tool-calling endpoint.
+- `core/router.py`'s heuristic classifier had **no keyword trigger for
+  image-generation requests at all** — "generate an image of X" is short,
+  has no URL, no heavy keyword, so it classified light+`needs_agent=False`,
+  and `direct_answer_node`'s fast path has zero tools bound. Without this
+  fix, `generate_image` could never be invoked no matter how correct
+  everything else was — confirmed live: the exact same prompt that
+  triggered the tool correctly after the fix had produced a plain
+  text-only reply before it (the model suggesting a DALL-E prompt instead).
+  Added `_IMAGE_GEN_KEYWORDS`, gated on `has_kaggle_creds` (mirrors the
+  existing `has_search_key`/time-sensitive-keyword pattern).
+- Closing-synthesis hallucination, found live from the user's own "its not
+  working" bug report (screenshot: a fake `imgur.com` markdown image link
+  in a reply): nothing tells the model it can't see/embed the real generated
+  image, so whichever call produces the final user-facing text invents one.
+  First fix attempt only nudged the heavy-turn closing-synthesis call and
+  missed light-agentic turns entirely (`generate_image` called on a short
+  prompt with no heavy keyword — the tool loop's own next iteration *is* the
+  final answer there, no separate closing call to gate); confirmed still
+  broken live as a second hallucination shape
+  (`![image](sandbox:/mnt/data/...)`, a nonexistent file path this time).
+  Real fix: append `_IMAGE_GEN_SYNTHESIS_NUDGE` to `working_messages` right
+  after the `generate_image` tool observation is recorded inside
+  `execute_node`'s tool loop, not gated on `difficulty` — covers both the
+  light inline-continuation path and the heavy closing-synthesis path from
+  one insertion point, since both read the same `working_messages`. Removed
+  the now-redundant heavy-only insertion. Live-reverified: "generate an
+  image of a dog playing fetch" now correctly replies "I'm generating the
+  image now. It will appear automatically in the chat once it's ready." —
+  no fabricated link. Full backend suite green (475).
+
+12 new backend tests across `test_agent.py`/`test_agent_tools_image.py`/
+`test_router.py`/`test_projects_drive.py`; full suite green (472).
+`tsc --noEmit` + `npm run build` clean.
+
+**Live-verified via Chrome, with one real infra blocker and one real
+pre-existing frontend gap found along the way (both flagged for the user,
+neither a defect in this session's own code):**
+- A fresh "can you generate an image of a person eating an apple" correctly
+  triggered `generate_image` (confirmed via a direct API fetch of the
+  persisted trace: `observation` = "Started a 30-minute SDXL image session
+  and queued your image (job_id=...)").
+- **Cross-platform sharing confirmed live, not just by code inspection:**
+  the exact same prompt appeared in Image Lab's own Generations list under
+  the SDXL model, zero Image Lab-side changes needed.
+- **Infra blocker, needs the user:** the real Kaggle kernel's actual image
+  render failed — its log showed `NameResolutionError` for the cloudflared
+  tunnel hostname behind `POSTGREST_PUBLIC_URL`. Quick tunnels
+  (`trycloudflare.com`) get a new random subdomain every restart; the
+  configured URL has gone stale. Needs the user to restart their tunnel and
+  update the backend config if the subdomain changed.
+- **Pre-existing frontend gap found, not fixed this pass (out of F-11's
+  scope):** the `ImageJobChip`/tool-call preview didn't render for the
+  freshly-created chat above even after a genuine hard reload — traced to
+  `useConversationStore` serving its local cache (built from the live SSE
+  trace, which never carries an `observation` field) instead of a fresh
+  `fetchConversation()` fetch, for a chat created+completed within the same
+  browser session. Confirmed via direct API fetch that the server's own
+  persisted `observation` is correct and complete — this is a client-side
+  cache-precedence bug that would affect any tool call viewed again in the
+  same session, not something specific to `generate_image`. Flagged as a
+  follow-up.
+
+---
+
 ### [2026-07-16] — Chat build kicked off; F-9 live-verified + sticky sidebar section headers
 
 Cross-plan order set to chat → imageLab (videoLab deferred to the very end,

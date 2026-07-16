@@ -106,6 +106,11 @@ export default function ChatPage() {
   const [attachedDoc, setAttachedDoc] = useState<{ id: string; name: string } | null>(null)
   const [isUploading, setIsUploading] = useState(false)
 
+  // F-11: attached image state (vision Q&A) -- kept client-side only until
+  // Send, never uploaded/persisted like a doc (no backend storage at all;
+  // read straight into a data URI and sent along with the next /chat call).
+  const [attachedImage, setAttachedImage] = useState<{ name: string; previewUrl: string; b64: string; mime: string } | null>(null)
+
   // One registry of in-flight streams, keyed by conversation id.
   const streamsRef = useRef<
     Map<string, { assistantId: string; controller: AbortController; userMsgId: string; userContent: string }>
@@ -188,6 +193,10 @@ export default function ChatPage() {
     const conv = conversations.find((c) => c.id === activeConvId)
     if (conv?.model_id) setSelectedProvider(conv.model_id)
     setAttachedDoc(null)
+    setAttachedImage((prev) => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl)
+      return null
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConvId])
 
@@ -234,6 +243,16 @@ export default function ChatPage() {
 
   async function handleSend(content: string) {
     if ((activeConvId && streamingConvIds.has(activeConvId)) || isUploading) return
+
+    // F-11: an attached image is one-turn-only -- captured and cleared here
+    // (not on conv switch like the doc attachment, which lingers all
+    // conversation since doc_id is otherwise inert) so it's never silently
+    // resent with a later, unrelated message.
+    const imageToSend = attachedImage
+    if (imageToSend) {
+      URL.revokeObjectURL(imageToSend.previewUrl)
+      setAttachedImage(null)
+    }
 
     const convId = activeConvId ?? createConversation()
     promoteDraft(convId)
@@ -417,6 +436,7 @@ export default function ChatPage() {
       attachedDoc?.id || undefined,
       convId,
       controller.signal,
+      imageToSend ? { b64: imageToSend.b64, mime: imageToSend.mime } : undefined,
     )
   }
 
@@ -438,6 +458,31 @@ export default function ChatPage() {
     } finally {
       setIsUploading(false)
     }
+  }
+
+  function handleUploadImage(file: File) {
+    // F-11: no backend call at all -- unlike handleUpload's doc pipeline,
+    // an attached image is never indexed/persisted, just read straight into
+    // a data URI and held until Send (or dropped on remove/conv switch).
+    const previewUrl = URL.createObjectURL(file)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+      setAttachedImage({ name: file.name, previewUrl, b64, mime: file.type || 'image/png' })
+    }
+    reader.onerror = () => {
+      URL.revokeObjectURL(previewUrl)
+      alert('Failed to read the image file.')
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function handleRemoveImageAttachment() {
+    setAttachedImage((prev) => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl)
+      return null
+    })
   }
 
   const activeConv = conversations.find((c) => c.id === activeConvId)
@@ -552,11 +597,14 @@ export default function ChatPage() {
                 disabled={isActiveStreaming || rateLimitCountdown !== null}
                 onUpload={handleUpload}
                 isUploading={isUploading}
+                onUploadImage={handleUploadImage}
                 selectedProvider={selectedProvider}
                 onChangeProvider={setSelectedProvider}
                 models={availableModels}
                 attachment={attachedDoc}
                 onRemoveAttachment={() => setAttachedDoc(null)}
+                imageAttachment={attachedImage}
+                onRemoveImageAttachment={handleRemoveImageAttachment}
               />
             </div>
           </div>
@@ -583,11 +631,14 @@ export default function ChatPage() {
             disabled={isActiveStreaming || rateLimitCountdown !== null}
             onUpload={handleUpload}
             isUploading={isUploading}
+            onUploadImage={handleUploadImage}
             selectedProvider={selectedProvider}
             onChangeProvider={setSelectedProvider}
             models={availableModels}
             attachment={attachedDoc}
             onRemoveAttachment={() => setAttachedDoc(null)}
+            imageAttachment={attachedImage}
+            onRemoveImageAttachment={handleRemoveImageAttachment}
           />
         </div>
       </div>

@@ -94,6 +94,12 @@ class ChatRequest(BaseModel):
     provider: str | None = None        # Backward compatibility for provider selection
     doc_id: str | None = None          # deprecated/unused — doc content now reaches the model only via the doc_search tool (Phase A / A.4); kept for frontend backward-compat, ignored here
     conversation_id: str | None = None  # optional conversation ID for persistence
+    # F-11: an attached image for this turn only -- a direct vision Q&A
+    # ("what's in this picture"), never persisted to Drive/history and never
+    # indexed like a doc_search document; used once to build a multimodal
+    # message for this turn's direct-answer call, then discarded.
+    image_b64: str | None = None
+    image_mime: str | None = None
 
 async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None) -> str:
     """Helper to generate a short title for the conversation using the first
@@ -245,6 +251,9 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "has_tools_likely": prior_turn_used_tools,
         "scope_type": scope_type,
         "scope_id": scope_id,
+        "has_image": bool(req.image_b64),
+        "image_b64": req.image_b64,
+        "image_mime": req.image_mime,
         "difficulty": "light",
         "needs_agent": False,
         "plan": [],
