@@ -47,11 +47,17 @@ export interface AdvancedState {
 // instead of one flat default that undercuts SDXL or overshoots FLUX.
 export const DEFAULT_STEPS: Record<string, number> = { sdxl: 30, flux: 4 }
 
+// Q1.3: SDXL's photoreal sweet spot is 3-5 CFG, not the old 7.5 (matches the
+// notebooks' own tuned default). FLUX ignores this entirely — its pipeline
+// hardcodes guidance_scale=0.0 regardless of what's sent (guidance-free
+// distillation), so its default here is just for slider display consistency.
+export const DEFAULT_GUIDANCE: Record<string, number> = { sdxl: 5, flux: 0 }
+
 export function initialAdvanced(modelId: string): AdvancedState {
   return {
     aspectRatio: { enabled: false, value: '3:4' },
     steps: { enabled: false, value: DEFAULT_STEPS[modelId] ?? 20 },
-    guidanceScale: { enabled: false, value: 7.5 },
+    guidanceScale: { enabled: false, value: DEFAULT_GUIDANCE[modelId] ?? 5 },
     negativePrompt: { enabled: false, value: '' },
     stylePreset: { enabled: false, value: '' },
     strength: { enabled: false, value: 0.6 },
@@ -173,7 +179,9 @@ export default function AdvancedParams({
             onChange={(e) => update('steps', { enabled: e.target.checked })}
             className="w-3.5 h-3.5 rounded accent-theme-brand" />
           <span className="text-xs font-medium text-theme-text">Inference Steps</span>
-          <span className="text-[10px] text-theme-text-muted font-normal">(4 – 50)</span>
+          <span className="text-[10px] text-theme-text-muted font-normal">
+            (4 – 50{!isFlux && ', 20–40 recommended'})
+          </span>
         </label>
         <div className={rowCls(s.steps.enabled)}>
           <div className="flex items-center gap-2">
@@ -201,6 +209,9 @@ export default function AdvancedParams({
               className="flex-1 accent-theme-brand" />
             <span className="text-xs w-8 text-right tabular-nums text-theme-text-muted">{s.guidanceScale.value}</span>
           </div>
+          {!isFlux && (
+            <div className="text-[10px] text-theme-text-muted">3–5 = more photoreal</div>
+          )}
           {isFlux && (
             <div className="text-[10px] text-amber-600 dark:text-amber-400">FLUX is guidance-free — this value is ignored</div>
           )}

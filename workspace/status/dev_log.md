@@ -6,6 +6,88 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q1.3: scheduler + tuned defaults
+
+Third step of the imageLab Quality Q1 correctness pass, via the build-step skill
+in auto mode. Two independent gaps from the same prior code audit: (1) neither
+SDXL notebook configured a scheduler at all — diffusers falls back to whatever
+the base pipeline's `scheduler_config.json` shipped with (typically a plain
+Euler-family sampler), leaving real quality on the table versus a tuned
+sampler; (2) CFG (`guidance_scale`) defaulted to 7.5 everywhere, which is a
+reasonable SD1.5-era default but pushes SDXL photoreal output toward
+oversaturated/over-sharpened "AI-look" — 3-5 is the community-documented
+sweet spot for photorealism.
+
+**Scheduler.** Both SDXL templates (`image_sdxl/notebook.ipynb` cell
+`ac47af57`, `image_sdxl_session/notebook.ipynb` cell-2) gained
+`DPMSolverMultistepScheduler` added to the existing diffusers import, then
+right after Q1.2's `pipe.vae = vae` line and before `pipe = pipe.to("cuda")`:
+`pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config,
+use_karras_sigmas=True, algorithm_type="sde-dpmsolver++", euler_at_final=True)`
+— DPM++ 2M SDE Karras, the documented stability recipe for sub-50-step SDXL
+generation (Karras sigma schedule improves detail at low step counts; the SDE
+variant reduces artifacting versus the deterministic ODE solver;
+`euler_at_final` avoids a known instability in the solver's last step). Same
+`[pawn]`-prefixed log-line convention as Q1.2's VAE fix.
+
+**Tuned CFG default.** Both notebooks' inference calls changed `guidance_scale`
+from a hardcoded/fallback `7.5` to `5`. The cold template's call is a single
+hardcoded value; the session template's serve loop has TWO separate branches
+(text2img and img2img) each with their own `p.get("guidance_scale", 7.5)`
+fallback — both updated, not just one (a copy-paste-only fix would have missed
+the img2img branch, since it's a separate `img2img_pipe(...)` call, not the
+same call site). Steps stayed at 30 (already correct from before this plan even
+started) — the plan's "20–40 recommended" language is UI-hint-only (see below),
+not a code default change.
+
+**FLUX confirmed unaffected.** Its notebooks already hardcode
+`guidance_scale=0.0` in both the cold and session `pipe(...)` calls regardless
+of what any job param sends — FLUX.1-schnell is a guidance-distilled model, CFG
+has no effect on it. No notebook change was needed or made. New tests assert
+this explicitly (no `DPMSolverMultistepScheduler` string anywhere in FLUX
+templates).
+
+**Model registry.** `ImageModel` gained `scheduler: str = "default"` (SDXL row
+set to `"dpmpp_2m_sde_karras"`), documented in-comment as informational only —
+the Kaggle templates are static `.ipynb` files pushed as-is, not generated from
+this Python registry at deploy time, so this field has no consumer today. Added
+per the plan's explicit ask for a "data, not code" per-model scheduler
+declaration, ready for whichever future step (if any) starts templating
+notebooks from registry data instead of shipping them as fixed files.
+
+**Frontend.** New `DEFAULT_GUIDANCE: Record<string, number> = { sdxl: 5, flux:
+0 }` in `AdvancedParams.tsx`, mirroring the existing `DEFAULT_STEPS` pattern —
+`initialAdvanced()`'s guidance-scale default is now genuinely model-aware
+instead of one flat `7.5`. FLUX's `0` entry here is purely for slider-display
+consistency (nothing reads it — the backend hardcodes 0.0 regardless), not
+because the frontend value has any effect for that model. Added a "3–5 = more
+photoreal" hint below the Guidance Scale slider for non-FLUX models (alongside
+the pre-existing "FLUX is guidance-free" warning for FLUX), and a "20–40
+recommended" note appended to the Inference Steps range label for non-FLUX
+models.
+
+**Tests.** New `test_sdxl_cold_template_has_scheduler_and_tuned_cfg` +
+`test_sdxl_session_template_has_scheduler_and_tuned_cfg` (both assert scheduler
+presence, all 4 kwargs, correct ordering relative to the VAE fix and the
+`.to("cuda")` call, the tuned CFG value present, the old 7.5 value absent, and
+— for the session template specifically — both text2img/img2img branches
+updated, via a `.count(...) == 2` assertion). 3 new frontend tests in
+`AdvancedParams.test.ts` (SDXL guidance default is 5, derives correctly when
+enabled, `DEFAULT_GUIDANCE` shape). 496 backend tests green (up from 494), 8
+frontend tests (up from 5); `tsc`/`npm run build` clean. code-reviewer PASS —
+0 CRITICAL/WARN; 2 NOTEs (the new `scheduler` field is an untyped free-form
+`str` with no compile-time guard against a mismatched value, and the
+"informational only" caveat is honestly documented, not misleadingly implying
+it's wired up) — both accepted as-is, no action needed given the field has no
+consumer to validate against yet. No security-auditor run (notebook template +
+data-field edit, no secrets/config/auth touched).
+
+**Not yet done:** live verification — folded into Q1.5's combined fixed-seed
+A/B benchmark, now that Q1.1–Q1.3 are all in place. Q1.4 (seed control + FLUX
+negative-prompt honesty) is next.
+
+---
+
 ### [2026-07-16] — imageLab Q1.2: fp16 VAE fix (black-image killer)
 
 Second step of the imageLab Quality Q1 correctness pass, via the build-step skill

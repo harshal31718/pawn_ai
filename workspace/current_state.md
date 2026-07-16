@@ -2,6 +2,38 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q1.3 — Scheduler + tuned defaults — DONE (2026-07-16).** Third
+correctness fix in the Q1 pass: neither SDXL notebook configured a scheduler
+(library default), and CFG defaulted to 7.5 — too high for photoreal output.
+Both SDXL templates (cold `image_sdxl/notebook.ipynb` + warm-session
+`image_sdxl_session/notebook.ipynb`) now configure DPM++ 2M SDE Karras
+(`DPMSolverMultistepScheduler.from_config(pipe.scheduler.config,
+use_karras_sigmas=True, algorithm_type="sde-dpmsolver++", euler_at_final=True)`)
+right after the Q1.2 VAE assignment and before the pipeline moves to cuda — the
+documented <50-step stability recipe. CFG default changed 7.5→5 (the photoreal
+sweet spot) in both notebooks' inference calls, including BOTH the text2img and
+img2img branches of the session template's serve loop. SDXL steps default (30)
+was already correct pre-existing — no change needed there. FLUX untouched
+throughout: its notebooks already hardcode `guidance_scale=0.0` regardless of
+any param sent (guidance-free distillation), so nothing to fix. `ImageModel`
+gained an informational `scheduler: str = "default"` field (`"sdxl" →
+"dpmpp_2m_sde_karras"`) — explicitly documented as not consumed anywhere
+(templates are static `.ipynb` files, not generated from this registry).
+Frontend: new `DEFAULT_GUIDANCE` map (mirrors `DEFAULT_STEPS`) makes the
+guidance-scale slider default model-aware; added a "3–5 = more photoreal" hint
+for non-FLUX models and a "20–40 recommended" note on the steps range. New
+template-grep tests in both `test_kaggle_cold_templates.py` and
+`test_kaggle_session_templates.py` (scheduler presence + ordering + tuned CFG
+value, scoped to SDXL-only, explicit absence asserted on FLUX) + 3 new frontend
+tests. 496 backend tests green (up from 494), 8 frontend tests (up from 5);
+`tsc`/`npm run build` clean. code-reviewer PASS (0 CRITICAL/WARN, 2 informational
+NOTEs on the untyped `scheduler` field — accepted, no action needed). No
+security-auditor run (notebook template + data-field edit, no secrets/config/
+auth touched). Not yet live-verified against real Kaggle — this closes out Q1's
+correctness fixes; Q1.4 (seed control) is next, then Q1.5's combined fixed-seed
+A/B benchmark. See `workspace/plan/imageLab/phase_Q1_generation_fixes.md` §Q1.3
+and `dev_log.md`'s 2026-07-16 "imageLab Q1.3" entry.
+
 **imageLab Q1.2 — fp16 VAE fix (black-image killer) — DONE (2026-07-16).** Second
 root cause of the user's image-quality report: both SDXL Kaggle notebook templates
 loaded the stock fp16 SDXL VAE, which overflows fp16 precision (>65504 activations

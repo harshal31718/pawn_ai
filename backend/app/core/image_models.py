@@ -57,6 +57,11 @@ class ImageModel:
     # Model-native resolution buckets, keyed by aspect-ratio label (Q1.1).
     # Server-side param snapping picks the nearest one by aspect-ratio distance.
     resolution_buckets: Optional[dict[str, tuple[int, int]]] = None
+    # Which sampler the model's notebook templates configure (Q1.3) — informational
+    # only today, since templates are static .ipynb files, not generated from this
+    # registry at deploy time. Documents the choice as data so a future model can
+    # declare its own without anyone having to go spelunking in notebook JSON.
+    scheduler: str = "default"
 
 
 IMAGE_MODELS: dict[str, ImageModel] = {
@@ -74,6 +79,7 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         session_slug="pawn-sdxl-session",
         session_gpu=True,
         resolution_buckets=_SDXL_NATIVE_BUCKETS,
+        scheduler="dpmpp_2m_sde_karras",
     ),
     "flux": ImageModel(
         id="flux",

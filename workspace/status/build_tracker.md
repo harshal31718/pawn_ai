@@ -79,7 +79,21 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     secrets/config/auth touched). Full record: `dev_log.md`'s 2026-07-16
     "imageLab Q1.2" entry, `current_state.md`. Not yet live-verified against
     real Kaggle — folded into Q1.5's combined benchmark once Q1.3/Q1.4 land.
-  - `[ ]` Q1.3 — Scheduler + tuned defaults
+  - `[x]` **Q1.3 — Scheduler + tuned defaults** ✓ (2026-07-16)
+    Both SDXL notebooks now configure DPM++ 2M SDE Karras
+    (`DPMSolverMultistepScheduler.from_config(..., use_karras_sigmas=True,
+    algorithm_type="sde-dpmsolver++", euler_at_final=True)`) after the Q1.2 VAE fix,
+    before `.to("cuda")`. CFG default 7.5→5 in both notebooks (session template's
+    text2img AND img2img branches both updated). FLUX confirmed untouched
+    (guidance_scale=0.0 already hardcoded there). New informational
+    `ImageModel.scheduler` field. Frontend `DEFAULT_GUIDANCE` map (model-aware,
+    mirrors `DEFAULT_STEPS`) + UI hints. New template-grep tests on both notebook
+    test files + 3 new frontend tests. 496 backend tests green (up from 494), 8
+    frontend tests (up from 5), `tsc`/build clean. code-reviewer PASS (0
+    CRITICAL/WARN, 2 accepted NOTEs). build-validator PASS. No security-auditor run
+    (notebook + data-field edit, no secrets/config/auth touched). Full record:
+    `dev_log.md`'s 2026-07-16 "imageLab Q1.3" entry, `current_state.md`. Not yet
+    live-verified — folded into Q1.5's combined benchmark once Q1.4 lands.
   - `[ ]` Q1.4 — Seed control + FLUX negative-prompt honesty
   - `[ ]` Q1.5 — A/B benchmark set + live verification
 - `[ ]` **Vision-grounded prompt enhancement (imageLab)** —

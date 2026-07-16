@@ -64,3 +64,30 @@ def test_sdxl_cold_template_has_fp16_vae_fix(cold_notebooks):
             assert "madebyollin/sdxl-vae-fp16-fix" not in full_source, (
                 f"{path}: SDXL-only VAE fix leaked into a non-SDXL template"
             )
+
+
+def test_sdxl_cold_template_has_scheduler_and_tuned_cfg(cold_notebooks):
+    """Q1.3: SDXL must configure DPM++ 2M SDE Karras (the documented <50-step
+    stability recipe) after the VAE fix and before the pipeline moves to cuda,
+    and the inference call's CFG must use the tuned photoreal default (5, not
+    the old 7.5). FLUX is unaffected — no scheduler swap, guidance already
+    hardcoded to 0.0 in its own template."""
+    for path, nb in cold_notebooks.items():
+        full_source = "".join("".join(c["source"]) for c in nb["cells"])
+        if "sdxl" in str(path).lower():
+            assert "DPMSolverMultistepScheduler" in full_source, f"{path} missing the scheduler"
+            assert "use_karras_sigmas=True" in full_source, f"{path} missing karras sigmas"
+            assert 'algorithm_type="sde-dpmsolver++"' in full_source, f"{path} missing sde-dpmsolver++"
+            assert "euler_at_final=True" in full_source, f"{path} missing euler_at_final"
+            assert full_source.index("pipe.vae = vae") < full_source.index(
+                "DPMSolverMultistepScheduler.from_config"
+            ), f"{path}: scheduler must be configured after the VAE fix"
+            assert full_source.index("DPMSolverMultistepScheduler.from_config") < full_source.index(
+                'pipe = pipe.to("cuda")'
+            ), f"{path}: scheduler must be configured before the pipeline moves to cuda"
+            assert "guidance_scale=5" in full_source, f"{path} missing tuned CFG default of 5"
+            assert "guidance_scale=7.5" not in full_source, f"{path}: old CFG default 7.5 still present"
+        else:
+            assert "DPMSolverMultistepScheduler" not in full_source, (
+                f"{path}: SDXL-only scheduler swap leaked into a non-SDXL template"
+            )

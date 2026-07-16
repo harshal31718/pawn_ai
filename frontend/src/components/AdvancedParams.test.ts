@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialAdvanced, deriveParams, DEFAULT_STEPS } from './AdvancedParams'
+import { initialAdvanced, deriveParams, DEFAULT_STEPS, DEFAULT_GUIDANCE } from './AdvancedParams'
 
 describe('Q1.1 — SDXL-native resolution buckets', () => {
   it('defaults aspect ratio to 3:4 portrait, not the old 1:1 square', () => {
@@ -50,5 +50,24 @@ describe('Q1.1 — SDXL-native resolution buckets', () => {
     const params = deriveParams(s, 'flux')
     expect(params.width).toBe(768)
     expect(params.height).toBe(1344)
+  })
+})
+
+describe('Q1.3 — scheduler + tuned defaults', () => {
+  it('SDXL guidance default is 5 (photoreal sweet spot), not the old 7.5', () => {
+    const s = initialAdvanced('sdxl')
+    expect(s.guidanceScale.value).toBe(5)
+  })
+
+  it('SDXL guidance derives to 5 when enabled', () => {
+    const s = initialAdvanced('sdxl')
+    s.guidanceScale.enabled = true
+    const params = deriveParams(s, 'sdxl')
+    expect(params.guidance_scale).toBe(5)
+  })
+
+  it('exposes DEFAULT_GUIDANCE per-model, mirroring DEFAULT_STEPS', () => {
+    expect(DEFAULT_GUIDANCE.sdxl).toBe(5)
+    expect(DEFAULT_GUIDANCE.flux).toBe(0)
   })
 })

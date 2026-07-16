@@ -131,6 +131,38 @@ def test_sdxl_session_template_has_fp16_vae_fix(session_notebooks):
             )
 
 
+def test_sdxl_session_template_has_scheduler_and_tuned_cfg(session_notebooks):
+    """Q1.3: SDXL's model-load cell (cell-2) must configure DPM++ 2M SDE
+    Karras after the VAE fix and before the pipeline moves to cuda, and the
+    serve loop's (cell-3) inference calls must default guidance_scale to the
+    tuned photoreal value (5, not the old 7.5) for BOTH the text2img and
+    img2img branches. FLUX is unaffected."""
+    for path, nb in session_notebooks.items():
+        cell2 = "".join(nb["cells"][2]["source"])
+        cell3 = "".join(nb["cells"][3]["source"])
+        if "sdxl" in path.name.lower() or "sdxl" in str(path).lower():
+            assert "DPMSolverMultistepScheduler" in cell2, f"{path} missing the scheduler"
+            assert "use_karras_sigmas=True" in cell2, f"{path} missing karras sigmas"
+            assert 'algorithm_type="sde-dpmsolver++"' in cell2, f"{path} missing sde-dpmsolver++"
+            assert "euler_at_final=True" in cell2, f"{path} missing euler_at_final"
+            assert cell2.index("pipe.vae = vae") < cell2.index(
+                "DPMSolverMultistepScheduler.from_config"
+            ), f"{path}: scheduler must be configured after the VAE fix"
+            assert cell2.index("DPMSolverMultistepScheduler.from_config") < cell2.index(
+                'pipe = pipe.to("cuda")'
+            ), f"{path}: scheduler must be configured before the pipeline moves to cuda"
+            assert cell3.count('guidance_scale=p.get("guidance_scale", 5)') == 2, (
+                f"{path}: both text2img and img2img branches must default CFG to 5"
+            )
+            assert 'guidance_scale=p.get("guidance_scale", 7.5)' not in cell3, (
+                f"{path}: old CFG default 7.5 still present"
+            )
+        else:
+            assert "DPMSolverMultistepScheduler" not in cell2, (
+                f"{path}: SDXL-only scheduler swap leaked into a non-SDXL template"
+            )
+
+
 def test_session_template_supervisor_has_unreachable_self_exit(session_notebooks):
     """The supervisor must eventually give up and free the GPU if PostgREST
     is unreachable for the kernel's entire life -- otherwise a dead-tunnel
