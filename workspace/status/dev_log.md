@@ -6,6 +6,84 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q3.2: default negatives (SDXL-family)
+
+First build step of Q3 (prompting/presets). The user made an explicit call this
+session to skip Q2 (new photoreal checkpoint models) and do Q3 first — optimize
+the existing pipeline so it's ready when new models eventually land, instead of
+layering more models onto an unfinished enhancement layer. Q3.1 (the LLM prompt
+enhancer) depends on `plan_vision_prompt_enhancement.md`'s multimodal plumbing,
+which doesn't exist yet and has 3 open questions for the user — so Q3.2
+(independently buildable, no dependencies) went first.
+
+**What shipped.** `ImageModel` gained `default_negative: Optional[str]` — SDXL's
+value is the research-backed photoreal negative list from this session's earlier
+web-research pass (`cartoon, illustration, anime, painting, CGI, 3d render,
+unrealistic proportions, extra fingers, low quality, deformed, extra limbs, bad
+anatomy, blurry, watermark, text`); FLUX stays `None` (already has no negative-
+prompt UI field at all, per Q1.4). New `merge_negative_prompt(model_id,
+user_negative, style_preset=None)` in `image_models.py`: default-only when the
+user supplied nothing, user-only when the model has no default (FLUX), both
+comma-joined when both exist, blank/whitespace user input normalized to `None`
+first so an enabled-but-empty field doesn't produce a trailing comma. Wired into
+both `submit_session_job` and `create_cold_job` via a new
+`_apply_default_negative()` helper in `image_session.py`, called right after the
+existing `_snap_params()` — same single choke-point pattern Q1.1 established for
+resolution snapping, avoiding duplication across the two job-creation paths.
+
+**Real bug found and fixed mid-step: the default fights two existing style
+presets.** code-reviewer's first pass caught it: the default negative bans
+"cartoon, illustration, anime, painting" — and `routes/generate.py`'s
+`STYLE_SUFFIXES` already ADDS "anime style, ... detailed illustration" as a
+*positive* prompt suffix for the "Anime" preset, and "oil painting, ..." for
+"Oil Painting". Selecting either preset on SDXL would have produced a prompt
+simultaneously asking for and banning the same visual style — a real, concretely
+verifiable conflict between two shipped features, not a hypothetical edge case.
+Fixed with a `NON_PHOTOREAL_STYLE_PRESETS = frozenset({"anime", "oil_painting",
+"sketch"})` in `image_models.py` — `merge_negative_prompt` now takes an optional
+`style_preset` param and skips the default entirely when one of those three is
+active (sketch included preemptively — "black and white pencil sketch" isn't
+photoreal either, even though it doesn't literally collide with a banned word
+the way anime/oil_painting do). `_apply_default_negative` reads
+`params.style_preset` and threads it through. This keeps the rule as one piece
+of data next to `default_negative` itself rather than logic duplicated at every
+call site that might apply it.
+
+**Deliberately deferred, not silently dropped:**
+- Q3.3's "multi-person subject-type preset gets an extended negative list" —
+  can't be built yet since Q3.3's preset system doesn't exist in code. Flagged
+  explicitly in the plan doc; will land when Q3.3 does.
+- An opt-out toggle. The plan's "unless user opts out" phrasing implies a
+  mechanism that wasn't scoped or built this step — the default is currently
+  always-applied server-side with no way to disable it (a technically
+  sophisticated user could still override individual banned words by
+  contradicting them in their own negative prompt, but there's no clean "just
+  turn this off" control). code-reviewer flagged this as worth prioritizing
+  before wider rollout, not urgent enough to block this step. Frontend hint
+  text under the Negative Prompt field is honest about the always-on behavior
+  ("a photoreal default negative is always added — anything here is appended
+  to it"), placed outside the field's enabled/disabled fade so it stays
+  visible regardless of the checkbox state (the default applies either way).
+
+**Tests.** New pure-logic tests in `test_image_models.py` (default-only,
+user-only-on-FLUX, both-merged, blank-input-normalized, unknown-model-raises,
+plus the style-preset-skip matrix across all three non-photoreal presets and
+the photoreal-presets-still-apply-it counter-case). New integration round-trip
+tests in both `test_image_jobs.py` (cold path — same honesty caveat as Q1.4's
+seed test: the cold path still doesn't forward params to Kaggle at all, so
+this only proves storage round-trip, not delivery) and `test_image_session.py`
+(warm path — this one DOES reach the real notebook, the serve loop has always
+read `job.params.negative_prompt`), including a dedicated
+`test_create_cold_job_skips_default_negative_under_anime_style` proving the
+fix end-to-end, not just at the pure-function level. 513 backend tests green
+(up from 499, `docker compose exec backend pytest -q` — rebuild required
+first). `tsc --noEmit`/`npm run build` clean. code-reviewer: 1st pass PASS
+with 1 WARN (the style-preset conflict above, fixed and re-verified). No
+security-auditor run (pure data/param-merge logic, no secrets/config/auth
+touched).
+
+---
+
 ### [2026-07-16] — imageLab Q1.5: A/B benchmark set + live verification (closes Q1)
 
 Final step of the imageLab Quality Q1 correctness pass. Created

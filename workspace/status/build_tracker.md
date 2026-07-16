@@ -139,6 +139,35 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     exist to catch category-specific regressions and can run before Q2 ships if
     a more exhaustive pass is wanted. Full result log in `benchmarks.md`.
     **Q1 (Q1.1-Q1.5) is now fully closed.**
+- `[~]` **imageLab Quality Q3 — Prompting: enhancer, negatives, preset rework** —
+  `workspace/plan/imageLab/phase_Q3_prompting_presets.md`. **User's explicit call
+  (2026-07-16): Q2 (new checkpoint models) skipped for now — optimize the pipeline
+  via Q3 first, so it's ready when new models eventually land.** Q3.1 (LLM prompt
+  enhancer) fleshed out with concrete per-model prompt schemas, a real system-prompt
+  template, and a rule-based-default/LLM-based-extra selection mechanism (mirrors
+  `core/router.py`'s `classify()` shape) — implementation depends on
+  `plan_vision_prompt_enhancement.md`'s multimodal plumbing (not built yet, has 3
+  open questions for the user), so Q3.2 (independently buildable) went first.
+  - `[x]` **Q3.2 — Default negatives (SDXL-family)** ✓ (2026-07-16)
+    `ImageModel.default_negative` (SDXL: research-backed photoreal negative list;
+    FLUX: `None`). New `merge_negative_prompt(model_id, user_negative, style_preset)`
+    in `image_models.py`, wired via `_apply_default_negative()` into both
+    `submit_session_job`/`create_cold_job` at the same choke point as Q1.1's
+    `_snap_params`. **Real bug found + fixed same session:** the default negative's
+    "cartoon, illustration, anime, painting" terms directly contradicted the
+    existing "Anime"/"Oil Painting" style presets (which add those exact words as
+    positive suffixes) — fixed with a `NON_PHOTOREAL_STYLE_PRESETS` frozenset
+    (anime/oil_painting/sketch) that skips the default under those presets.
+    Deliberately deferred: Q3.3's multi-person extended-negative-list (Q3.3 doesn't
+    exist yet) and an opt-out UI toggle (default is currently always-on — flagged
+    as a real gap worth revisiting, not urgent enough to block). 513 backend tests
+    green (up from 499), `tsc`/build clean. code-reviewer: 1st pass PASS with 1 WARN
+    (the style-preset conflict, fixed + re-verified). build-validator PASS. No
+    security-auditor run (pure data/param-merge, no secrets/config/auth touched).
+    Full record: `dev_log.md`'s 2026-07-16 "imageLab Q3.2" entry, `current_state.md`.
+  - `[ ]` Q3.1 — LLM prompt enhancer (blocked on vision-plumbing prerequisites)
+  - `[ ]` Q3.3 — Style + subject-type presets rebuilt
+  - `[ ]` Q3.4 — Optional: negative embeddings (spike)
 - `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
   `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,
   user-requested). Image+prompt → vision model analysis → refined prompt → generation

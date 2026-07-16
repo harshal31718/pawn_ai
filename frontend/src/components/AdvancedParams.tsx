@@ -198,6 +198,9 @@ export default function AdvancedParams({
               placeholder="avoid: blurry, cartoon, text…"
               className={CTL} />
           </div>
+          <div className="text-[10px] text-theme-text-muted">
+            a photoreal default negative is always added — anything here is appended to it
+          </div>
         </div>
       )}
 

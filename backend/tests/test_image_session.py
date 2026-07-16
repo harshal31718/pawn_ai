@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from app.core import image_session
+from app.core import image_models, image_session
 from app.main import app
 
 
@@ -339,6 +339,52 @@ def test_submit_session_job_seed_round_trips_to_job_row():
     )
     stored_params = insert_call[2][4].obj
     assert stored_params["seed"] == 123456789
+
+
+def test_submit_session_job_applies_default_negative_for_sdxl():
+    """Q3.2: same default-negative merge as the cold path, applied on the
+    warm-session job path too -- this one DOES reach the real notebook (the
+    serve loop's cell-3 has always read job.params.negative_prompt, unlike
+    Q1.4's seed which needed new notebook code)."""
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "sdxl",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job("user-1", "s1", "a red apple")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert stored_params["negative_prompt"] == image_models.IMAGE_MODELS["sdxl"].default_negative
+
+
+def test_submit_session_job_flux_gets_no_default_negative():
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "flux",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job("user-1", "s1", "a red apple")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert "negative_prompt" not in stored_params
 
 
 def test_submit_session_job_missing_session_raises():

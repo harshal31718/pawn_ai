@@ -62,6 +62,10 @@ class ImageModel:
     # registry at deploy time. Documents the choice as data so a future model can
     # declare its own without anyone having to go spelunking in notebook JSON.
     scheduler: str = "default"
+    # Research-backed default negative prompt (Q3.2), merged with any user-supplied
+    # negative prompt server-side. None for models that don't accept negatives at
+    # all (FLUX is guidance-free — Q1.4 already hides the UI field for it).
+    default_negative: Optional[str] = None
 
 
 IMAGE_MODELS: dict[str, ImageModel] = {
@@ -80,6 +84,11 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         session_gpu=True,
         resolution_buckets=_SDXL_NATIVE_BUCKETS,
         scheduler="dpmpp_2m_sde_karras",
+        default_negative=(
+            "cartoon, illustration, anime, painting, CGI, 3d render, "
+            "unrealistic proportions, extra fingers, low quality, deformed, "
+            "extra limbs, bad anatomy, blurry, watermark, text"
+        ),
     ),
     "flux": ImageModel(
         id="flux",
@@ -128,3 +137,36 @@ def snap_resolution(
         buckets.values(), key=lambda wh: abs((wh[0] / wh[1]) - target_ratio)
     )
     return best_w, best_h
+
+
+# Style presets whose whole point is to move AWAY from photorealism (Q3.3's
+# `STYLE_SUFFIXES` in routes/generate.py). The SDXL default negative below
+# specifically bans "cartoon, illustration, anime, painting" -- applying it
+# under one of these presets would have the prompt fight itself (e.g. "anime
+# style, ... detailed illustration" as a positive suffix while the negative
+# prompt simultaneously bans "illustration"/"anime"). Kept here, not in
+# routes/generate.py, so this stays a single data-driven rule next to the
+# default_negative value itself rather than logic duplicated at each call site.
+NON_PHOTOREAL_STYLE_PRESETS = frozenset({"anime", "oil_painting", "sketch"})
+
+
+def merge_negative_prompt(
+    model_id: str, user_negative: Optional[str], style_preset: Optional[str] = None
+) -> Optional[str]:
+    """Prepend the model's research-backed default negative prompt (Q3.2) ahead
+    of whatever the user supplied, comma-joined. A model with no default (FLUX)
+    passes the user's value through unchanged. Empty/whitespace-only user input
+    is treated the same as None, so an accidentally-enabled-but-blank negative-
+    prompt field doesn't produce a trailing comma. Skipped entirely when a
+    non-photoreal style preset is active (see NON_PHOTOREAL_STYLE_PRESETS) --
+    the default is a photoreal-specific negative list and would otherwise
+    contradict presets like "anime" or "oil_painting"."""
+    default = get_image_model(model_id).default_negative
+    user_negative = (user_negative or "").strip() or None
+    if style_preset in NON_PHOTOREAL_STYLE_PRESETS:
+        return user_negative
+    if not default:
+        return user_negative
+    if not user_negative:
+        return default
+    return f"{default}, {user_negative}"

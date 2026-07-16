@@ -2,6 +2,32 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q3.2 — Default negatives (SDXL-family) — DONE (2026-07-16).** First step
+of the Q3 prompting/presets phase (Q2 deliberately skipped for now, per the user —
+optimize the pipeline before adding new models). SDXL now gets a research-backed
+default negative prompt (`cartoon, illustration, anime, painting, CGI, 3d render,
+unrealistic proportions, extra fingers, low quality, deformed, extra limbs, bad
+anatomy, blurry, watermark, text`) server-side-merged ahead of whatever the user
+types, on EVERY SDXL generation — not just ones where the user knew to type
+negatives in manually. New `ImageModel.default_negative` field (None for FLUX,
+unaffected); new `merge_negative_prompt(model_id, user_negative, style_preset)` in
+`image_models.py`, wired into both `submit_session_job`/`create_cold_job` via a new
+`_apply_default_negative()` helper at the same choke point Q1.1's resolution
+snapping uses. **Real bug found by code-reviewer's first pass, fixed same
+session:** the default negative's "cartoon, illustration, anime, painting" terms
+directly contradicted the existing "Anime" and "Oil Painting" style presets, which
+add those exact words as *positive* suffixes — a user selecting either preset would
+have gotten a prompt fighting itself. Fixed with a `NON_PHOTOREAL_STYLE_PRESETS`
+frozenset (`anime`, `oil_painting`, `sketch`) that skips the default entirely under
+those presets. Deliberately deferred: Q3.3's "multi-person preset gets an extended
+negative list" (Q3.3 doesn't exist in code yet) and an opt-out UI toggle (the
+default is currently always-on, un-opt-out-able — flagged as a real, if minor, gap
+worth revisiting). Frontend hint added under the Negative Prompt field. 513 backend
+tests green (up from 499), `tsc`/build clean. code-reviewer PASS (1 WARN fixed — the
+style-preset conflict above). No security-auditor run (pure data/param-merge logic,
+no secrets/config/auth touched). See `workspace/plan/imageLab/phase_Q3_prompting_presets.md`
+§Q3.2 and `dev_log.md`'s 2026-07-16 "imageLab Q3.2" entry.
+
 **imageLab Q1.5 — A/B benchmark + live verification — DONE, partial live run
 (2026-07-16).** Closes out the Q1 correctness pass (Q1.1-Q1.5 all complete).
 `workspace/plan/imageLab/benchmarks.md` defines 6 fixed prompt+seed pairs.

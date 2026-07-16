@@ -49,7 +49,12 @@ from app.constants import (
     KAGGLE_SESSION_POLL_INTERVAL_SECONDS,
 )
 from app.core import generate, kaggle, key_store
-from app.core.image_models import DEFAULT_IMAGE_MODEL, get_image_model, snap_resolution
+from app.core.image_models import (
+    DEFAULT_IMAGE_MODEL,
+    get_image_model,
+    merge_negative_prompt,
+    snap_resolution,
+)
 from app.db.postgres_client import execute, fetchall, fetchone, transaction
 from app.exceptions import NotConfiguredError
 
@@ -83,6 +88,23 @@ def _snap_params(model: str, params: Optional[ImageJobParams]) -> Optional[Image
     if w == params.width and h == params.height:
         return params
     return params.model_copy(update={"width": w, "height": h})
+
+
+def _apply_default_negative(model: str, params: Optional[ImageJobParams]) -> Optional[ImageJobParams]:
+    """Q3.2: prepend the model's research-backed default negative prompt ahead
+    of the user's own, server-side, so every generation gets it -- not just
+    ones where the user knew to type it in manually. Skipped under a
+    non-photoreal style preset (anime/oil_painting/sketch) -- see
+    merge_negative_prompt's NON_PHOTOREAL_STYLE_PRESETS."""
+    style_preset = params.style_preset if params else None
+    merged = merge_negative_prompt(
+        model, params.negative_prompt if params else None, style_preset
+    )
+    if params is None:
+        return ImageJobParams(negative_prompt=merged) if merged else None
+    if merged == params.negative_prompt:
+        return params
+    return params.model_copy(update={"negative_prompt": merged})
 
 
 def _now() -> datetime:
@@ -494,6 +516,7 @@ def submit_session_job(
         if not _is_alive(sess):
             raise NotConfiguredError("That session isn't running anymore. Start a new session.")
         params = _snap_params(sess["model"], params)
+        params = _apply_default_negative(sess["model"], params)
         row = tx.fetchone(
             """
             insert into image_jobs (user_id, session_id, model, prompt, status, params)
@@ -580,6 +603,7 @@ def create_cold_job(
     if existing is not None:
         return str(existing["id"]), False
     params = _snap_params(model, params)
+    params = _apply_default_negative(model, params)
     row = fetchone(
         """
         insert into image_jobs (user_id, session_id, model, prompt, status, params)

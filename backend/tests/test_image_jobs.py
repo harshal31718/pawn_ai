@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from app.core import image_session
+from app.core import image_models, image_session
 from app.exceptions import UnknownModelError
 from app.main import app
 
@@ -133,6 +133,68 @@ def test_create_cold_job_seed_round_trips_to_job_row():
     )
     stored_params = insert_call[2][3].obj
     assert stored_params["seed"] == 42
+
+
+def test_create_cold_job_applies_default_negative_for_sdxl():
+    """Q3.2: SDXL's research-backed default negative prompt is merged in
+    server-side, ahead of the user's own, even when the user supplied none.
+    Same cold-path Kaggle-delivery caveat as Q1.4's seed test applies here --
+    this only proves storage round-trips correctly."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job("user-1", "sdxl", "a cat")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["negative_prompt"] == image_models.IMAGE_MODELS["sdxl"].default_negative
+
+
+def test_create_cold_job_merges_user_negative_after_default_for_sdxl():
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(negative_prompt="extra shadows"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["negative_prompt"] == (
+        f"{image_models.IMAGE_MODELS['sdxl'].default_negative}, extra shadows"
+    )
+
+
+def test_create_cold_job_skips_default_negative_under_anime_style():
+    """Q3.2 fix: the photoreal default negative must not fight the anime
+    style preset's positive suffix (both mention 'anime'/'illustration')."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(style_preset="anime"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert "negative_prompt" not in stored_params
+
+
+def test_create_cold_job_flux_gets_no_default_negative():
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job("user-1", "flux", "a cat")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert "negative_prompt" not in stored_params
 
 
 # --- run_cold_job (the background worker) ------------------------------------
