@@ -28,8 +28,22 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   - `[ ]` F-6 Groq default model (`phase_F6_groq_default.md`) — refined 2026-07-15,
     scope narrowed to `pick_model_by_capability` only (its `pick_by_capability`
     sibling has no production caller).
-  - `[ ]` F-7 agent half-generation fix (`phase_F7_agent_half_generation_fix.md`) —
-    root cause independently confirmed against current `graph.py` 2026-07-15.
+  - `[x]` F-7 agent half-generation fix (`phase_F7_agent_half_generation_fix.md`) —
+    fixed 2026-07-16 in `agent/graph.py`: a heavy turn's clean-stop draft is now
+    appended as a `system` context note instead of a trailing `assistant`
+    message (the actual root cause — some providers reject/empty-out a
+    completions request whose tail message is already assistant-authored);
+    the closing-synthesis call is now wrapped in the same try/except-and-
+    fall-back-to-loop-draft pattern as the tool loop; a shared
+    `_EMPTY_REPLY_FALLBACK` apology closes the residual double-failure gap
+    (loop never ran + synthesis also failed) in both `execute_node` and
+    `verify_node.accept()`. 6 new tests, full suite green (443,
+    `docker compose exec backend pytest -n auto`, required a
+    `docker compose build backend` + container recreate since `backend/tests/`
+    isn't bind-mounted). code-reviewer PASS (1 WARN found+fixed: the
+    double-failure gap). Live-verified via Chrome: a real heavy/research
+    query (with a genuine mid-flight provider failover) rendered a full
+    synthesized answer end to end, no half-generation.
   - `[ ]` F-8 sync warning relocation (`phase_F8_sync_warning_relocation.md`) —
     confirmed against current `Sidebar.tsx` 2026-07-15.
   - `[x]` F-9 sidebar scroll bug + clumsy project/chat row styling

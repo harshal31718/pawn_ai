@@ -294,6 +294,14 @@ def _memory_hit_lines(observation: str) -> List[Dict[str, str]]:
 _RESEARCH_TOOL_NAMES = frozenset({"web_search", "fetch_url", f"{DELEGATE_PREFIX}researcher"})
 
 
+# F-7: shared fallback text for the rare case where a turn ends with
+# genuinely nothing to show the user (empty draft, empty loop content, no
+# prior live-streamed text) -- used by both execute_node's heavy-turn
+# closing-synthesis failure path and verify_node's accept(), so the user is
+# never left with a bare "Composing final answer" and no reply after it.
+_EMPTY_REPLY_FALLBACK = "I wasn't able to put together a complete answer for this one — please try asking again."
+
+
 def _used_research_tools(tool_log: List[Dict[str, Any]]) -> bool:
     """O.3 deep-research gate (shared by execute_node's buffering decision
     and route_after_execute): True if this turn actually did research work
@@ -457,6 +465,8 @@ async def execute_node(
 
     answered = False
     budget_exhausted = False
+    content = ""  # F-7: last loop iteration's own draft, used as a fallback
+    # if the mandatory closing-synthesis call below fails outright.
     for _ in range(AGENT_MAX_ITERATIONS):
         if tokens_used >= AGENT_MAX_TOKENS:
             budget_exhausted = True
@@ -478,10 +488,22 @@ async def execute_node(
         if not tool_calls:
             # Heavy turns: `content` here was never dispatched (see
             # defer_loop_content above) -- intentionally discarded, the
-            # closing synthesis is the real answer. Still recorded in
-            # working_messages so that call sees the orchestrator's own
-            # attempt as context, same as before.
-            working_messages.append({"role": "assistant", "content": content})
+            # closing synthesis is the real answer. Still recorded as
+            # context for that call, but as a `system` note rather than a
+            # trailing `assistant` message (F-7 fix): the closing-synthesis
+            # call below always follows on heavy turns, and several
+            # providers (Gemini's OAI-compat layer, confirmed) reject or
+            # silently empty-out a completions request whose final message
+            # is already `assistant`-authored, producing the half-generation/
+            # empty-reply bug this fixes.
+            if defer_loop_content:
+                if content:
+                    working_messages.append({
+                        "role": "system",
+                        "content": f"Orchestrator draft (not shown to the user): {content}",
+                    })
+            else:
+                working_messages.append({"role": "assistant", "content": content})
             answered = True
             break
 
@@ -573,6 +595,7 @@ async def execute_node(
         working_messages.append({"role": "system", "content": "budget exhausted — answer with what you have"})
 
     verify_draft: Optional[str] = None
+    last_loop_draft = content  # F-7 fallback: the loop's own last draft, pre-synthesis
 
     if state["difficulty"] == "heavy":
         # O.1 (reply-quality plan, RC-1 fix): heavy/deep-research turns always
@@ -609,10 +632,44 @@ async def execute_node(
         will_verify = _used_research_tools(tool_log)
 
         await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
-        content, _ = await stream_iteration(
-            use_tools=False, override_model_id=final_model_id, override_on_model_switch=on_synthesis_model_switch,
-            emit_tokens=not will_verify,
-        )
+        # F-7: never let a failed/empty closing-synthesis call surface as a
+        # silently empty reply -- fall back to the loop's own last draft
+        # (last_loop_draft) if the call errors outright before any token
+        # reached the user this call (same "already streamed -> must
+        # propagate" contract as the tool loop's own try/except above). On
+        # the success path, stream_iteration already dispatched/accumulated
+        # everything itself (when emit_tokens=True) -- these except blocks
+        # must be the only place that does it for the fallback content, or
+        # a non-exception success would get double-dispatched.
+        synthesis_failed = False
+        try:
+            content, _ = await stream_iteration(
+                use_tools=False, override_model_id=final_model_id, override_on_model_switch=on_synthesis_model_switch,
+                emit_tokens=not will_verify,
+            )
+        except (ProviderError, NoEndpointError) as e:
+            if content_reached_user_this_call:
+                raise
+            print(f"Closing synthesis failed (upstream), falling back to loop draft: {e}", file=sys.stderr)
+            synthesis_failed = True
+            content = last_loop_draft
+        except Exception as e:
+            if content_reached_user_this_call:
+                raise
+            print(f"Closing synthesis failed (unexpected), falling back to loop draft: {e}", file=sys.stderr)
+            synthesis_failed = True
+            content = last_loop_draft
+
+        if synthesis_failed and not will_verify:
+            # Cover the residual gap where BOTH the closing synthesis failed
+            # AND the loop itself never produced any content (e.g. budget
+            # exhausted before any iteration ran): without this, `content`
+            # stays "" and the turn silently ends with no reply at all after
+            # "Composing final answer".
+            if not content:
+                content = _EMPTY_REPLY_FALLBACK
+            full_response += content
+            await adispatch_custom_event("token", {"delta": content})
         working_messages.append({"role": "assistant", "content": content})
         if will_verify:
             verify_draft = content
@@ -697,8 +754,18 @@ async def verify_node(
     draft = state.get("verify_draft") or ""
 
     async def accept() -> dict:
+        # F-7 defense-in-depth: execute_node's upstream fixes should make an
+        # empty draft rare now, but if the closing synthesis genuinely came
+        # back empty (e.g. every fallback also failed) AND nothing else was
+        # streamed to the user this turn (state["final_answer"], the
+        # mid-loop flash content -- already dispatched live, so it must NOT
+        # be re-dispatched here), fall back to a plain apology instead of
+        # silently dispatching zero token events. That combination is the
+        # exact half-generation/empty-reply bug this phase fixes.
         if draft:
             await adispatch_custom_event("token", {"delta": draft})
+        elif not state.get("final_answer"):
+            await adispatch_custom_event("token", {"delta": _EMPTY_REPLY_FALLBACK})
         return {"needs_revision": False}
 
     if revision_count >= VERIFY_MAX_REVISIONS:

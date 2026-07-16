@@ -40,6 +40,70 @@ suggested order.
 
 ---
 
+### [2026-07-16] — F-7 agent half-generation/empty-reply fix
+
+**Root cause confirmed exactly as the plan described:** on a heavy turn's
+clean stop (no `tool_calls`), `execute_node` (`graph.py`) appended the
+orchestrator's own discarded draft as a trailing `{"role": "assistant", ...}`
+message to `working_messages`, then fed that same list straight into the
+mandatory closing-synthesis call. Several providers (Gemini's OAI-compat
+layer, confirmed) reject or silently empty out a completions request whose
+final message is already assistant-authored — the closing synthesis came
+back empty, `verify_draft` ended up `""`, and after `VERIFY_MAX_REVISIONS`
+`verify_node.accept()` dispatched zero `token` events: the exact "no prose
+reply after 'Composing final answer'" bug reported live.
+
+**Fix, in `backend/app/agent/graph.py`:**
+1. That clean-stop draft is now appended as a `system`-role context note
+   ("Orchestrator draft (not shown to the user): ...") instead of a trailing
+   `assistant` message, so `working_messages` never ends in `assistant`
+   right before the closing-synthesis call. Light turns unchanged.
+2. The closing-synthesis `stream_iteration` call is now wrapped in the same
+   try/except pattern as the tool loop above it (re-raise if a token already
+   reached the user this call; otherwise fall back to `last_loop_draft`, the
+   loop's own last-iteration content).
+3. **code-reviewer found one real WARN**, closed same session: a
+   double-failure gap where the tool loop never runs at all (budget already
+   exhausted on entry, so `last_loop_draft` is also `""`) *and* the closing
+   synthesis also fails — previously this still ended in a silent empty
+   reply on a heavy-but-non-research turn (doesn't route through
+   `verify_node`). Fixed with a shared `_EMPTY_REPLY_FALLBACK` apology
+   dispatched directly from `execute_node` in that combination, and reused
+   in `verify_node.accept()` for the equivalent empty-draft-and-nothing-
+   else-streamed case.
+
+6 new tests in `test_agent.py` (trailing-message regression, closing-
+synthesis-failure fallback, the double-failure gap, both `verify_node`
+branches). Full backend suite green (443 tests) — required a
+`docker compose build backend` + container recreate mid-session since
+`backend/tests/` isn't bind-mounted (stale copy inside the running container
+silently under-collected tests on the first run: 44 instead of 49). One of
+the new tests initially had a bug of its own (an `async def fake` with no
+`yield` isn't an async generator, so it accidentally passed via a broad
+`except Exception` catching a `TypeError` instead of exercising the intended
+`ProviderError` path) — caught by a `RuntimeWarning`, fixed to a proper
+(unreachable-yield) async generator.
+
+code-reviewer: PASS (1 WARN found+fixed, above; 2 NOTEs accepted as
+out-of-scope/pre-existing — a narrow mid-loop-flash-then-empty-non-erroring-
+synthesis edge case, and the light-turn closing call's pre-existing lack of
+a try/except). No security-auditor run (pure orchestration logic, no
+secrets/auth/outbound-HTTP surface).
+
+**Live-verified** via Chrome against the real `docker compose watch` stack:
+asked a genuinely heavy research question (central-bank monetary-policy
+transmission mechanisms). Watched it plan → delegate to `researcher` (real
+web search, 8 sources) → closing synthesis (with a real mid-flight provider
+failover, exercising the "Synthesis quality may be degraded" step) →
+verifier PASS → a full, detailed synthesized answer (comparison tables,
+named historical examples) rendered in the message bubble. No
+half-generation, no empty reply.
+
+**Next up:** F-8 (sync warning relocation), per `plan/chat/00_overview.md`'s
+suggested order.
+
+---
+
 ### [2026-07-15] — Registry refresh: full provider catalog sweep + benchmark-grounded tiering + `registry-refresh` skill rewrite
 
 User-requested: the registry was under-using free-tier providers (only Gemini

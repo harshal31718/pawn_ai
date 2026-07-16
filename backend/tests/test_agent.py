@@ -266,6 +266,95 @@ async def test_execute_node_heavy_pure_text_stream_still_gets_closing_synthesis(
 
 
 @pytest.mark.asyncio
+async def test_execute_node_heavy_clean_stop_does_not_pass_trailing_assistant_message():
+    """F-7 fix: on a heavy turn's clean stop (no tool_calls at all), the
+    orchestrator's own discarded draft must NOT be appended as a trailing
+    `assistant`-role message before the mandatory closing-synthesis call --
+    several providers (Gemini's OAI-compat layer) reject or empty-out a
+    completions request whose final message is already assistant-authored,
+    which was the root cause of the half-generation/empty-reply bug. The
+    draft is still passed as context, just as a non-terminal `system` note."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    captured_messages = []
+
+    async def fake(*args, **kwargs):
+        captured_messages.append(list(args[1]))
+        if kwargs.get("tools"):
+            yield {"type": "content", "delta": "no tools needed"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+        else:
+            yield {"type": "content", "delta": "Polished final answer."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            res = await execute_node(state)
+
+    assert len(captured_messages) == 2
+    closing_call_messages = captured_messages[1]
+    assert closing_call_messages[-1]["role"] != "assistant"
+    assert "no tools needed" in closing_call_messages[-1]["content"]  # draft kept as context
+    assert res["final_answer"] == "Polished final answer."
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_closing_synthesis_failure_no_content_sent_falls_back_to_loop_draft():
+    """F-7 fix: if the closing-synthesis call fails outright before any
+    content reached the user, the turn must not end in a silent empty reply
+    -- it falls back to the tool loop's own last draft rather than raising
+    (mirrors the tool loop's own upstream-failure fallback)."""
+    state = _state(difficulty="heavy", needs_agent=True)
+
+    async def fake(*args, **kwargs):
+        if kwargs.get("tools"):
+            yield {"type": "content", "delta": "loop's own draft answer"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+        else:
+            raise ProviderError(kind="upstream_error", message="all endpoints exhausted")
+
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)  # must NOT raise
+
+    assert res["final_answer"] == "loop's own draft answer"
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert token_deltas == ["loop's own draft answer"]
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_double_failure_with_no_content_anywhere_falls_back_to_apology():
+    """F-7 (code-reviewer WARN, closed): a heavy-but-non-research turn where
+    the tool loop never runs at all (budget already exhausted on entry, so
+    `content`/`last_loop_draft` stay "") AND the closing-synthesis call also
+    fails outright must still get a real reply -- not a silent empty one.
+    This turn never routes through verify_node (no research tools used), so
+    execute_node itself must be the one to dispatch the apology fallback."""
+    state = _state(difficulty="heavy", needs_agent=True, tokens_used=AGENT_MAX_TOKENS)
+
+    async def fake(*args, **kwargs):
+        raise ProviderError(kind="upstream_error", message="all endpoints exhausted")
+        yield  # pragma: no cover -- unreachable; makes this an async generator like the real call site expects
+
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)  # must NOT raise, must NOT end up with an empty reply
+
+    assert res["final_answer"]  # non-empty
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert len(token_deltas) == 1 and token_deltas[0]
+
+
+@pytest.mark.asyncio
 async def test_execute_node_heavy_plan_adds_delegation_nudge():
     """O.4 (reply-quality plan, RC-4 fix): a heavy turn with a plan gets an
     explicit nudge toward delegate_researcher for research sub-tasks appended
@@ -819,6 +908,54 @@ async def test_verify_node_upstream_failure_accepts_draft_gracefully():
 
     assert res["needs_revision"] is False
     assert ("token", {"delta": "Draft under a flaky provider."}) in dispatched
+
+
+@pytest.mark.asyncio
+async def test_verify_node_empty_draft_and_no_prior_content_falls_back_to_apology():
+    """F-7 defense-in-depth: an empty verify_draft with nothing else streamed
+    this turn (state["final_answer"] also empty) must never silently
+    dispatch zero token events -- that's the exact half-generation/
+    empty-reply bug. Falls back to a plain apology instead."""
+    state = _state(difficulty="heavy", verify_draft="", revision_count=0, final_answer="")
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake_complete(*args, **kwargs):
+        return {"content": "PASS", "usage": {"total_tokens": 20}}
+
+    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)
+
+    assert res["needs_revision"] is False
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert len(token_deltas) == 1
+    assert token_deltas[0]  # non-empty apology, not a silent no-op
+
+
+@pytest.mark.asyncio
+async def test_verify_node_empty_draft_but_prior_content_already_shown_stays_silent():
+    """The flip side: if state["final_answer"] already has content (streamed
+    live earlier this turn), an empty draft correctly means "nothing more to
+    add" -- must NOT re-dispatch final_answer (would duplicate it) or a
+    fallback apology (would append a spurious extra message)."""
+    state = _state(difficulty="heavy", verify_draft="", revision_count=0, final_answer="already shown live")
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake_complete(*args, **kwargs):
+        return {"content": "PASS", "usage": {"total_tokens": 20}}
+
+    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)
+
+    assert res["needs_revision"] is False
+    assert not any(name == "token" for name, data in dispatched)
 
 
 # ── _memory_hit_lines ────────────────────────────────────────────────────────

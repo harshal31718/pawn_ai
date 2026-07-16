@@ -46,3 +46,50 @@ fixes are both real, not already covered elsewhere.
 ### Manual Verification
 - Ask a heavy or tool-using query in the UI on a deployed VM (e.g., geopolitical or search-heavy query).
 - Confirm that the final synthesized response streams fully and renders inside the message bubble, and that "Composing final answer" is followed by the actual answer.
+
+## 4. DONE (2026-07-16)
+
+Implemented in `backend/app/agent/graph.py`'s `execute_node`/`verify_node`:
+
+- **Trailing-assistant-message fix:** a heavy turn's clean stop (no
+  `tool_calls`) now appends its discarded draft as a `system`-role context
+  note ("Orchestrator draft (not shown to the user): ...") instead of a
+  trailing `assistant` message, so `working_messages` never ends in
+  `assistant` right before the mandatory closing-synthesis call. Light turns
+  unchanged (still `assistant`, since no further call follows).
+- **Closing-synthesis failure fallback:** the heavy-turn closing-synthesis
+  `stream_iteration` call is now wrapped in the same try/except pattern as
+  the tool loop above it — re-raises if a token already reached the user
+  this call (locked contract), otherwise falls back to `last_loop_draft`
+  (the tool loop's own last iteration content).
+- **Double-failure gap (found by code-reviewer, closed same session):** if
+  the tool loop never runs at all (budget already exhausted on entry) *and*
+  the closing synthesis also fails, `execute_node` now dispatches a shared
+  `_EMPTY_REPLY_FALLBACK` apology rather than silently ending the turn with
+  no reply.
+- **`verify_node.accept()` defense-in-depth:** an empty `verify_draft` with
+  nothing else streamed this turn (`state["final_answer"]` also empty) now
+  dispatches the same `_EMPTY_REPLY_FALLBACK` apology instead of silently
+  dispatching zero `token` events; stays silent when `final_answer` already
+  has content (avoids re-dispatching/duplicating it).
+
+6 new tests in `backend/tests/test_agent.py` (trailing-message regression,
+closing-synthesis-failure fallback, the double-failure gap, and both
+`verify_node.accept()` branches). Full backend suite green (443 tests,
+`docker compose exec backend pytest -n auto` — required a `docker compose
+build backend` + container recreate first since `backend/tests/` isn't
+bind-mounted). code-reviewer: PASS with 1 WARN found and fixed (the
+double-failure gap above) and 2 NOTEs accepted as out-of-scope/pre-existing
+(a narrow edge case where a mid-loop "thinking" flash precedes a genuinely-
+empty-but-non-erroring synthesis result; the light-turn closing call's
+pre-existing lack of a try/except, unchanged, out of scope for F-7). No
+security-auditor run (pure orchestration logic, no secrets/auth/outbound-
+HTTP surface). **Manual live verification — done 2026-07-16**, via Chrome against the real
+`docker compose watch` stack: asked a genuinely heavy, research-tool-using
+question (central-bank monetary-policy transmission comparison). Confirmed
+end to end — plan → delegated to `researcher` (web search, 8 sources) →
+closing synthesis (with a real mid-flight provider failover, `gemini-2.5-
+flash was unavailable; failed over for the final answer`, exercising the
+"Synthesis quality may be degraded" step) → verifier ran and returned PASS →
+a full, detailed answer (comparison tables, named historical examples)
+rendered in the message bubble. No half-generation, no empty reply.
