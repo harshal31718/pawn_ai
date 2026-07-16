@@ -24,11 +24,7 @@ export default function Layout() {
         onCreate={store.createConversation}
         onDelete={store.deleteConversation}
         onRename={store.renameConversation}
-        onCreateProject={(name) => store.createProject(name)}
-        onRenameProject={store.renameProject}
-        onDeleteProject={store.deleteProject}
         onMoveChatToProject={store.moveChatToProject}
-        onRemoveChatFromProject={store.removeChatFromProject}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onOpen={() => setIsSidebarOpen(true)}
@@ -42,7 +38,7 @@ export default function Layout() {
           <button
             type="button"
             onClick={() => setTheme(isDark ? 'light' : 'dark')}
-            className={`group px-2.5 py-1.5 rounded-full shadow-md border transition-all active:scale-95 duration-200 focus:outline-none pointer-events-auto flex items-center justify-center cursor-pointer ${
+            className={`group w-7 h-7 rounded-xl shadow-md border transition-all active:scale-95 duration-200 focus:outline-none pointer-events-auto flex items-center justify-center cursor-pointer ${
               isDark
                 ? 'bg-theme-surface border-theme-border/60 text-zinc-100 hover:bg-zinc-100 hover:border-zinc-100 hover:text-zinc-900'
                 : 'bg-theme-surface border-theme-border/60 text-zinc-900 hover:bg-zinc-900 hover:border-zinc-900 hover:text-zinc-100'

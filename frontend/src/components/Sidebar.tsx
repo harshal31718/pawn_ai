@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import type { CachedConversation, CachedProject } from '../types'
 import { clearMemory, rebuildMemory } from '../api/client'
 import ConfirmDialog from './ConfirmDialog'
 import KebabMenu from './KebabMenu'
 import ProjectSection from './ProjectSection'
 import SearchResults from './SearchResults'
-import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, FolderIcon, ChevronRightIcon } from './icons'
+import SidebarTitleRow from './SidebarTitleRow'
+import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon } from './icons'
 
 interface Props {
   conversations: CachedConversation[]
@@ -18,11 +19,7 @@ interface Props {
   onCreate: (targetProjectId?: string) => string
   onDelete: (id: string) => void
   onRename: (id: string, newTitle: string) => void
-  onCreateProject: (name: string) => void
-  onRenameProject: (id: string, name: string) => void
-  onDeleteProject: (id: string) => void
   onMoveChatToProject: (convId: string, projectId: string) => void
-  onRemoveChatFromProject: (convId: string) => void
   isOpen: boolean
   onClose: () => void
   onOpen: () => void
@@ -32,8 +29,6 @@ interface Props {
 
 type PendingDialog =
   | { kind: 'addToProject'; convId: string; convTitle: string; projectId: string; projectName: string }
-  | { kind: 'removeFromProject'; convId: string; convTitle: string; projectName: string }
-  | { kind: 'deleteProject'; project: CachedProject; chats: CachedConversation[] }
   | { kind: 'clearMemory'; scopeType: 'chat' | 'project'; scopeId: string; label: string }
 
 export default function Sidebar({
@@ -46,11 +41,7 @@ export default function Sidebar({
   onCreate,
   onDelete,
   onRename,
-  onCreateProject,
-  onRenameProject,
-  onDeleteProject,
   onMoveChatToProject,
-  onRemoveChatFromProject,
   isOpen,
   onClose,
   onOpen,
@@ -59,17 +50,22 @@ export default function Sidebar({
 }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
-  // /project/:projectId or /project/:projectId/chat/:id → highlight that project's row
-  const activeProjectId = location.pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [chatsCollapsed, setChatsCollapsed] = useState(false)
   const [dialog, setDialog] = useState<PendingDialog | null>(null)
+  const [focusSearchPending, setFocusSearchPending] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const standaloneConversations = conversations.filter((c) => !c.project_id)
+
+  const isChatActive = location.pathname.startsWith('/chat/')
+  const isImageLabActive = location.pathname === '/imagelab'
+  const isProjectsActive = location.pathname.startsWith('/project')
+  const isSettingsActive = location.pathname === '/settings'
 
   // P.3: search spans everything (standalone + project-scoped chats, and
   // project names themselves) -- it used to only filter standaloneConversations,
@@ -97,6 +93,22 @@ export default function Sidebar({
       inputRef.current.select()
     }
   }, [editingId])
+
+  // Clicking Search in the mini rail opens the sidebar AND drops the user
+  // straight into typing -- isOpen flips synchronously via the parent, but
+  // the <input> only mounts once that re-render lands, so focus has to wait
+  // for it rather than firing inline in the click handler.
+  useEffect(() => {
+    if (isOpen && focusSearchPending) {
+      searchInputRef.current?.focus()
+      setFocusSearchPending(false)
+    }
+  }, [isOpen, focusSearchPending])
+
+  const handleOpenToSearch = () => {
+    setFocusSearchPending(true)
+    onOpen()
+  }
 
   function handleStartRename(conv: CachedConversation, e?: React.MouseEvent) {
     e?.stopPropagation()
@@ -128,12 +140,6 @@ export default function Sidebar({
     onClose()
   }
 
-  const handleNewChatInProject = (projectId: string) => {
-    const newId = onCreate(projectId)
-    navigate(`/project/${projectId}/chat/${newId}`)
-    onClose()
-  }
-
   const handleImageLab = () => {
     navigate('/imagelab')
     onClose()
@@ -158,14 +164,6 @@ export default function Sidebar({
     onClose()
   }
 
-  function handleRequestRemoveChatFromProject(convId: string, convTitle: string, projectName: string) {
-    setDialog({ kind: 'removeFromProject', convId, convTitle, projectName })
-  }
-
-  function handleRequestDeleteProject(project: CachedProject, chats: CachedConversation[]) {
-    setDialog({ kind: 'deleteProject', project, chats })
-  }
-
   function handleAddToProject(convId: string, convTitle: string, projectId: string, projectName: string) {
     setDialog({ kind: 'addToProject', convId, convTitle, projectId, projectName })
   }
@@ -174,10 +172,6 @@ export default function Sidebar({
     if (!dialog) return
     if (dialog.kind === 'addToProject') {
       onMoveChatToProject(dialog.convId, dialog.projectId)
-    } else if (dialog.kind === 'removeFromProject') {
-      onRemoveChatFromProject(dialog.convId)
-    } else if (dialog.kind === 'deleteProject') {
-      onDeleteProject(dialog.project.id)
     } else {
       clearMemory(dialog.scopeType, dialog.scopeId).catch((err) =>
         alert(`Failed to clear memory: ${err.message}`),
@@ -196,88 +190,116 @@ export default function Sidebar({
         />
       )}
 
+      {/* isOpen drives the aside's own width (w-12 <-> w-64). Header and nav
+          rows are ONE persistent tree (not two swapping layouts): each
+          icon sits at a fixed px-3 inset regardless of isOpen, and only the
+          label/title next to it animates width+opacity to 0 -- so opening/
+          closing reads as these rows growing/shrinking in place, with zero
+          icon position shift, instead of a crossfade between two separate
+          layouts. Only the Chats/search scroll region (which has no
+          collapsed-rail equivalent) and the footer remain isOpen-only. */}
       <aside className={`
-        bg-theme-surface text-theme-text flex-col h-full border-r border-theme-border shrink-0 select-none
-        transition-all duration-300 ease-in-out
-        ${isOpen 
-          ? 'flex fixed inset-y-0 left-0 z-50 w-64 shadow-2xl md:relative md:translate-x-0 md:shadow-none animate-in slide-in-from-left duration-200' 
+        bg-theme-surface text-theme-text flex flex-col h-full border-r border-theme-border shrink-0 select-none
+        transition-all duration-300 ease-in-out overflow-hidden
+        ${isOpen
+          ? 'fixed inset-y-0 left-0 z-50 w-64 shadow-2xl md:relative md:translate-x-0 md:shadow-none animate-in slide-in-from-left duration-200'
           : 'hidden md:flex md:relative w-12'}
       `}>
+        {/* Header — expanded: PAWN on the left, toggle on the right.
+            Collapsed: toggle only, top-left (mini rail unchanged). */}
         {isOpen ? (
-          /* Full Expanded Sidebar */
-          <div className="flex flex-col h-full w-64 shrink-0 overflow-hidden animate-in fade-in duration-200">
-            {/* Header */}
-            <div className="p-4 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="text-base font-semibold text-theme-text font-sans tracking-tight">PAWN</span>
-                <span className="text-[9px] uppercase tracking-[0.15em] text-theme-text-muted border border-theme-border rounded-full px-1.5 py-0.5">
-                  Beta
-                </span>
-              </div>
-              <button
-                onClick={onClose}
+          <div className="pt-4 px-4 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-base font-semibold text-theme-text font-sans tracking-tight">PAWN</span>
+              <span className="text-[7px] uppercase tracking-[0.15em] text-theme-text-muted border border-theme-border rounded-full px-1 py-0.5">
+                Beta
+              </span>
+            </div>
+            <button
+              onClick={onClose}
+              className="
+                w-7 h-7 shrink-0 rounded-xl text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
+                transition-all active:scale-95 cursor-pointer flex items-center justify-center
+              "
+              title="Collapse sidebar"
+            >
+              <SidebarLayoutIcon className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          <div className="pt-4 px-2 flex items-center shrink-0">
+            <button
+              onClick={onOpen}
+              className="
+                w-7 h-7 shrink-0 rounded-xl text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
+                transition-all active:scale-95 cursor-pointer flex items-center justify-center
+              "
+              title="Expand sidebar"
+            >
+              <SidebarLayoutIcon className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Search / New chat / Image Lab / Projects — icons pinned, labels
+            animate via SidebarTitleRow's expanded prop. */}
+        <div className="shrink-0" onClick={(e) => {
+          if (!isOpen && e.target === e.currentTarget) {
+            onOpen()
+          }
+        }}>
+          {isOpen ? (
+            <div className="group relative z-0 flex items-center h-7">
+              {/* Same boxed hover as the toggle/nav rows -- a tight w-7 box
+                  around the icon, not the whole input. */}
+              <span className="absolute -z-10 inset-y-0 left-2 w-7 rounded-xl group-hover:bg-theme-surface-hover" />
+              <MagnifierIcon className="w-4 h-4 text-theme-text-muted absolute left-3.5 pointer-events-none select-none z-10" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
                 className="
-                  p-1.5 rounded-lg text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50
-                  transition-all active:scale-95 cursor-pointer flex items-center justify-center
+                  w-full h-7 pl-10 pr-3 rounded-xl text-xs font-semibold
+                  text-theme-text placeholder-theme-text placeholder:font-semibold
+                  focus:outline-none focus:bg-theme-surface-hover transition-colors
                 "
-                title="Collapse sidebar"
+              />
+            </div>
+          ) : (
+            <div className="flex items-center px-2 h-7">
+              <button
+                type="button"
+                onClick={handleOpenToSearch}
+                className="group relative w-7 h-7 shrink-0 rounded-xl text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover transition-all cursor-pointer flex items-center justify-center"
+                title="Search chats"
               >
-                <SidebarLayoutIcon className="w-4.5 h-4.5" />
+                <MagnifierIcon className="w-4 h-4" />
               </button>
             </div>
+          )}
+          <SidebarTitleRow expanded={isOpen} icon={PencilIcon} label="New chat" onClick={handleNewChat} isActive={false} />
+          <SidebarTitleRow expanded={isOpen} icon={BeakerIcon} label="Image Lab" onClick={handleImageLab} isActive={isImageLabActive} />
+          <ProjectSection expanded={isOpen} onNavigated={onClose} isActive={isProjectsActive} />
+          <SidebarTitleRow
+            expanded={isOpen}
+            icon={ChatBubbleIcon}
+            label="Chats"
+            onClick={() => {
+              if (isOpen) {
+                setChatsCollapsed((v) => !v)
+              } else {
+                setChatsCollapsed(false)
+                onOpen()
+              }
+            }}
+            toggle={{ collapsed: chatsCollapsed, onToggle: () => setChatsCollapsed((v) => !v) }}
+            isActive={isChatActive}
+          />
+        </div>
 
-            {/* Action Button: New Chat */}
-            <div className="px-3 pb-2 shrink-0">
-              <button
-                onClick={handleNewChat}
-                className="
-                  w-full h-9 flex items-center gap-3 px-3 rounded-xl text-xs font-semibold
-                  text-theme-text bg-theme-bg border border-theme-border/50 hover:bg-theme-surface-hover
-                  transition-all active:scale-98 cursor-pointer select-none shadow-sm
-                "
-                id="new-chat-button"
-              >
-                <PencilIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
-                <span>New chat</span>
-              </button>
-            </div>
-
-            {/* Action Button: Image Lab (Milestone A.0 — throwaway) */}
-            <div className="px-3 pb-2 shrink-0">
-              <button
-                onClick={handleImageLab}
-                className="
-                  w-full h-9 flex items-center gap-3 px-3 rounded-xl text-xs font-semibold
-                  text-theme-text bg-theme-bg border border-theme-border/50 hover:bg-theme-surface-hover
-                  transition-all active:scale-98 cursor-pointer select-none shadow-sm
-                "
-                id="image-lab-button"
-                title="Image Lab (experimental)"
-              >
-                <BeakerIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
-                <span>Image Lab</span>
-              </button>
-            </div>
-
-            {/* Search — same size/style as New chat/Image Lab, sits directly below them */}
-            <div className="px-3 pb-2 shrink-0">
-              <div className="relative flex items-center">
-                <MagnifierIcon className="w-4 h-4 text-theme-text-muted absolute left-3 pointer-events-none select-none" />
-                <input
-                  type="text"
-                  placeholder="Search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="
-                    w-full h-9 pl-9 pr-3 rounded-xl text-xs font-semibold bg-theme-bg border border-theme-border/50
-                    text-theme-text placeholder-theme-text-muted shadow-sm
-                    focus:outline-none focus:border-theme-text-muted transition-colors
-                  "
-                />
-              </div>
-            </div>
-
-            {isSearching ? (
+        {isOpen && (isSearching ? (
               <SearchResults
                 matchedProjects={matchedProjects}
                 matchedConversations={matchedConversations}
@@ -291,58 +313,16 @@ export default function Sidebar({
               />
             ) : (
               <>
-                {/* Shared scroll region for Projects + Chats -- both headers
-                    are sticky, stacked one below the other: Projects' header
-                    pins at top-0 (z-20, topmost), Chats' header pins right
-                    below it at top-7 (its exact height) once scrolled up to
-                    that position -- so Projects stays pinned throughout, and
-                    once Chats' header reaches the second slot it pins too,
-                    leaving only the chat rows themselves still scrolling.
-                    (min-h-0 lets this flex child actually shrink below its
-                    content height so overflow-y-auto can kick in.) */}
+                {/* Scroll region for Chats -- the "Chats" header itself now
+                    lives in the static top block above (alongside Search/
+                    New chat/Image Lab/Projects) so it's visible in the
+                    collapsed rail too; this region is just the scrollable
+                    conversation list. */}
                 <div className="flex-1 min-h-0 overflow-y-auto">
-                <ProjectSection
-                  projects={projects}
-                  conversations={conversations}
-                  activeId={activeId}
-                  activeProjectId={activeProjectId}
-                  pendingIds={pendingIds}
-                  onOpenProject={handleOpenProject}
-                  onSelectChat={(id) => {
-                    const projectId = conversations.find((c) => c.id === id)?.project_id
-                    if (projectId) handleSelectProjectChat(id, projectId)
-                    else handleSelectConversation(id)
-                  }}
-                  onCreateProject={onCreateProject}
-                  onNewChatInProject={handleNewChatInProject}
-                  onRenameProject={onRenameProject}
-                  onRequestDeleteProject={handleRequestDeleteProject}
-                  onRequestRemoveChatFromProject={handleRequestRemoveChatFromProject}
-                  onClearMemory={handleRequestClearMemory}
-                  onRebuildMemory={handleRebuildMemory}
-                />
-
-                {/* Chats section header — mirrors Projects' muted label styling,
-                    including its own collapse toggle. Sticks at top-7 (see the
-                    comment above) so it stacks directly below Projects' own
-                    pinned header instead of overlapping it. */}
-                <div className="sticky top-7 z-10 h-7 bg-theme-surface flex items-center gap-0.5 px-3">
-                  <button
-                    type="button"
-                    onClick={() => setChatsCollapsed((v) => !v)}
-                    className="p-0.5 rounded hover:bg-theme-surface-hover text-theme-text-muted hover:text-theme-text transition-colors shrink-0 cursor-pointer"
-                    title={chatsCollapsed ? 'Expand' : 'Collapse'}
-                  >
-                    <ChevronRightIcon className={`w-2.5 h-2.5 transition-transform ${chatsCollapsed ? '' : 'rotate-90'}`} />
-                  </button>
-                  <span className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted select-none">
-                    Chats
-                  </span>
-                </div>
 
                 {/* Conversations List */}
                 {!chatsCollapsed && (
-                <div className="px-2 py-2 space-y-1">
+                <div className="pb-2">
               {standaloneConversations.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
                   <ChatBubbleIcon className="w-6 h-6 opacity-40" />
@@ -363,16 +343,11 @@ export default function Sidebar({
                         }
                       }}
                       className={`
-                        group relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-medium cursor-pointer
+                        group relative flex items-center gap-2.5 pl-3.5 pr-4 h-6 rounded-xl text-xs font-normal cursor-pointer
                         transition-all select-none
-                        ${isActive 
-                          ? 'bg-theme-brand text-theme-brand-text shadow-sm' 
-                          : 'text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text'}
+                        ${isActive ? 'bg-black/25 dark:bg-black/40 text-theme-text' : 'text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover'}
                       `}
                     >
-                      {/* Chat Bubble Icon */}
-                      <ChatBubbleIcon className="w-4 h-4 shrink-0 text-theme-text-muted opacity-75" />
-
                       {/* Title */}
                       {isEditing ? (
                         <input
@@ -406,13 +381,13 @@ export default function Sidebar({
                         deleteConfirmId === conv.id ? (
                           <div
                             onClick={(e) => e.stopPropagation()}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 bg-theme-bg border border-theme-border rounded-lg shadow-lg px-2 py-1 z-50 animate-in fade-in zoom-in-95 duration-100"
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 bg-theme-bg border border-theme-border rounded-lg shadow-lg px-1.5 h-7 z-50 animate-in fade-in zoom-in-95 duration-100"
                           >
                             <span className="text-[10px] text-theme-text-muted font-medium select-none pr-0.5">Delete?</span>
                             <button
                               type="button"
                               onClick={() => setDeleteConfirmId(null)}
-                              className="px-2 h-8 min-w-[48px] rounded border border-theme-border hover:bg-theme-surface-hover text-theme-text text-sm font-semibold transition-colors active:scale-95 cursor-pointer"
+                              className="px-2 h-5 min-w-[36px] rounded border border-theme-border hover:bg-theme-surface-hover text-theme-text text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
                             >
                               No
                             </button>
@@ -422,13 +397,13 @@ export default function Sidebar({
                                 onDelete(conv.id)
                                 setDeleteConfirmId(null)
                               }}
-                              className="px-2 h-8 min-w-[48px] rounded bg-red-600 hover:bg-red-700 text-white border border-red-700 text-sm font-semibold transition-colors active:scale-95 cursor-pointer"
+                              className="px-2 h-5 min-w-[36px] rounded bg-red-600 hover:bg-red-700 text-white border border-red-700 text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
                             >
                               Yes
                             </button>
                           </div>
                         ) : (
-                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-50 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                             <KebabMenu
                               title="More options"
                               items={[
@@ -461,149 +436,77 @@ export default function Sidebar({
                 )}
                 </div>
               </>
-            )}
+            ))}
 
-            {/* Offline / unsynced changes banner -- F-8: relocated to the
-                bottom of the sidebar (above the profile card) so it no
-                longer pushes the Projects/Chats lists down. */}
-            {syncError && (
-              <div className="px-3 pt-2 shrink-0">
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
-                  <span className="truncate">{syncError}</span>
-                </div>
-              </div>
-            )}
+        {/* Spacer so the footer still pins to the bottom in the collapsed
+            rail, where there's no scrollable Chats region above it. Also
+            doubles as an "empty space" click target to re-expand the
+            sidebar, since the mini rail has no room for its own affordance. */}
+        {!isOpen && <div className="flex-1 cursor-pointer" onClick={onOpen} />}
 
-            {/* User Profile Card */}
-            <div className="p-3 border-t border-theme-border/40 bg-theme-surface/30 flex items-center gap-3 shrink-0 select-none">
-              <div className="w-8 h-8 rounded-full bg-theme-brand text-theme-brand-text flex items-center justify-center font-bold text-xs shadow-sm shrink-0">
-                {displayName[0]?.toUpperCase() || 'U'}
-              </div>
-              <div className="flex flex-col min-w-0 flex-1">
-                <span className="text-xs font-semibold text-theme-text truncate leading-none mb-1">{displayName}</span>
-                <span className="text-[10px] text-theme-text-muted truncate leading-none">{email || 'Signed in'}</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleOpenSettings}
-                className="text-theme-text-muted hover:text-theme-text p-1 rounded-lg hover:bg-theme-bg/50 transition-colors shrink-0 cursor-pointer"
-                title="Settings"
-              >
-                <SettingsGearIcon className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        ) : (
-          /* Mini Collapsed Sidebar (w-12) */
-          <div 
-            onClick={onOpen}
-            className="flex flex-col h-full w-12 items-center py-4 justify-between shrink-0 overflow-hidden cursor-pointer animate-in fade-in duration-200"
-          >
-            {/* Top Options */}
-            <div className="flex flex-col items-center gap-4 w-full px-1">
-              {/* 1. Open Sidebar Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpen()
-                }}
-                className="
-                  p-2 rounded-xl text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50
-                  transition-all active:scale-95 cursor-pointer flex items-center justify-center
-                "
-                title="Expand sidebar"
-              >
-                <SidebarLayoutIcon className="w-5 h-5" />
-              </button>
- 
-              {/* 2. New Chat Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleNewChat()
-                }}
-                className="
-                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
-                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
-                "
-                title="New chat"
-              >
-                <PencilIcon className="w-4.5 h-4.5" />
-              </button>
-
-              {/* 3. Projects Button — expands sidebar with Projects section visible */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpen()
-                }}
-                className="
-                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
-                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
-                "
-                title="Projects"
-              >
-                <FolderIcon className="w-4.5 h-4.5" />
-              </button>
-
-              {/* 4. Image Lab Button (Milestone A.0 — throwaway) */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleImageLab()
-                }}
-                className="
-                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
-                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
-                "
-                title="Image Lab (experimental)"
-              >
-                <BeakerIcon className="w-4.5 h-4.5" />
-              </button>
-
-              {/* 5. Search Chat Option */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpen()
-                }}
-                className="
-                  p-2 rounded-xl border border-theme-border/50 bg-theme-bg text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover
-                  transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-sm
-                "
-                title="Search chats"
-              >
-                <MagnifierIcon className="w-4.5 h-4.5" />
-              </button>
-            </div>
- 
-            {/* 6. Bottom Settings & Profile Avatar */}
-            <div className="w-full flex flex-col items-center gap-3.5 border-t border-theme-border/40 pt-4 pb-1 px-1 shrink-0">
-              {/* Settings Button */}
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); handleOpenSettings() }}
-                className="
-                  text-theme-text-muted hover:text-theme-text p-2 rounded-xl hover:bg-theme-bg/50
-                  transition-colors cursor-pointer flex items-center justify-center
-                "
-                title="Settings"
-              >
-                <SettingsGearIcon className="w-4.5 h-4.5" />
-              </button>
-
-              {/* Profile Avatar Circle */}
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="w-8 h-8 rounded-full bg-theme-brand text-theme-brand-text flex items-center justify-center font-bold text-xs shadow-sm shrink-0 select-none cursor-default"
-                title={displayName}
-              >
-                {displayName[0]?.toUpperCase() || 'U'}
-              </div>
+        {/* Offline / unsynced changes banner -- F-8: sits above the profile
+            card; only meaningful once the sidebar is open. */}
+        {isOpen && syncError && (
+          <div className="px-3 pt-2 shrink-0">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+              <span className="truncate">{syncError}</span>
             </div>
           </div>
         )}
+
+        {/* Footer — Settings icon and avatar circle stay pinned at the same
+            position in both states (same fixed-icon/animated-label pattern
+            as the nav rows above); only the "Settings" label and the name/
+            email column animate width+opacity. */}
+        <div className="border-t border-theme-border/40 pt-2 pb-2 shrink-0 select-none">
+          <button
+            type="button"
+            onClick={handleOpenSettings}
+            title={!isOpen ? 'Settings' : undefined}
+            className="
+              group relative z-0 w-full h-7 flex items-center px-2 rounded-xl text-theme-text-muted hover:text-theme-text
+              transition-all active:scale-95 cursor-pointer overflow-hidden
+            "
+          >
+            {/* Same boxed hover as the nav rows -- always a tight w-7 box,
+                in both expanded and collapsed states. */}
+            <span
+              className={`
+                absolute -z-10 inset-y-0 left-2 w-7 rounded-xl
+                ${isSettingsActive ? 'bg-black/25 dark:bg-black/40' : 'group-hover:bg-theme-surface-hover'}
+              `}
+            />
+            <span className="w-7 h-7 shrink-0 flex items-center justify-center">
+              <SettingsGearIcon className={`w-4 h-4 transition-colors ${isSettingsActive ? 'text-theme-text' : 'group-hover:text-theme-text'}`} />
+            </span>
+            <span
+              className={`
+                text-xs font-semibold text-theme-text text-left truncate transition-all duration-300 ease-in-out
+                ${isOpen ? 'opacity-100 max-w-[10rem] ml-1' : 'opacity-0 max-w-0 ml-0'}
+              `}
+            >
+              Settings
+            </span>
+          </button>
+
+          <div className="w-full h-9 flex items-center px-2" title={!isOpen ? displayName : undefined}>
+            <span className="w-7 h-7 shrink-0 flex items-center justify-center">
+              <span className="w-5 h-5 rounded-full bg-theme-brand text-theme-brand-text flex items-center justify-center font-bold text-[10px] shadow-sm select-none cursor-default">
+                {displayName[0]?.toUpperCase() || 'U'}
+              </span>
+            </span>
+            <div
+              className={`
+                flex flex-col min-w-0 overflow-hidden transition-all duration-300 ease-in-out
+                ${isOpen ? 'opacity-100 max-w-[10rem] ml-1' : 'opacity-0 max-w-0 ml-0'}
+              `}
+            >
+              <span className="text-xs font-semibold text-theme-text truncate leading-none mb-1">{displayName}</span>
+              <span className="text-[10px] text-theme-text-muted truncate leading-none">{email || 'Signed in'}</span>
+            </div>
+          </div>
+        </div>
       </aside>
 
       {/* Backdrop for closing click-outside on delete confirmation */}
@@ -627,46 +530,6 @@ export default function Sidebar({
           ) : null
         }
         confirmLabel="Add"
-        onConfirm={handleConfirmDialog}
-        onCancel={() => setDialog(null)}
-      />
-      <ConfirmDialog
-        open={dialog?.kind === 'removeFromProject'}
-        title="Remove from project"
-        message={
-          dialog?.kind === 'removeFromProject' ? (
-            <>
-              This chat's memory leaves <strong>{dialog.projectName}</strong>. Note: anything other
-              chats already wrote using this chat's info stays in those chats.
-            </>
-          ) : null
-        }
-        confirmLabel="Remove"
-        onConfirm={handleConfirmDialog}
-        onCancel={() => setDialog(null)}
-      />
-      <ConfirmDialog
-        open={dialog?.kind === 'deleteProject'}
-        title="Delete project"
-        destructive
-        message={
-          dialog?.kind === 'deleteProject' ? (
-            <>
-              <p className="mb-2">
-                Deletes the project <strong>and all {dialog.chats.length} chat{dialog.chats.length === 1 ? '' : 's'} inside it</strong>,
-                including their memory. This cannot be undone.
-              </p>
-              {dialog.chats.length > 0 && (
-                <ul className="list-disc pl-4 space-y-0.5 max-h-32 overflow-y-auto">
-                  {dialog.chats.map((c) => (
-                    <li key={c.id} className="truncate">{c.title}</li>
-                  ))}
-                </ul>
-              )}
-            </>
-          ) : null
-        }
-        confirmLabel="Delete"
         onConfirm={handleConfirmDialog}
         onCancel={() => setDialog(null)}
       />

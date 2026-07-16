@@ -1,42 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CachedConversation, CachedProject } from '../types'
 import KebabMenu from './KebabMenu'
-import { ChatBubbleIcon, ChevronRightIcon, FolderIcon } from './icons'
+import { FolderIcon } from './icons'
 
 interface Props {
   project: CachedProject
   chats: CachedConversation[]
-  activeId: string | null
   activeProjectId?: string | null
   pendingIds?: Set<string>
-  expanded: boolean
-  onToggleExpand: () => void
   onOpenProject: (projectId: string) => void
-  onSelectChat: (id: string) => void
   onNewChatInProject: (projectId: string) => void
   onRenameProject: (id: string, name: string) => void
   onRequestDeleteProject: (project: CachedProject, chats: CachedConversation[]) => void
-  onRequestRemoveChatFromProject: (convId: string, title: string, projectName: string) => void
   onClearMemory: (scopeType: 'chat' | 'project', scopeId: string, label: string) => void
   onRebuildMemory: (scopeType: 'chat' | 'project', scopeId: string) => void
 }
 
-/** One project row + its expandable chat list. Split out of Sidebar.tsx per
- *  .claude/rules/frontend.md (components over ~150 lines get split). */
+/** One project row — name + kebab menu only. Chats inside a project are no
+ *  longer browsable inline in the sidebar (that expand-in-place list was
+ *  removed per user feedback: clicking the project name is the one way in,
+ *  landing on ProjectPage where its chats are actually shown). Split out of
+ *  Sidebar.tsx per .claude/rules/frontend.md (components over ~150 lines
+ *  get split). */
 export default function ProjectRow({
   project,
   chats,
-  activeId,
   activeProjectId,
   pendingIds,
-  expanded,
-  onToggleExpand,
   onOpenProject,
-  onSelectChat,
   onNewChatInProject,
   onRenameProject,
   onRequestDeleteProject,
-  onRequestRemoveChatFromProject,
   onClearMemory,
   onRebuildMemory,
 }: Props) {
@@ -72,17 +66,6 @@ export default function ProjectRow({
             : 'text-theme-text hover:bg-theme-surface-hover'
         }`}
       >
-        <button
-          type="button"
-          title={expanded ? 'Collapse' : 'Expand'}
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleExpand()
-          }}
-          className="p-0.5 -m-0.5 rounded hover:bg-theme-surface shrink-0"
-        >
-          <ChevronRightIcon className={`w-3 h-3 text-theme-text-muted transition-transform ${expanded ? 'rotate-90' : ''}`} />
-        </button>
         <FolderIcon className="w-4 h-4 shrink-0 text-theme-text-muted" />
         {isEditing ? (
           <input
@@ -127,53 +110,6 @@ export default function ProjectRow({
           </>
         )}
       </div>
-
-      {expanded && (
-        <div className="ml-4 pl-2 border-l border-theme-border/40 space-y-0.5">
-          {chats.length === 0 ? (
-            <div className="px-3 py-1.5 text-[10px] text-theme-text-muted select-none">No chats yet</div>
-          ) : (
-            chats.map((chat) => {
-              const isActive = chat.id === activeId
-              return (
-                <div
-                  key={chat.id}
-                  onClick={() => onSelectChat(chat.id)}
-                  className={`group relative flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer transition-all ${
-                    isActive
-                      ? 'bg-theme-brand text-theme-brand-text shadow-sm'
-                      : 'text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text'
-                  }`}
-                >
-                  <ChatBubbleIcon className="w-3.5 h-3.5 shrink-0 opacity-75" />
-                  <span className="flex-1 truncate pr-6">{chat.title}</span>
-                  {pendingIds?.has(chat.id) && (
-                    <span title="Syncing…" className="shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                  )}
-                  <div className="absolute right-1 top-1/2 -translate-y-1/2 z-50 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                    <KebabMenu
-                      title="Chat options"
-                      items={[
-                        {
-                          label: 'Remove from project',
-                          onClick: () => onRequestRemoveChatFromProject(chat.id, chat.title, project.name),
-                        },
-                        {
-                          label: 'Memory',
-                          submenu: [
-                            { label: 'Clear memory', onClick: () => onClearMemory('chat', chat.id, chat.title) },
-                            { label: 'Rebuild memory index', onClick: () => onRebuildMemory('chat', chat.id) },
-                          ],
-                        },
-                      ]}
-                    />
-                  </div>
-                </div>
-              )
-            })
-          )}
-        </div>
-      )}
     </div>
   )
 }

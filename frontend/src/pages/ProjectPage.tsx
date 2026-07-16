@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams, useOutletContext, useNavigate } from 'react-router-dom'
 import { ChatBubbleIcon, FolderIcon } from '../components/icons'
+import ConfirmDialog from '../components/ConfirmDialog'
 import EditProjectDetailsModal from '../components/EditProjectDetailsModal'
 import KebabMenu from '../components/KebabMenu'
 import MessageInput from '../components/MessageInput'
@@ -20,7 +21,7 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const { store } = useOutletContext<LayoutContext>()
-  const { projects, conversations, createConversation, renameProject, updateProjectDescription } = store
+  const { projects, conversations, createConversation, renameProject, updateProjectDescription, deleteProject } = store
   const { displayName, availableModels } = useAppContext()
 
   const [draft, setDraft] = useState('')
@@ -29,6 +30,7 @@ export default function ProjectPage() {
   const [nameValue, setNameValue] = useState('')
   const [isEditingDetails, setIsEditingDetails] = useState(false)
   const [descriptionExpanded, setDescriptionExpanded] = useState(false)
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
 
   const project = projects.find((p) => p.id === projectId)
   const chats = conversations
@@ -72,16 +74,23 @@ export default function ProjectPage() {
     })
   }
 
+  function confirmDelete() {
+    if (!projectId) return
+    deleteProject(projectId)
+    setIsConfirmingDelete(false)
+    navigate('/projects')
+  }
+
   return (
     <div className="relative flex-1 flex flex-col h-full overflow-y-auto">
       {/* Floating Top Header — same pill pattern as ChatPage/SettingsPage,
           replacing the old plain in-flow breadcrumb line (F-10 follow-up). */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center w-full">
-        <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
+        <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">
           <button
             type="button"
             onClick={() => navigate('/projects')}
-            className="px-0.5 py-0 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
+            className="rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
             title="All projects"
           >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
@@ -129,6 +138,7 @@ export default function ProjectPage() {
                   { label: 'Rebuild memory index', onClick: () => rebuildMemory('project', projectId).catch((err) => alert(`Failed to rebuild memory: ${err.message}`)) },
                 ],
               },
+              { label: 'Delete project', danger: true, onClick: () => setIsConfirmingDelete(true) },
             ]}
           />
         </div>
@@ -200,6 +210,22 @@ export default function ProjectPage() {
         initialDescription={project?.description ?? ''}
         onSave={saveDetails}
         onCancel={() => setIsEditingDetails(false)}
+      />
+
+      <ConfirmDialog
+        open={isConfirmingDelete}
+        title="Delete project?"
+        message={
+          <>
+            This deletes <strong>{project?.name ?? 'this project'}</strong>
+            {chats.length > 0 ? ` and all ${chats.length} chat${chats.length === 1 ? '' : 's'} inside it` : ''}.
+            This cannot be undone.
+          </>
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={confirmDelete}
+        onCancel={() => setIsConfirmingDelete(false)}
       />
     </div>
   )

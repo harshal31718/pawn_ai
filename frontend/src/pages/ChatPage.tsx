@@ -551,7 +551,7 @@ export default function ChatPage() {
       {/* Floating Top Header Area — left island only (toggle is global in Layout) */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none pt-4 pl-4 pr-4 flex items-center w-full">
         {/* Left Floating Island: Project Name/Chat Title */}
-        <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
+        <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">
           {!isSidebarOpen && (
             <button
               type="button"

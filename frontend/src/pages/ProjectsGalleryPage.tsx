@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
+import ConfirmDialog from '../components/ConfirmDialog'
+import KebabMenu from '../components/KebabMenu'
 import { FolderIcon, MagnifierIcon } from '../components/icons'
+import type { CachedProject } from '../types'
 import type { LayoutContext } from './Layout'
 
 type SortKey = 'updated' | 'name'
@@ -17,11 +20,12 @@ const SORT_LABELS: Record<SortKey, string> = {
 export default function ProjectsGalleryPage() {
   const navigate = useNavigate()
   const { store } = useOutletContext<LayoutContext>()
-  const { projects, createProject, draftProjectId } = store
+  const { projects, createProject, deleteProject, draftProjectId } = store
 
   const [query, setQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('updated')
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<CachedProject | null>(null)
 
   const filtered = useMemo(() => {
     // The draft project (unnamed "New project" not yet promoted) is intentionally
@@ -42,6 +46,12 @@ export default function ProjectsGalleryPage() {
   function handleNewProject() {
     const id = createProject()
     navigate(`/project/${id}`)
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return
+    deleteProject(deleteTarget.id)
+    setDeleteTarget(null)
   }
 
   return (
@@ -114,15 +124,24 @@ export default function ProjectsGalleryPage() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {filtered.map((project) => (
-              <button
+              <div
                 key={project.id}
-                type="button"
                 onClick={() => navigate(`/project/${project.id}`)}
-                className="text-left flex flex-col gap-1.5 p-4 rounded-xl bg-theme-surface/60 border border-theme-border/60 hover:bg-theme-surface-hover hover:border-theme-border transition-all cursor-pointer min-h-[104px]"
+                className="group text-left flex flex-col gap-1.5 p-4 rounded-xl bg-theme-surface/60 border border-theme-border/60 hover:bg-theme-surface-hover hover:border-theme-border transition-all cursor-pointer min-h-[104px]"
               >
-                <span className="text-sm font-semibold uppercase tracking-wide text-theme-text truncate">
-                  {project.name}
-                </span>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-sm font-semibold uppercase tracking-wide text-theme-text truncate">
+                    {project.name}
+                  </span>
+                  <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
+                    <KebabMenu
+                      title="Project options"
+                      items={[
+                        { label: 'Delete project', danger: true, onClick: () => setDeleteTarget(project) },
+                      ]}
+                    />
+                  </div>
+                </div>
                 {project.description ? (
                   <span className="text-xs text-theme-text-muted line-clamp-2 flex-1">{project.description}</span>
                 ) : (
@@ -134,11 +153,29 @@ export default function ProjectsGalleryPage() {
                     day: 'numeric',
                   })}
                 </span>
-              </button>
+              </div>
             ))}
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Delete project?"
+        message={
+          <>
+            This deletes <strong>{deleteTarget?.name}</strong>
+            {deleteTarget?.chat_count
+              ? ` and all ${deleteTarget.chat_count} chat${deleteTarget.chat_count === 1 ? '' : 's'} inside it`
+              : ''}
+            . This cannot be undone.
+          </>
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }
