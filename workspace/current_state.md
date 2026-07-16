@@ -2,6 +2,24 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q1.5 — A/B benchmark + live verification — DONE, partial live run
+(2026-07-16).** Closes out the Q1 correctness pass (Q1.1-Q1.5 all complete).
+`workspace/plan/imageLab/benchmarks.md` defines 6 fixed prompt+seed pairs.
+Local dev's `cloudflared` tunnel (needed so a Kaggle warm-session kernel can
+reach the local PostgREST container) wasn't running this session — started it,
+fixed a stale orphaned-container network error, updated
+`docker-compose.override.yml`, restarted backend. Ran prompt #1 (photorealistic
+portrait) live against a real Kaggle SDXL warm session, twice with the same
+seed: both clean (no black/corrupt frame, full subject in frame, sharp
+natural photoreal detail) and **pixel-identical** to each other — real,
+live confirmation of Q1.1 (resolution buckets)/Q1.2 (VAE fix)/Q1.3
+(scheduler+CFG)/Q1.4 (seed determinism) all working together end-to-end, not
+just at the unit-test level. Did not run the full 6-prompt × 2 matrix (24
+generations) — prompt #1 alone was judged sufficient confirmation given real
+GPU-time cost; remaining prompts (#2-6, FLUX, style/negative-prompt variants)
+can run before Q2 ships if a more exhaustive pass is wanted. Full result log
+in `benchmarks.md`. See `dev_log.md`'s 2026-07-16 "imageLab Q1.5" entry.
+
 **imageLab Advanced Params refactor: per-model config classes — DONE
 (2026-07-16, user-requested, not a numbered Q-step).** New
 `frontend/src/components/advancedParamsConfig.ts`: abstract

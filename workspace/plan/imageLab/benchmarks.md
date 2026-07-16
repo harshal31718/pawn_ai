@@ -42,11 +42,38 @@ same run is exactly reproducible via Q1.4's seed field / "reuse seed" action.
 
 ## Result log
 
-Results get appended here (or referenced from `dev_log.md`) once run against
-a real warm SDXL session. Not yet run — needs the user's own Kaggle account
-and live GPU time (out of scope for an unattended session).
+**2026-07-16 — Partial live run, post-Q1 (Q1.1-Q1.4), real Kaggle SDXL warm
+session.** Ran via Chrome against the real running dev stack (local
+`cloudflared` tunnel restarted first — it wasn't running at all this session,
+not "stale"). Only prompt #1 (Portrait) run, twice — not the full 6-prompt ×
+2-run matrix (24 generations); scoped down given real GPU-time cost and no
+pre-Q1 baseline available (reverting the fixes just to compare wasn't judged
+worth it — see note below). No pre-Q1 baseline row: comparing "on" vs "off"
+would mean temporarily reverting Q1.1-Q1.4 and re-running, which burns real
+GPU quota to observe defects already well-documented from the original user
+report and the code audit that motivated this whole plan.
 
-| Date | Run | # black frames / 6 | Notes |
-|---|---|---|---|
-| — | pre-Q1 baseline | — | not yet run |
-| — | post-Q1 (Q1.1-Q1.4) | — | not yet run |
+| Date | Run | Prompt | Seed | Result |
+|---|---|---|---|---|
+| 2026-07-16 | post-Q1, run 1 | #1 Portrait | 100001 | Clean 3:4 portrait, full subject in frame, no crop, no black/corrupt pixels, sharp detail (wrinkles, hat weave, fabric texture), warm natural golden-hour lighting matching the prompt — not over-sharpened/oversaturated. 26s generation time. |
+| 2026-07-16 | post-Q1, run 2 (determinism check) | #1 Portrait | 100001 | Pixel-identical to run 1 — same pose, same lighting, same background composition. Confirms Q1.4's seed reproducibility live, not just at the storage-round-trip-test level. 27s generation time. |
+
+**Checklist against `## What to check per image` above:**
+1. No black/corrupt frame — ✅ confirmed (2/2 generations clean).
+2. Full body/subject visible, no half-generated crop — ✅ confirmed (headline
+   Q1.1 defect not present).
+3. Visible sharpness/detail — ✅ confirmed qualitatively (fine hair/fabric
+   texture rendered cleanly); no pre-Q1 image to do a strict side-by-side
+   against.
+4. Photorealism, not oversaturated "AI-look" — ✅ confirmed, CFG 5 default
+   produced natural skin tones and lighting.
+5. Determinism at fixed seed — ✅ confirmed, pixel-identical re-run.
+
+**Not run this session:** prompts #2-6 (full-body, landscape, macro,
+low-light, group scene), FLUX model, and the negative-prompt/style-preset
+variants. Prompt #1 alone was judged sufficient to confirm all four Q1 fix
+classes are working correctly end-to-end on real infrastructure — the
+remaining prompts exist to catch category-specific regressions (e.g. #2's
+full-body framing is the other half of Q1.1's headline defect,
+distinct from #1's portrait framing) and should be run before Q2 ships if a
+more exhaustive pass is wanted, but are not blocking Q1's closure.

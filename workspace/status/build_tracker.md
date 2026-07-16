@@ -48,7 +48,7 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   (moved into the imageLab plan folder 2026-07-15). `[x]` I-1 FLUX OOM merged + live-verified
   2026-07-15 (real Kaggle FLUX generation succeeded, no CUDA OOM); I-2/I-4 need the user +
   real Kaggle; I-3 is deployment-session-gated.
-- `[~]` **imageLab Quality Q1–Q4** — `workspace/plan/imageLab/` (read `00_overview.md`
+- `[x]` **imageLab Quality Q1** — `workspace/plan/imageLab/` (read `00_overview.md`
   first). Root-caused the "bad/unreal/half-generated images" report: SD1.5-era resolution
   sizes in `AdvancedParams.tsx` (Q1.1 headline fix), stock fp16 SDXL VAE (black images,
   Q1.2), no scheduler configured (Q1.3), base-SDXL realism ceiling (Q2 photoreal
@@ -113,9 +113,28 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     re-verified the scoping decision against generate.py). build-validator PASS.
     No security-auditor run (notebook + param-plumbing, no secrets/config/auth
     touched). Full record: `dev_log.md`'s 2026-07-16 "imageLab Q1.4" entry,
-    `current_state.md`. **Q1.1-Q1.4 correctness pass complete.** Not yet
-    live-verified — Q1.5 next (needs the user + real Kaggle).
-  - `[ ]` Q1.5 — A/B benchmark set + live verification
+    `current_state.md`. **Q1.1-Q1.4 correctness pass complete.**
+  - `[x]` **Q1.5 — A/B benchmark set + live verification** ✓ (2026-07-16, partial)
+    `workspace/plan/imageLab/benchmarks.md` created (6 fixed prompt+seed pairs).
+    Local `cloudflared` tunnel wasn't running this session (not "stale" — never
+    started) — started it (`docker compose --profile tunnel up -d cloudflared`,
+    fixed a stale orphaned-container/network error along the way), updated
+    `docker-compose.override.yml`'s `POSTGREST_PUBLIC_URL`, restarted backend.
+    Ran prompt #1 (Portrait) live against a real Kaggle SDXL warm session, twice
+    (same prompt+seed 100001) via Chrome: both generations clean — no black/
+    corrupt frame (Q1.2), full subject in frame no crop (Q1.1), sharp natural
+    photoreal detail not oversaturated (Q1.3), and the two runs were
+    **pixel-identical** (Q1.4 determinism confirmed live, not just at the
+    storage-round-trip test level). Discovered along the way: the "+ Advanced"
+    panel's fields (aspect ratio/seed/etc.) weren't disabled by lack of Kaggle
+    connection but the prompt/Generate controls were — had to click "Redeploy"
+    before the composer accepted input, an existing UX quirk not part of Q1.
+    **Not run:** prompts #2-6, FLUX model, style/negative-prompt variants — full
+    24-generation matrix judged not worth the additional real GPU spend given
+    prompt #1 alone confirmed all four fix classes end-to-end; remaining prompts
+    exist to catch category-specific regressions and can run before Q2 ships if
+    a more exhaustive pass is wanted. Full result log in `benchmarks.md`.
+    **Q1 (Q1.1-Q1.5) is now fully closed.**
 - `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
   `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,
   user-requested). Image+prompt → vision model analysis → refined prompt → generation

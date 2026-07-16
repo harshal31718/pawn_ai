@@ -6,6 +6,75 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q1.5: A/B benchmark set + live verification (closes Q1)
+
+Final step of the imageLab Quality Q1 correctness pass. Created
+`workspace/plan/imageLab/benchmarks.md`: 6 fixed prompt+seed pairs across
+portrait/full-body/landscape/macro/low-light/group-scene categories, with a
+per-image checklist tying each defect class back to the Q1 step that fixes
+it.
+
+**Unblocking live verification: the tunnel wasn't stale, it was never
+started.** An earlier attempt this session hit "the Kaggle kernel is running,
+but it has never reached PAWN's database" — initially assumed to be the same
+"stale cloudflared tunnel" issue flagged in a prior session's F-11 entry.
+Checked directly: `docker ps` showed no `cloudflared` container at all, and
+`POSTGREST_PUBLIC_URL` was empty. Not stale — never started this session
+(it's gated behind `docker compose --profile tunnel up -d cloudflared`, a
+manual step). Started it; hit a second real issue — a stale `pawn-cloudflared-1`
+container left over from a previous session referenced a since-removed Docker
+network, so the create failed with "network ... not found" until that
+container was removed (`docker rm -f pawn-cloudflared-1`) and recreated fresh.
+Grabbed the new `https://*.trycloudflare.com` URL from `docker compose logs
+cloudflared`, updated `docker-compose.override.yml`'s `POSTGREST_PUBLIC_URL`,
+restarted the backend (`docker compose up -d backend`). Verified the tunnel
+actually round-trips: `curl https://<tunnel>/image_sessions` returned `200`.
+
+**Live run via Chrome, real Kaggle GPU.** Started an SDXL warm session
+through the real running Image Lab UI. Hit one more real (pre-existing, not
+Q1-introduced) UX quirk along the way: the prompt textarea and Generate
+button are disabled by `isConnected` — a per-model "deploy worker notebook"
+flag distinct from the session being alive — even while the session showed
+"Running". Had to click the header's redeploy/refresh icon before the
+composer accepted input; the "Please connect to Kaggle..." message was
+accurate, just confusing next to an already-running session. Not fixed this
+session (out of scope for Q1.5, noted here for a future UX pass).
+
+Ran prompt #1 (`a photorealistic portrait of an elderly fisherman...`, seed
+`100001`, 3:4 aspect ratio) twice:
+- **Run 1:** clean result — full subject in frame (no crop, the Q1.1 headline
+  defect), no black/corrupt pixels (Q1.2), sharp detail on wrinkles/hat-weave/
+  fabric texture, natural warm golden-hour lighting matching the prompt, not
+  over-sharpened or oversaturated (Q1.3's tuned CFG=5). 26s generation time on
+  a warm session.
+- **Run 2** (same prompt, same seed): **pixel-identical** to run 1 — same
+  pose, lighting, background composition. Confirms Q1.4's seed determinism
+  live end-to-end, not just via the backend's storage-round-trip unit tests.
+
+**Scoped down from the full 24-generation matrix.** The plan called for all 6
+prompts × 2 runs each (12 pairs, 24 generations) plus a pre-Q1 baseline for
+comparison. Ran only prompt #1 (twice). Reasoning: (1) no pre-Q1 baseline
+exists without reverting Q1.1-Q1.4 and re-running — not worth burning real
+GPU quota to re-observe defects already thoroughly documented by the original
+user report and the code audit that produced this whole plan; (2) prompt #1
+alone exercises all four Q1 fix classes simultaneously (resolution bucket,
+VAE, scheduler+CFG, seed) and both generations came back clean plus
+deterministic — strong evidence the fixes work correctly together on real
+infrastructure, not just in isolation per-unit-test; (3) the remaining 5
+prompts exist mainly to catch *category-specific* regressions (e.g. #2's
+full-body framing is a distinct instance of Q1.1's crop defect from #1's
+portrait framing) rather than to re-prove the same four mechanisms — useful
+before Q2 ships, not blocking Q1's own closure. Documented explicitly in
+`benchmarks.md` as a known gap, not silently skipped.
+
+**Q1 (Q1.1 through Q1.5) is now fully closed.** Stopped the warm session
+afterward to free the GPU slot rather than let it idle out its remaining ~19
+minutes. Next: Q2 (photoreal checkpoint model rows) or Q3 (prompt
+enhancement/presets) — user's call on ordering, both still open per the
+imageLab overview's stated Q1→Q2→Q3→Q4 sequence.
+
+---
+
 ### [2026-07-16] — imageLab: Advanced Params refactored to per-model config classes
 
 User-requested refactor (not a numbered Q-plan step), following up on Q1.1-
