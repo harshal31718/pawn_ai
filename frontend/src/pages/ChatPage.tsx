@@ -95,6 +95,7 @@ export default function ChatPage() {
     bumpAfterTurn,
     setStreaming,
     quietTitleRefresh,
+    refreshTraceObservations,
   } = store
 
   // Rate-limit cooldowns are per-conversation (epoch-ms when the lock lifts)
@@ -273,6 +274,11 @@ export default function ChatPage() {
       userContent: content,
     })
     setStreaming(convId, true)
+    // F-11 follow-up: any tool call this turn means the persisted message
+    // will carry `observation` fields the live trace never does -- flagged
+    // here so onDone can backfill them via refreshTraceObservations once
+    // the turn (and its server-side persist) is actually done.
+    let usedToolThisTurn = false
 
     const history = [...messages, userMsg]
       .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -323,6 +329,7 @@ export default function ChatPage() {
           streamsRef.current.delete(convId)
           bumpAfterTurn(convId)
           quietTitleRefresh()
+          if (usedToolThisTurn) void refreshTraceObservations(convId)
         },
         onError: (err) => {
           setMessagesFor(convId, (prev) =>
@@ -341,6 +348,7 @@ export default function ChatPage() {
           streamsRef.current.delete(convId)
         },
         onStep: (label, detail, agent) => {
+          if (TOOL_STEP_RE.test(label)) usedToolThisTurn = true
           setMessagesFor(convId, (prev) =>
             prev.map((m) => {
               if (m.id !== assistantId) return m
@@ -369,6 +377,47 @@ export default function ChatPage() {
                 const last = m.segments[m.segments.length - 1]
                 if (last.type === 'tool' && last.entry.kind === 'tool' && last.entry.status === 'running' && last.entry.agent === agent) {
                   next = { ...next, segments: [...m.segments.slice(0, -1), { type: 'tool', entry: { ...last.entry, name } }] }
+                }
+              }
+              return next
+            }),
+          )
+        },
+        onToolResult: (name, observation, agent) => {
+          // F-11 follow-up: attaches the tool's real result (e.g.
+          // generate_image's job id) to its trace/segment entry the moment
+          // it's actually available -- previously `observation` never
+          // arrived until a later reload, so anything keyed off it (the
+          // image chip) could never show up live. Matches the most recent
+          // still-running entry for this exact tool+agent, same pairing
+          // onToolCall already relies on.
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              let next = m
+              if (m.trace) {
+                const idx = [...m.trace].reverse().findIndex(
+                  (e) => e.kind === 'tool' && e.name === name && e.agent === agent && e.status === 'running',
+                )
+                if (idx !== -1) {
+                  const i = m.trace.length - 1 - idx
+                  const updated = [...m.trace]
+                  updated[i] = { ...updated[i], observation }
+                  next = { ...next, trace: updated }
+                }
+              }
+              if (m.segments) {
+                const idx = [...m.segments].reverse().findIndex(
+                  (s) => s.type === 'tool' && s.entry.kind === 'tool' && s.entry.name === name && s.entry.agent === agent && s.entry.status === 'running',
+                )
+                if (idx !== -1) {
+                  const i = m.segments.length - 1 - idx
+                  const seg = m.segments[i]
+                  if (seg.type === 'tool') {
+                    const updated = [...m.segments]
+                    updated[i] = { ...seg, entry: { ...seg.entry, observation } }
+                    next = { ...next, segments: updated }
+                  }
                 }
               }
               return next

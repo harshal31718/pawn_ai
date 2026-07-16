@@ -67,12 +67,24 @@ export default function ImageJobChip({ jobId }: Props) {
   }
 
   if (job.status === 'done' && job.image_b64) {
+    const mime = job.mime || 'image/png'
+    const src = `data:${mime};base64,${job.image_b64}`
+    const ext = mime.split('/')[1] || 'png'
     return (
-      <img
-        src={`data:${job.mime || 'image/png'};base64,${job.image_b64}`}
-        alt={job.prompt || 'Generated image'}
-        className="mt-1 rounded-lg max-w-[240px] max-h-[240px] border border-theme-ai-bubble-text/10"
-      />
+      <div className="mt-1 flex flex-col items-start gap-1">
+        <img
+          src={src}
+          alt={job.prompt || 'Generated image'}
+          className="rounded-lg max-w-[240px] max-h-[240px] border border-theme-ai-bubble-text/10"
+        />
+        <a
+          href={src}
+          download={`pawn-${jobId}.${ext}`}
+          className="px-2 py-1 rounded-md text-[10px] font-semibold text-theme-ai-bubble-text border border-theme-ai-bubble-text/20 hover:bg-theme-ai-bubble-text/10 cursor-pointer"
+        >
+          Download
+        </a>
+      </div>
     )
   }
 

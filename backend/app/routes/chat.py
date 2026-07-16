@@ -286,6 +286,10 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                         yield events.token_event(delta)
                     elif name == "step":
                         yield events.step_event(data.get("label", ""), data.get("detail", ""), data.get("agent", "main"))
+                    elif name == "tool_result":
+                        yield events.tool_result_event(
+                            data.get("name", ""), data.get("observation", ""), data.get("agent", "main")
+                        )
                     elif name == "memory_hit":
                         yield events.memory_hit_event(
                             data.get("summary", ""), data.get("scope", ""), data.get("source_conv_id", "")

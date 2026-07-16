@@ -2,8 +2,9 @@ import { useState, useRef, useLayoutEffect, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message, Segment, TraceEntry } from '../types'
-import TraceView, { TraceRun } from './TraceView'
+import TraceView, { TraceRun, findImageJobIds } from './TraceView'
 import CitationChips from './CitationChips'
+import ImageJobChip from './ImageJobChip'
 import { LinkIcon } from './icons'
 
 /** Flattens a react-markdown link's children into plain text, to detect a
@@ -202,6 +203,19 @@ export default function MessageBubble({ message, isStreaming }: Props) {
 
   const showTruncated = isUser && isLong && !isExpanded && !isStreaming
 
+  // Generated images render in the main bubble, below the reply text --
+  // not nested inside the collapsible tool-call card (user feedback: having
+  // to open "1 tool call" just to see the picture defeats inline rendering).
+  // Works from whichever shape this message actually has: segments (live,
+  // Phase N interleaved path) or trace (reload/legacy path).
+  const imageJobIds = isUser
+    ? []
+    : findImageJobIds(
+      message.segments && message.segments.length > 0
+        ? message.segments.filter((s): s is Extract<Segment, { type: 'tool' }> => s.type === 'tool').map((s) => s.entry)
+        : message.trace || [],
+    )
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div className={`flex flex-col w-fit ${isUser ? 'max-w-[70%] sm:max-w-[50%] ml-auto' : 'max-w-[85%] md:max-w-[75%] mr-auto'}`}>
@@ -266,6 +280,9 @@ export default function MessageBubble({ message, isStreaming }: Props) {
               )}
             </>
           )}
+          {imageJobIds.map((jobId) => (
+            <ImageJobChip key={jobId} jobId={jobId} />
+          ))}
         </div>
 
         {!isUser && message.citations && message.citations.length > 0 && (

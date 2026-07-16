@@ -75,6 +75,7 @@ export interface ConversationStore {
   bumpAfterTurn: (convId: string) => void
   setStreaming: (convId: string, on: boolean) => void
   quietTitleRefresh: () => void
+  refreshTraceObservations: (id: string) => Promise<void>
   createProject: (name?: string) => string
   renameProject: (id: string, name: string) => void
   updateProjectDescription: (id: string, description: string) => void
@@ -193,6 +194,57 @@ export function useConversationStore(
       setConversations((prev) => mergeServerMeta(prev, [detail.meta]))
     } catch {
       // leave cache as-is; user can retry by reopening
+    }
+  }, [])
+
+  // F-11 follow-up (frontend cache-precedence bug, live-found): a live SSE
+  // trace's `tool` entries never carry `observation` (only ever attached
+  // server-side on the persisted message) -- for a chat created+completed
+  // within the current session, `selectConversation` trusts the cache and
+  // never re-fetches, so a tool-call preview (e.g. ImageJobChip's job id)
+  // stays permanently stuck showing just the raw args, even across a hard
+  // reload. Unlike backgroundLoadDetail (used when nothing is cached at all
+  // and safe to fully replace), this merges in *only* the missing
+  // `observation` strings by matching each message's cached trace entries
+  // (and, for a still-live-cached message, its equivalent `segments` tool
+  // entries -- Phase N's interleaved render path reads from segments, not
+  // trace, so both must be patched for the image chip to actually appear)
+  // against the freshly-fetched ones by array position -- content and
+  // everything else stay exactly as they are, so there's no risk of a
+  // slower/eventually-consistent Drive read clobbering on-screen state.
+  const refreshTraceObservations = useCallback(async (id: string) => {
+    try {
+      const detail = await fetchConversation(id)
+      const byId = new Map(detail.messages.filter((m) => m.role === 'assistant').map((m, i) => [i, m]))
+      let assistantIndex = 0
+      setMessagesByConv((prev) => {
+        const cached = prev[id]
+        if (!cached) return prev
+        const next = cached.map((m) => {
+          if (m.role !== 'assistant') return m
+          const fresh = byId.get(assistantIndex++)
+          if (!fresh?.trace) return m
+          const mergedTrace = m.trace?.map((entry, i) => {
+            const freshEntry = fresh.trace?.[i]
+            return entry.kind === 'tool' && !entry.observation && freshEntry?.observation
+              ? { ...entry, observation: freshEntry.observation }
+              : entry
+          })
+          let toolSegIdx = 0
+          const mergedSegments = m.segments?.map((seg) => {
+            if (seg.type !== 'tool') return seg
+            const i = toolSegIdx++
+            const freshEntry = fresh.trace?.[i]
+            return seg.entry.kind === 'tool' && !seg.entry.observation && freshEntry?.observation
+              ? { ...seg, entry: { ...seg.entry, observation: freshEntry.observation } }
+              : seg
+          })
+          return { ...m, ...(mergedTrace ? { trace: mergedTrace } : {}), ...(mergedSegments ? { segments: mergedSegments } : {}) }
+        })
+        return { ...prev, [id]: next }
+      })
+    } catch {
+      // best-effort backfill; leave cache as-is on failure
     }
   }, [])
 
@@ -460,6 +512,7 @@ export function useConversationStore(
     bumpAfterTurn,
     setStreaming,
     quietTitleRefresh,
+    refreshTraceObservations,
     createProject,
     renameProject,
     updateProjectDescription,

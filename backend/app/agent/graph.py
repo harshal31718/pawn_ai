@@ -614,6 +614,7 @@ async def execute_node(
                 tool_log.append(
                     {"name": name, "args": args, "observation": observation, "elapsed_ms": elapsed_ms, "agent": "main"}
                 )
+                await adispatch_custom_event("tool_result", {"name": name, "observation": observation, "agent": "main"})
                 # Nested subagent tool calls, tagged with their own agent name (A.8 renders these nested).
                 tool_log.extend(sub_result["tool_log"])
                 for citation in sub_result["citations"]:
@@ -644,6 +645,7 @@ async def execute_node(
             tool_log.append(
                 {"name": name, "args": args, "observation": observation, "elapsed_ms": elapsed_ms, "agent": "main"}
             )
+            await adispatch_custom_event("tool_result", {"name": name, "observation": observation, "agent": "main"})
 
             if name in ("search_memory", "doc_search") and not observation.startswith("TOOL_ERROR"):
                 if observation not in ("No relevant memory found.", "No relevant document content found."):

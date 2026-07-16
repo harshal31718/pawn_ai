@@ -819,6 +819,46 @@ async def test_execute_node_heavy_closing_call_degraded_emits_warning_step():
 
 
 @pytest.mark.asyncio
+async def test_execute_node_dispatches_tool_result_with_real_observation():
+    """F-11 follow-up (live bug): `observation` was never sent over SSE at
+    all -- only ever attached to the persisted message after the whole turn
+    finished -- so anything keyed off it (ImageJobChip's job id) could never
+    appear during a live stream, only after a later reload. A `tool_result`
+    custom event must fire the moment the tool call itself resolves, with
+    its real observation and agent tag."""
+    state = _state(difficulty="light", needs_agent=True)
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake(*args, **kwargs):
+        if kwargs.get("tools"):
+            yield {
+                "type": "done",
+                "tool_calls": [_tool_call("call_1", "generate_image", '{"prompt": "a cat"}')],
+                "finish_reason": "tool_calls",
+                "usage": None,
+            }
+        else:
+            yield {"type": "content", "delta": "Your image is generating."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)
+
+    real_observation = res["tool_log"][0]["observation"]
+    assert any(
+        name == "tool_result"
+        and data.get("name") == "generate_image"
+        and data.get("observation") == real_observation
+        and data.get("agent") == "main"
+        for name, data in dispatched
+    )
+
+
+@pytest.mark.asyncio
 async def test_execute_node_heavy_generate_image_call_gets_synthesis_nudge():
     """F-11 live bug: the closing-synthesis pass has no tools and no
     awareness of what generate_image actually returned -- a research-tier

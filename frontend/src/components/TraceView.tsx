@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import ImageJobChip from './ImageJobChip'
 import type { TraceEntry } from '../types'
 
 interface Props {
@@ -41,6 +40,21 @@ function extractImageJobId(entry: TraceEntry): string | null {
   if (entry.name !== 'generate_image' || !entry.observation) return null
   const match = entry.observation.match(IMAGE_JOB_ID_RE)
   return match ? match[1] : null
+}
+
+/** Pulls every generate_image job id out of a trace, in order, deduped --
+ *  used by Message.tsx to render the resulting image(s) in the main bubble
+ *  below the reply text, not buried inside the collapsible tool-call card
+ *  (user feedback: having to open "1 tool call" just to see the picture
+ *  defeats the point of it rendering inline at all). */
+export function findImageJobIds(entries: TraceEntry[]): string[] {
+  const ids: string[] = []
+  for (const entry of entries) {
+    if (entry.kind !== 'tool') continue
+    const id = extractImageJobId(entry)
+    if (id && !ids.includes(id)) ids.push(id)
+  }
+  return ids
 }
 
 function bareName(name: string): string {
@@ -173,7 +187,6 @@ function ToolCard({ item }: { item: ToolItem }) {
   const preview = item.entry.observation ?? item.entry.detail
   const nResults = item.results.length
   const hasBody = Boolean(preview) || nResults > 0
-  const imageJobId = extractImageJobId(item.entry)
 
   return (
     <div className="rounded-md border border-theme-ai-bubble-text/10 bg-theme-surface/40 my-1 overflow-hidden">
@@ -195,11 +208,6 @@ function ToolCard({ item }: { item: ToolItem }) {
         </span>
         {hasBody && <Chevron open={open} />}
       </button>
-      {imageJobId && (
-        <div className="px-2 pb-1.5">
-          <ImageJobChip jobId={imageJobId} />
-        </div>
-      )}
       {open && hasBody && (
         <div className="px-2 pb-1.5 border-t border-theme-ai-bubble-text/10">
           {preview && (

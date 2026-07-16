@@ -315,6 +315,12 @@ export interface StreamChatCallbacks {
    *  is shaped like a tool-call announcement ("Calling <name>"), so callers
    *  get a clean tool name instead of parsing the human-readable label. */
   onToolCall?: (name: string, agent: string) => void
+  /** F-11 follow-up: fires once a tool call actually resolves, carrying its
+   *  real observation live -- previously `observation` was never sent over
+   *  SSE at all (only ever attached to the persisted message after the whole
+   *  turn finished), so anything keyed off it (e.g. ImageJobChip's job id)
+   *  could never appear until a later reload. */
+  onToolResult?: (name: string, observation: string, agent: string) => void
   onMemoryHit?: (summary: string, scope?: string, sourceConvId?: string) => void
   onModelCall?: (model: string, purpose: string) => void
   onProviderSwitch?: (from: string, to: string) => void
@@ -338,7 +344,7 @@ export async function streamChat(
    *  sent once alongside this request only. */
   image?: { b64: string; mime: string },
 ): Promise<void> {
-  const { onToken, onDone, onError, onRateLimit, onStep, onToolCall, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
+  const { onToken, onDone, onError, onRateLimit, onStep, onToolCall, onToolResult, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
     callbacks
 
   let res: Response
@@ -422,6 +428,9 @@ export async function streamChat(
             if (toolMatch) onToolCall?.(toolMatch[1], agent)
             break
           }
+          case 'tool_result':
+            onToolResult?.(String(event.name ?? ''), String(event.observation ?? ''), String(event.agent ?? 'main'))
+            break
           case 'memory_hit':
             onMemoryHit?.(
               String(event.summary ?? ''),

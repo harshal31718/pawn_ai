@@ -6,6 +6,62 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — Tunnel restart + real end-to-end image gen verified; chat image UX fixes (live rendering, placement, download)
+
+Restarted the local dev `cloudflared` tunnel (`docker compose --profile tunnel up
+-d cloudflared` then `docker compose restart cloudflared` to force a fresh
+quick-tunnel subdomain), updated `docker-compose.override.yml`'s
+`POSTGREST_PUBLIC_URL` to the new URL, restarted the backend. Confirmed via
+Chrome: a chat-triggered `generate_image` call now completes for real on
+Kaggle (SDXL warm session loaded, job ran ~28s, image appeared in Image
+Lab's own Generations list) — the previous "its not working"/hallucination
+investigation was blocked the whole time by this dead tunnel, not a
+remaining code bug.
+
+**Three real UX issues found live while testing the restart, all fixed:**
+
+1. **Frontend cache-precedence bug (previously just documented, now fixed
+   properly).** A live SSE trace's `tool` entries never carried
+   `observation` at all — it was only ever attached to a message after the
+   *whole turn* finished, read back from Drive on a later fetch. For a chat
+   created and completed within the same session, `selectConversation`
+   trusts the cache and never re-fetches, so the image chip could never
+   render at all until a full reload — and even a hard reload only worked
+   by accident (a fresh page load's `backgroundLoadDetail` happening to
+   fully replace the cached message with the server's persisted copy).
+   Root-caused two layers deep and fixed at the actual source instead of
+   patching around it:
+   - Added a new SSE event, `tool_result` (`events.py`, `execute_node` in
+     `graph.py`, forwarded in `routes/chat.py`) — dispatched the instant a
+     tool call resolves, carrying its real observation, not just its args
+     like the existing `step` event. `client.ts` gained a matching
+     `onToolResult` callback.
+   - `ChatPage.tsx`'s `onToolResult` handler attaches the observation to the
+     matching still-running trace *and* segment entry the moment it
+     arrives — so the image chip now appears live, mid-stream, with no
+     reload needed at all (this is the real fix; it makes the earlier
+     `useConversationStore.refreshTraceObservations` merge-on-`onDone`
+     backfill redundant for new turns, though it's kept as a safety net for
+     already-cached older messages / a dropped SSE event).
+2. **Image chip was buried inside the collapsible "1 tool call" card**
+   (user feedback: had to open it just to see the picture). Moved
+   `ImageJobChip` rendering out of `TraceView.tsx`'s `ToolCard` entirely —
+   `TraceView` exports a new `findImageJobIds(entries)` helper, and
+   `Message.tsx` now renders the chip(s) directly in the main bubble, below
+   the reply text (reading from `segments` for a live message, `trace` for
+   a reloaded one — same source `findImageJobIds` needs either way).
+3. **No way to download a chat-generated image** (user request). Added a
+   `<a download>` link next to the rendered image in `ImageJobChip.tsx`,
+   matching Image Lab's own `GenerationsPanel.tsx` pattern exactly (a data
+   URI object URL, no backend endpoint needed).
+
+1 new backend test (`test_execute_node_dispatches_tool_result_with_real_observation`),
+full suite green (476); `tsc`/build clean. Live-verified twice more via
+Chrome after the fix: a robot-playing-chess prompt showed the reply text,
+then the real generated image, then a working Download button — all
+appearing live in one continuous stream, no reload, not nested in any
+collapsed section.
+
 ### [2026-07-16] — Kaggle notebook fix: stop-race check crashed the whole run on a REST hiccup, unrelated to the tunnel outage
 
 User's tunnel is still down (same `loans-xml-everybody-postposted.trycloudflare.com`
