@@ -6,7 +6,7 @@ import ConfirmDialog from './ConfirmDialog'
 import KebabMenu from './KebabMenu'
 import ProjectSection from './ProjectSection'
 import SearchResults from './SearchResults'
-import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, FolderIcon } from './icons'
+import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, FolderIcon, ChevronRightIcon } from './icons'
 
 interface Props {
   conversations: CachedConversation[]
@@ -65,6 +65,7 @@ export default function Sidebar({
   const [editValue, setEditValue] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [chatsCollapsed, setChatsCollapsed] = useState(false)
   const [dialog, setDialog] = useState<PendingDialog | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -290,13 +291,16 @@ export default function Sidebar({
               />
             ) : (
               <>
-                {/* Shared scroll region for Projects + Chats — both need to scroll
-                    together as one unit (min-h-0 lets this flex child actually
-                    shrink below its content height so overflow-y-auto can kick in;
-                    without it, ProjectSection's unbounded height silently pushed
-                    the chat list out of view with no way to scroll to it). */}
+                {/* Shared scroll region for Projects + Chats -- both headers
+                    are sticky, stacked one below the other: Projects' header
+                    pins at top-0 (z-20, topmost), Chats' header pins right
+                    below it at top-7 (its exact height) once scrolled up to
+                    that position -- so Projects stays pinned throughout, and
+                    once Chats' header reaches the second slot it pins too,
+                    leaving only the chat rows themselves still scrolling.
+                    (min-h-0 lets this flex child actually shrink below its
+                    content height so overflow-y-auto can kick in.) */}
                 <div className="flex-1 min-h-0 overflow-y-auto">
-                {/* Projects section — above the flat chat list */}
                 <ProjectSection
                   projects={projects}
                   conversations={conversations}
@@ -318,17 +322,26 @@ export default function Sidebar({
                   onRebuildMemory={handleRebuildMemory}
                 />
 
-                {/* Chats section header — mirrors Projects' muted label styling.
-                    Sticky within the shared scroll region (see the comment above)
-                    so it stays pinned like the Projects label while its own list
-                    scrolls underneath. */}
-                <div className="sticky top-0 z-10 bg-theme-surface px-3 pt-1 pb-1">
+                {/* Chats section header — mirrors Projects' muted label styling,
+                    including its own collapse toggle. Sticks at top-7 (see the
+                    comment above) so it stacks directly below Projects' own
+                    pinned header instead of overlapping it. */}
+                <div className="sticky top-7 z-10 h-7 bg-theme-surface flex items-center gap-0.5 px-3">
+                  <button
+                    type="button"
+                    onClick={() => setChatsCollapsed((v) => !v)}
+                    className="p-0.5 rounded hover:bg-theme-surface-hover text-theme-text-muted hover:text-theme-text transition-colors shrink-0 cursor-pointer"
+                    title={chatsCollapsed ? 'Expand' : 'Collapse'}
+                  >
+                    <ChevronRightIcon className={`w-2.5 h-2.5 transition-transform ${chatsCollapsed ? '' : 'rotate-90'}`} />
+                  </button>
                   <span className="text-[10px] uppercase tracking-wider font-semibold text-theme-text-muted select-none">
                     Chats
                   </span>
                 </div>
 
                 {/* Conversations List */}
+                {!chatsCollapsed && (
                 <div className="px-2 py-2 space-y-1">
               {standaloneConversations.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
@@ -445,6 +458,7 @@ export default function Sidebar({
                 })
               )}
                 </div>
+                )}
                 </div>
               </>
             )}

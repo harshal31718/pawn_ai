@@ -61,8 +61,22 @@ export default function ProjectSection({
   }
 
   return (
-    <div className="px-2 pb-1">
-      <div className="sticky top-0 z-10 bg-theme-surface flex items-center justify-between px-1 py-1">
+    <>
+      {/* Stacked sticky headers (Sidebar.tsx's Chats header sits right below
+          this one, offset by its exact height via top-7) -- this one is the
+          topmost, so it pins at top-0 with the higher z-index.
+          Deliberately NOT wrapped in a div that only spans the project rows:
+          position:sticky only holds an element in place while its own
+          containing block is still in the scrollport -- wrapping the header
+          in a div that's just as tall as the (short) project list meant the
+          header scrolled away the moment that div's bottom edge passed,
+          long before the user finished scrolling into the Chats list below.
+          Returning a fragment here makes this header (and the divider/rows
+          below) direct children of Sidebar.tsx's single shared scroll
+          container, whose full height spans every chat row too -- so the
+          header now stays pinned for the entire scroll, not just its own
+          section's height. */}
+      <div className="sticky top-0 z-20 h-7 bg-theme-surface flex items-center justify-between px-1 py-1 mx-2">
         <div className="flex items-center gap-0.5 min-w-0">
           {/* Collapse toggle — split out from the label so the label itself
               can navigate to the Projects gallery page (F-10) without losing
@@ -97,7 +111,10 @@ export default function ProjectSection({
         </button>
       </div>
       {!collapsed && (
-        <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
+        // No inner scroll cap here -- Projects is part of Sidebar.tsx's one
+        // shared scroll region now (its own header pins at the top, Chats'
+        // header stacks in below it), not its own independently-bounded box.
+        <div className="space-y-0.5 pl-2 pr-2.5">
           {projects.map((project) => (
             <ProjectRow
               key={project.id}
@@ -126,7 +143,7 @@ export default function ProjectSection({
           />
         </div>
       )}
-      <div className="mt-1 pt-1 border-t border-theme-border/40" />
-    </div>
+      <div className="mt-1 pt-1 mb-1 mx-2 border-t border-theme-border/40" />
+    </>
   )
 }
