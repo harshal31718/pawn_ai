@@ -74,6 +74,20 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     "Chats" label both gained `sticky top-0 z-10 bg-theme-surface`) — live-verified:
     scrolling past the `asdgasd` project let `suiiiii` scroll underneath while the
     "Projects" label stayed stuck to the top. `tsc --noEmit` + `npm run build` clean.
+    **Follow-up bug found live by the user from a screenshot, fixed same session:**
+    the sticky headers' `z-10` broke `KebabMenu.tsx`'s dropdown — CSS stacking rules
+    mean a `position: sticky` + `z-index` element always paints above any
+    *non-positioned* ancestor's entire subtree, so the kebab's old `z-50` (nested
+    inside the non-positioned scrollable list) could never actually out-rank the
+    sticky labels no matter how high its own z-index was set. Fixed by rewriting
+    `KebabMenu.tsx` to render its open dropdown through a React portal into
+    `document.body` (`position: fixed`, computed from the trigger button's own
+    bounding rect) — escapes the ancestor stacking-context/overflow-clipping
+    problem entirely instead of trying to out-z-index it locally. Closes on
+    scroll/resize (simplest robust choice) as well as outside-click (now checked
+    against both the trigger and the portaled dropdown, since they're no longer in
+    the same DOM subtree). `tsc --noEmit` + `npm run build` clean; live-verified via
+    Chrome — the dropdown now renders cleanly above the sticky "Projects" label.
   - `[ ]` F-10 Projects gallery page + sidebar cap (`phase_F10_projects_gallery_page.md`)
     — plan-only, from the user's follow-up request; needs 3 open questions answered
     (where description is edited, sidebar trigger for the gallery, card layout) before
