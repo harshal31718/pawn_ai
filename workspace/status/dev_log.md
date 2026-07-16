@@ -6,6 +6,65 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab: Advanced Params refactored to per-model config classes
+
+User-requested refactor (not a numbered Q-plan step), following up on Q1.1-
+Q1.4's work on `AdvancedParams.tsx`. The component had accumulated scattered
+`isFlux` conditionals for every field's visibility/defaults/hints as each Q1
+step added model-specific behavior — the user asked for an explicit base
+class + per-model subclass architecture instead, and specifically wanted
+FLUX's Inference Steps control removed entirely (FLUX is a fixed ~4-step
+distilled model — there's no "recommended range" to expose, unlike SDXL's
+20-40).
+
+**New `frontend/src/components/advancedParamsConfig.ts`.** Abstract
+`ModelAdvancedConfig` base class holds everything genuinely shared: resolution
+buckets, `initialAdvanced()`/`deriveParams()` logic, field ranges, and
+visibility flags (`showSteps`/`showGuidance`/`showNegativePrompt`) all
+defaulting to `true`. Two concrete subclasses: `SdxlAdvancedConfig` (steps 30,
+guidance 5, "3-5 = more photoreal" hint) and `FluxAdvancedConfig` (steps 4,
+guidance 0, `showSteps = false`, `showNegativePrompt = false` — the existing
+Q1.4 honesty rule now expressed the same way as the new steps-hiding rule
+instead of as its own special case — `guidanceHintIsWarning = true` for the
+amber "guidance-free" styling). `configFor(modelId)` resolves the right
+singleton instance, falling back to SDXL for an unknown id. `deriveParams`
+gates every field on its own `show*` flag before emitting it, so a model that
+structurally hides a field can never leak it into the wire payload even if
+component state somehow carries a stale `enabled: true` — same defense-in-
+depth pattern Q1.4 established for `negative_prompt`, now applied uniformly.
+
+**`AdvancedParams.tsx` rewritten** to consult `configFor(modelId)` instead of
+inline `isFlux` checks — the Inference Steps/Guidance Scale/Negative Prompt
+blocks are each wrapped in `{config.showX && (...)}`, and ranges/hints/hint-
+styling are read off the config object. `initialAdvanced`/`deriveParams`/
+`INITIAL_ADVANCED`/`DEFAULT_STEPS`/`DEFAULT_GUIDANCE` stay exported as thin
+wrappers delegating to the config classes, so `ImageGenerator.tsx` and the
+existing `AdvancedParams.test.ts` suite needed zero import changes.
+
+**Types relocated.** `ParamState`/`AdvancedState` moved from `AdvancedParams.tsx`
+into `types.ts` (per frontend.md's "all shared types go in types.ts" rule) —
+flagged by code-reviewer as a NOTE since the new config module was a natural
+point to fix a pre-existing convention gap; `advancedParamsConfig.ts` now
+imports and re-exports them instead of defining its own copy.
+
+**Tests.** New `advancedParamsConfig.test.ts` (8 tests): `configFor`
+resolution + unknown-id fallback, subclass-extends-base-class, FLUX's
+`showSteps`/`showNegativePrompt` both false, SDXL's full visibility + correct
+hint text/styling, and — the key regression guard — `deriveParams` never
+emits `num_inference_steps` for FLUX even with a stale enabled flag. Full
+frontend suite: 28 tests green (up from 13 in `AdvancedParams.test.ts` alone);
+`tsc`/`npm run build` clean. Backend untouched, 499 tests unaffected.
+code-reviewer PASS (0 CRITICAL/WARN, 2 NOTEs: the type-location one — fixed
+same session; and a pre-existing, not-introduced-by-this-refactor cosmetic
+quirk where FLUX's `guidance_scale` default of 0 sits below the shared
+slider's `min=1` — the value is hardcoded to 0.0 server-side regardless of
+UI display, so left as-is). Live-verified via Chrome: switching to FLUX and
+opening Advanced now shows Aspect Ratio → Style → Guidance Scale (amber
+warning hint) → Seed, with Inference Steps and Negative Prompt both
+completely absent from the DOM, not just visually hidden.
+
+---
+
 ### [2026-07-16] — imageLab Q1.4: seed control + FLUX negative-prompt honesty
 
 Fourth and final step of the imageLab Quality Q1 correctness pass, via the

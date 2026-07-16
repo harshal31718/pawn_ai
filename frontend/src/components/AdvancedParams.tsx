@@ -1,101 +1,25 @@
 import { useState, useEffect } from 'react'
 import type { ImageParams } from '../api/client'
 import { STYLE_PRESET_KEY_MAP } from '../types'
+import {
+  configFor,
+  MAX_RANDOM_SEED,
+  DEFAULT_STEPS,
+  DEFAULT_GUIDANCE,
+  type AdvancedState,
+} from './advancedParamsConfig'
 
-// SDXL-native ~1024²-area buckets (Q1.1). Off-bucket sizes (the old SD1.5-era
-// 512/576/768 values) are the classic cause of half-generated/deformed bodies.
-// All values are multiples of 16, so the same table satisfies FLUX's flexible-
-// but-/16-rounded architecture too.
-const SDXL_NATIVE_BUCKETS: Record<string, { width: number; height: number }> = {
-  '1:1': { width: 1024, height: 1024 },
-  '3:4': { width: 896, height: 1152 },
-  '4:5': { width: 832, height: 1216 },
-  '4:3': { width: 1152, height: 896 },
-  '16:9': { width: 1344, height: 768 },
-  '9:16': { width: 768, height: 1344 },
-}
-
-// Model-aware, like `initialAdvanced` — SDXL and FLUX share the same buckets
-// today (both are /16-aligned), but this is data per model, not one global
-// table, so a future model can get its own without touching call sites.
-const RESOLUTION_BUCKETS: Record<string, Record<string, { width: number; height: number }>> = {
-  sdxl: SDXL_NATIVE_BUCKETS,
-  flux: SDXL_NATIVE_BUCKETS,
-}
-
-function bucketsFor(modelId: string): Record<string, { width: number; height: number }> {
-  return RESOLUTION_BUCKETS[modelId] ?? SDXL_NATIVE_BUCKETS
-}
-
-interface ParamState<T> {
-  enabled: boolean
-  value: T
-}
-
-export interface AdvancedState {
-  aspectRatio: ParamState<string>
-  steps: ParamState<number>
-  guidanceScale: ParamState<number>
-  negativePrompt: ParamState<string>
-  stylePreset: ParamState<string>
-  strength: ParamState<number>
-  seed: ParamState<number>
-}
-
-// Q1.4: max value for a 🎲 randomize click. Bounded well under 2^32 so it's
-// always representable as a JS safe integer and fits comfortably as a
-// Postgres int4 job-params field without any range-check surprises.
-const MAX_RANDOM_SEED = 2_147_483_647
-
-// Per-model floor: SDXL wants ~30 steps for good quality (its notebook default);
-// FLUX.1-schnell is distilled for ~4 steps and gains nothing from more. Used so a
-// user who enables the slider without touching it gets a sane value either way,
-// instead of one flat default that undercuts SDXL or overshoots FLUX.
-export const DEFAULT_STEPS: Record<string, number> = { sdxl: 30, flux: 4 }
-
-// Q1.3: SDXL's photoreal sweet spot is 3-5 CFG, not the old 7.5 (matches the
-// notebooks' own tuned default). FLUX ignores this entirely — its pipeline
-// hardcodes guidance_scale=0.0 regardless of what's sent (guidance-free
-// distillation), so its default here is just for slider display consistency.
-export const DEFAULT_GUIDANCE: Record<string, number> = { sdxl: 5, flux: 0 }
+export type { AdvancedState } from './advancedParamsConfig'
+export { DEFAULT_STEPS, DEFAULT_GUIDANCE }
 
 export function initialAdvanced(modelId: string, forcedSeed?: number): AdvancedState {
-  return {
-    aspectRatio: { enabled: false, value: '3:4' },
-    steps: { enabled: false, value: DEFAULT_STEPS[modelId] ?? 20 },
-    guidanceScale: { enabled: false, value: DEFAULT_GUIDANCE[modelId] ?? 5 },
-    negativePrompt: { enabled: false, value: '' },
-    stylePreset: { enabled: false, value: '' },
-    strength: { enabled: false, value: 0.6 },
-    seed: forcedSeed !== undefined
-      ? { enabled: true, value: forcedSeed }
-      : { enabled: false, value: 0 },
-  }
+  return configFor(modelId).initialAdvanced(forcedSeed)
 }
 
 export const INITIAL_ADVANCED: AdvancedState = initialAdvanced('sdxl')
 
 export function deriveParams(s: AdvancedState, modelId: string = 'sdxl'): ImageParams {
-  const p: ImageParams = {}
-  const buckets = bucketsFor(modelId)
-  if (s.aspectRatio.enabled && buckets[s.aspectRatio.value]) {
-    const sz = buckets[s.aspectRatio.value]
-    p.width = sz.width
-    p.height = sz.height
-  }
-  if (s.steps.enabled) p.num_inference_steps = s.steps.value
-  if (s.guidanceScale.enabled) p.guidance_scale = s.guidanceScale.value
-  // Q1.4 honesty rule: FLUX's pipeline call doesn't accept negative_prompt at
-  // all (guidance-free — CFG 0 means there's nothing for a negative prompt to
-  // steer away from), so never send one for FLUX even if state carries a
-  // stale enabled value from somewhere.
-  if (modelId !== 'flux' && s.negativePrompt.enabled && s.negativePrompt.value.trim())
-    p.negative_prompt = s.negativePrompt.value.trim()
-  if (s.stylePreset.enabled && s.stylePreset.value)
-    p.style_preset = STYLE_PRESET_KEY_MAP[s.stylePreset.value] ?? ''
-  if (s.strength.enabled) p.strength = s.strength.value
-  if (s.seed.enabled) p.seed = s.seed.value
-  return p
+  return configFor(modelId).deriveParams(s)
 }
 
 const CTL = 'w-full px-2 py-1 rounded-lg text-xs bg-theme-bg border border-theme-border/60 text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border'
@@ -118,24 +42,24 @@ export default function AdvancedParams({
   // the SAME seed value twice in a row still re-applies it.
   forcedSeed?: { value: number; nonce: number }
 }) {
-  const [s, setS] = useState<AdvancedState>(() => initialAdvanced(modelId))
-  const isFlux = modelId === 'flux'
+  const config = configFor(modelId)
+  const [s, setS] = useState<AdvancedState>(() => config.initialAdvanced())
 
   useEffect(() => {
     if (forcedSeed === undefined) return
     setS((prev) => {
       const next = { ...prev, seed: { enabled: true, value: forcedSeed.value } } as AdvancedState
-      onChange(deriveParams(next, modelId))
+      onChange(config.deriveParams(next))
       return next
     })
-  }, [forcedSeed?.nonce, forcedSeed?.value, onChange, modelId])
+  }, [forcedSeed?.nonce, forcedSeed?.value, onChange, config])
 
   function update<K extends keyof AdvancedState>(key: K, patch: Partial<AdvancedState[K]>) {
     const next = { ...s, [key]: { ...s[key], ...patch } } as AdvancedState
     setS(next)
-    onChange(deriveParams(next, modelId))
+    onChange(config.deriveParams(next))
     if (key === 'strength' && 'enabled' in patch && onStrengthEnabledChange) {
-      onStrengthEnabledChange(!!(patch as Partial<ParamState<number>>).enabled)
+      onStrengthEnabledChange(!!(patch as Partial<{ enabled: boolean }>).enabled)
     }
   }
 
@@ -144,16 +68,18 @@ export default function AdvancedParams({
     setS((prev) => {
       if (prev.strength.enabled) return prev
       const next = { ...prev, strength: { ...prev.strength, enabled: true } } as AdvancedState
-      onChange(deriveParams(next, modelId))
+      onChange(config.deriveParams(next))
       onStrengthEnabledChange?.(true)
       return next
     })
-  }, [showStrength, onChange, onStrengthEnabledChange, modelId])
+  }, [showStrength, onChange, onStrengthEnabledChange, config])
 
   const rowCls = (enabled: boolean) =>
     `pl-5 space-y-1 transition-opacity ${enabled ? '' : 'opacity-40 pointer-events-none'}`
 
   if (!open) return null
+
+  const guidanceHint = config.guidanceHint()
 
   return (
     <div className="space-y-3.5 p-2.5 rounded-xl bg-theme-bg border border-theme-border/40">
@@ -172,7 +98,7 @@ export default function AdvancedParams({
             <select value={s.aspectRatio.value}
               onChange={(e) => update('aspectRatio', { value: e.target.value })}
               className={CTL}>
-              {Object.entries(bucketsFor(modelId)).map(([r, sz]) => (
+              {Object.entries(config.resolutionBuckets).map(([r, sz]) => (
                 <option key={r} value={r}>{r} — {sz.width}×{sz.height}</option>
               ))}
             </select>
@@ -200,56 +126,65 @@ export default function AdvancedParams({
         </div>
       </div>
 
-      {/* Inference Steps */}
-      <div className="space-y-1">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={s.steps.enabled}
-            onChange={(e) => update('steps', { enabled: e.target.checked })}
-            className="w-3.5 h-3.5 rounded accent-theme-brand" />
-          <span className="text-xs font-medium text-theme-text">Inference Steps</span>
-          <span className="text-[10px] text-theme-text-muted font-normal">
-            (4 – 50{!isFlux && ', 20–40 recommended'})
-          </span>
-        </label>
-        <div className={rowCls(s.steps.enabled)}>
-          <div className="flex items-center gap-2">
-            <input type="range" min={4} max={50} value={s.steps.value}
-              onChange={(e) => update('steps', { value: Number(e.target.value) })}
-              className="flex-1 accent-theme-brand" />
-            <span className="text-xs w-6 text-right tabular-nums text-theme-text-muted">{s.steps.value}</span>
+      {/* Inference Steps — hidden entirely for models that don't have a
+          meaningful adjustable range (e.g. FLUX's fixed ~4-step distillation) */}
+      {config.showSteps && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={s.steps.enabled}
+              onChange={(e) => update('steps', { enabled: e.target.checked })}
+              className="w-3.5 h-3.5 rounded accent-theme-brand" />
+            <span className="text-xs font-medium text-theme-text">Inference Steps</span>
+            <span className="text-[10px] text-theme-text-muted font-normal">
+              ({config.stepsRange.min} – {config.stepsRange.max}{config.stepsHint ? `, ${config.stepsHint}` : ''})
+            </span>
+          </label>
+          <div className={rowCls(s.steps.enabled)}>
+            <div className="flex items-center gap-2">
+              <input type="range" min={config.stepsRange.min} max={config.stepsRange.max} value={s.steps.value}
+                onChange={(e) => update('steps', { value: Number(e.target.value) })}
+                className="flex-1 accent-theme-brand" />
+              <span className="text-xs w-6 text-right tabular-nums text-theme-text-muted">{s.steps.value}</span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Guidance Scale */}
-      <div className="space-y-1">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={s.guidanceScale.enabled}
-            onChange={(e) => update('guidanceScale', { enabled: e.target.checked })}
-            className="w-3.5 h-3.5 rounded accent-theme-brand" />
-          <span className="text-xs font-medium text-theme-text">Guidance Scale</span>
-          <span className="text-[10px] text-theme-text-muted font-normal">(1.0 – 20.0)</span>
-        </label>
-        <div className={rowCls(s.guidanceScale.enabled)}>
-          <div className="flex items-center gap-2">
-            <input type="range" min={1} max={20} step={0.5} value={s.guidanceScale.value}
-              onChange={(e) => update('guidanceScale', { value: Number(e.target.value) })}
-              className="flex-1 accent-theme-brand" />
-            <span className="text-xs w-8 text-right tabular-nums text-theme-text-muted">{s.guidanceScale.value}</span>
+      {config.showGuidance && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={s.guidanceScale.enabled}
+              onChange={(e) => update('guidanceScale', { enabled: e.target.checked })}
+              className="w-3.5 h-3.5 rounded accent-theme-brand" />
+            <span className="text-xs font-medium text-theme-text">Guidance Scale</span>
+            <span className="text-[10px] text-theme-text-muted font-normal">
+              ({config.guidanceRange.min.toFixed(1)} – {config.guidanceRange.max.toFixed(1)})
+            </span>
+          </label>
+          <div className={rowCls(s.guidanceScale.enabled)}>
+            <div className="flex items-center gap-2">
+              <input type="range" min={config.guidanceRange.min} max={config.guidanceRange.max}
+                step={config.guidanceRange.step} value={s.guidanceScale.value}
+                onChange={(e) => update('guidanceScale', { value: Number(e.target.value) })}
+                className="flex-1 accent-theme-brand" />
+              <span className="text-xs w-8 text-right tabular-nums text-theme-text-muted">{s.guidanceScale.value}</span>
+            </div>
+            {guidanceHint && (
+              <div className={config.guidanceHintIsWarning
+                ? 'text-[10px] text-amber-600 dark:text-amber-400'
+                : 'text-[10px] text-theme-text-muted'}>
+                {guidanceHint}
+              </div>
+            )}
           </div>
-          {!isFlux && (
-            <div className="text-[10px] text-theme-text-muted">3–5 = more photoreal</div>
-          )}
-          {isFlux && (
-            <div className="text-[10px] text-amber-600 dark:text-amber-400">FLUX is guidance-free — this value is ignored</div>
-          )}
         </div>
-      </div>
+      )}
 
-      {/* Negative Prompt — Q1.4 honesty rule: hidden for FLUX (guidance-free,
-          the pipeline call doesn't accept negative_prompt at all) instead of
+      {/* Negative Prompt — Q1.4 honesty rule: hidden for models whose
+          pipeline call doesn't accept it at all (e.g. FLUX), instead of
           showing a field that silently does nothing. */}
-      {!isFlux && (
+      {config.showNegativePrompt && (
         <div className="space-y-1">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={s.negativePrompt.enabled}

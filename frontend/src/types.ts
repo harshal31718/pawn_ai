@@ -87,6 +87,23 @@ export type RefineHandler = (job: JobResult, imageSrc: string) => void
 // Q1.4: "Reuse seed" on a Generations row populates the composer's seed field.
 export type ReuseSeedHandler = (seed: number) => void
 
+// Image Lab's Advanced Params panel state — shared between the per-model
+// config classes (advancedParamsConfig.ts) and the AdvancedParams component.
+export interface ParamState<T> {
+  enabled: boolean
+  value: T
+}
+
+export interface AdvancedState {
+  aspectRatio: ParamState<string>
+  steps: ParamState<number>
+  guidanceScale: ParamState<number>
+  negativePrompt: ParamState<string>
+  stylePreset: ParamState<string>
+  strength: ParamState<number>
+  seed: ParamState<number>
+}
+
 /** A conversation in the client cache. `_synced` is false until the backend has
  *  acknowledged the conversation exists; `_localUpdatedAt` is a client clock used
  *  to decide whether a server title should overwrite a local (user) rename. */

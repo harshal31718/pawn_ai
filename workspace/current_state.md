@@ -2,6 +2,24 @@
 
 Last updated: 2026-07-16
 
+**imageLab Advanced Params refactor: per-model config classes — DONE
+(2026-07-16, user-requested, not a numbered Q-step).** New
+`frontend/src/components/advancedParamsConfig.ts`: abstract
+`ModelAdvancedConfig` base class + `SdxlAdvancedConfig`/`FluxAdvancedConfig`
+subclasses replace scattered `isFlux` conditionals in `AdvancedParams.tsx`
+with per-model `showSteps`/`showGuidance`/`showNegativePrompt` flags,
+defaults, ranges, and hints. FLUX's Inference Steps control is now hidden
+entirely (`showSteps = false` — fixed ~4-step distillation, no meaningful
+adjustable range), alongside the pre-existing Negative Prompt hiding — both
+now expressed the same structural way. `deriveParams` gates every field on
+its config flag as defense-in-depth. `AdvancedState`/`ParamState` relocated
+to `types.ts` per frontend.md convention. 28 frontend tests green (up from
+13), `tsc`/build clean, backend unaffected (499 unchanged). code-reviewer
+PASS. Live-verified via Chrome: FLUX's Advanced panel now shows Aspect Ratio
+→ Style → Guidance Scale → Seed with Inference Steps/Negative Prompt both
+absent from the DOM. See `dev_log.md`'s 2026-07-16 "Advanced Params
+refactored" entry.
+
 **imageLab Q1.4 — Seed control + FLUX negative-prompt honesty — DONE
 (2026-07-16).** Fourth and final correctness fix in the Q1 pass. Added
 end-to-end seed plumbing on the warm-session path: `ImageJobParams.seed: int |
