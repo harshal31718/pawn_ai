@@ -68,6 +68,7 @@ class ImageJobParams(BaseModel):
     strength: float | None = None          # img2img: 0.1–1.0 (lower = closer to source)
     init_image_b64: str | None = None      # img2img: base64 source image (stored transiently)
     seed: int | None = None                # Q1.4: fixed seed for reproducible A/Bs
+    subject_type: str | None = None        # Q3.3b: portrait/nature/product/architecture
 
 
 # Job statuses still owned by a (live) worker -- used for de-dup + liveness.
@@ -493,6 +494,20 @@ def _session_row(user_id: str, session_id: str, _fetchone=fetchone) -> Optional[
         "select * from image_sessions where id = %s and user_id = %s limit 1",
         (session_id, user_id),
     )
+
+
+def get_session_model(user_id: str, session_id: str) -> Optional[str]:
+    """Q3.3b: lightweight lookup so routes/generate.py's /session/job handler
+    can resolve the model BEFORE composing the prompt (needed for per-model
+    style/subject-type suffix variants) without duplicating submit_session_job's
+    liveness-check logic. Returns None if the session doesn't exist.
+
+    Explicitly passes `_fetchone=fetchone` (a fresh lookup of the module-level
+    name at call time) rather than relying on `_session_row`'s own default
+    parameter, which is bound once at module-import time and so would NOT
+    pick up a test's `patch("app.core.image_session.fetchone", ...)`."""
+    row = _session_row(user_id, session_id, _fetchone=fetchone)
+    return row["model"] if row else None
 
 
 def submit_session_job(

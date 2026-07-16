@@ -102,6 +102,7 @@ export interface AdvancedState {
   stylePreset: ParamState<string>
   strength: ParamState<number>
   seed: ParamState<number>
+  subjectType: ParamState<string>
 }
 
 /** A conversation in the client cache. `_synced` is false until the backend has
@@ -176,6 +177,10 @@ export const STYLE_PRESETS = [
   { key: 'anime',          label: 'Anime' },
   { key: 'oil_painting',   label: 'Oil Painting' },
   { key: 'sketch',         label: 'Sketch' },
+  { key: 'analog_film',    label: 'Analog Film' },
+  { key: 'studio_product', label: 'Studio Product' },
+  { key: 'golden_hour',    label: 'Golden Hour' },
+  { key: 'editorial',      label: 'Editorial' },
 ] as const
 
 /** label → key  (used by ImageLabPage to build the submit payload) */
@@ -185,4 +190,23 @@ export const STYLE_PRESET_KEY_MAP: Record<string, string> =
 /** key → label  (used by GenerationsPanel to display the style chip) */
 export const STYLE_PRESET_LABEL_MAP: Record<string, string> =
   Object.fromEntries(STYLE_PRESETS.map(({ key, label }) => [key, label]))
+
+// Q3.3b — orthogonal to style: what kind of subject is in frame. Composes
+// with any style preset (e.g. "Cinematic" + "Nature" both apply). A
+// "multi-person/group" entry was deliberately NOT added: SDXL's cross-
+// attention doesn't segment per-subject, so blended faces/limbs are a real,
+// only-partially-prompt-fixable risk — not worth shipping a preset for a
+// case the model handles poorly (per the user's explicit call, 2026-07-16).
+export const SUBJECT_TYPE_PRESETS = [
+  { key: 'portrait',     label: 'Portrait' },
+  { key: 'nature',       label: 'Nature / Landscape' },
+  { key: 'product',      label: 'Product / Object' },
+  { key: 'architecture', label: 'Architecture' },
+] as const
+
+export const SUBJECT_TYPE_KEY_MAP: Record<string, string> =
+  Object.fromEntries(SUBJECT_TYPE_PRESETS.map(({ key, label }) => [label, key]))
+
+export const SUBJECT_TYPE_LABEL_MAP: Record<string, string> =
+  Object.fromEntries(SUBJECT_TYPE_PRESETS.map(({ key, label }) => [key, label]))
 

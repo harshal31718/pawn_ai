@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { ImageParams } from '../api/client'
-import { STYLE_PRESET_KEY_MAP } from '../types'
+import { STYLE_PRESET_KEY_MAP, SUBJECT_TYPE_KEY_MAP } from '../types'
 import {
   configFor,
   MAX_RANDOM_SEED,
@@ -84,7 +84,7 @@ export default function AdvancedParams({
   return (
     <div className="space-y-3.5 p-2.5 rounded-xl bg-theme-bg border border-theme-border/40">
 
-      {/* Row 1: Aspect Ratio (Left) & Style (Right) */}
+      {/* Row 1: Aspect Ratio, Style, Subject Type */}
       <div className="grid grid-cols-2 gap-3">
         {/* Aspect Ratio */}
         <div className="space-y-1">
@@ -119,6 +119,25 @@ export default function AdvancedParams({
               className={CTL}>
               <option value="">None</option>
               {Object.keys(STYLE_PRESET_KEY_MAP).map((k) => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Subject Type — Q3.3b: orthogonal to style, composes with it */}
+        <div className="space-y-1 col-span-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={s.subjectType.enabled}
+              onChange={(e) => update('subjectType', { enabled: e.target.checked })}
+              className="w-3.5 h-3.5 rounded accent-theme-brand" />
+            <span className="text-xs font-semibold text-theme-text">Subject</span>
+          </label>
+          <div className={rowCls(s.subjectType.enabled)}>
+            <select value={s.subjectType.value}
+              onChange={(e) => update('subjectType', { value: e.target.value })}
+              className={CTL}>
+              {Object.keys(SUBJECT_TYPE_KEY_MAP).map((k) => (
                 <option key={k} value={k}>{k}</option>
               ))}
             </select>

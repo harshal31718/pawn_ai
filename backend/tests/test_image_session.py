@@ -387,6 +387,49 @@ def test_submit_session_job_flux_gets_no_default_negative():
     assert "negative_prompt" not in stored_params
 
 
+def test_submit_session_job_subject_type_round_trips_to_job_row():
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "sdxl",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job(
+            "user-1", "s1", "a mountain at dawn",
+            image_session.ImageJobParams(subject_type="nature"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert stored_params["subject_type"] == "nature"
+
+
+def test_get_session_model_returns_the_session_row_model():
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1", "user_id": "user-1", "model": "flux", "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)), "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.get_session_model("user-1", "s1") == "flux"
+
+
+def test_get_session_model_returns_none_for_missing_session():
+    db = _FakeDB(rows={"image_sessions": []})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.get_session_model("user-1", "gone") is None
+
+
 def test_submit_session_job_missing_session_raises():
     from app.exceptions import NotConfiguredError
 
@@ -879,6 +922,45 @@ def test_route_session_job(client):
 def test_route_session_job_requires_prompt(client):
     resp = client.post("/generate/session/job", json={"session_id": "s1", "prompt": "   "})
     assert resp.status_code == 400
+
+
+def test_route_session_job_style_and_subject_suffix_applied(client):
+    """Q3.3b: unlike /generate (which has req.model directly), /session/job
+    must resolve the session's model via get_session_model before composing
+    per-model style/subject-type suffixes -- this proves that wiring end to
+    end, not just the underlying get_session_model/submit_session_job pieces
+    in isolation."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ) as gm, patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j2"
+    ) as m:
+        resp = client.post(
+            "/generate/session/job",
+            json={
+                "session_id": "s1", "prompt": "a mountain range",
+                "params": {"style_preset": "cinematic", "subject_type": "nature"},
+            },
+        )
+    assert resp.status_code == 200
+    gm.assert_called_once_with("test-user-id", "s1")
+    stored_prompt = m.call_args.args[2]
+    assert stored_prompt.startswith("a mountain range")
+    assert "cinematic shot" in stored_prompt
+    assert "landscape" in stored_prompt
+
+
+def test_route_session_job_skips_session_lookup_when_no_preset_or_subject_type(client):
+    """No style_preset/subject_type set -> no extra DB round-trip."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model"
+    ) as gm, patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j3"
+    ):
+        client.post(
+            "/generate/session/job", json={"session_id": "s1", "prompt": "a cat"}
+        )
+    gm.assert_not_called()
 
 
 def test_route_session_stop(client):

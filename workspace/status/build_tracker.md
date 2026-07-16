@@ -185,10 +185,37 @@ done, per the user's instruction (see `workspace/plan/README.md`).
       (0 CRITICAL/WARN, 2 accepted NOTEs). build-validator PASS. No security-auditor
       run (pure data-file load, no secrets/config/auth touched). Full record:
       `dev_log.md`'s 2026-07-16 "imageLab Q3.3a" entry, `current_state.md`.
-    - `[ ]` Q3.3b — Subject-type axis (portrait/multi-person/nature/product/
-      architecture), 4 new style presets, per-model SDXL/FLUX suffix variants,
-      composer chips UI, multi-person extended-negative hookup (needs Q3.2's
-      `NON_PHOTOREAL_STYLE_PRESETS` machinery too)
+    - `[x]` **Q3.3b — Subject-type axis + per-model suffix variants** ✓ (2026-07-16)
+      New orthogonal subject-type axis (portrait/nature/product/architecture),
+      composable with any style preset. 4 new style presets (analog_film/
+      studio_product/golden_hour/editorial, 9 total). Both axes now carry
+      per-model `sdxl_suffix`/`flux_suffix` variants instead of one suffix shared
+      across models — `get_preset_suffix`/`get_subject_type_suffix` both gained a
+      `model_id` param. New `image_session.get_session_model()` so `/session/job`
+      (which doesn't carry the model directly, unlike `/generate`) can resolve
+      per-model suffixes too, gated behind `if style_preset or subject_type` to
+      skip the extra DB round-trip in the common case. **Original draft included
+      a "multi-person/group" subject type (extended negative-prompt list + UI
+      caveat about SDXL's known limitations) — the user explicitly rejected it
+      mid-step** ("why are we wasting time building multi-person feature for sdxl
+      if the model is not suitable for it... no need to waste time on what does
+      not work") **and it was fully removed**, including the now-unused
+      extended-negative/caveat mechanism entirely (not left as dead code).
+      Shipped scope is 4 subject types, no multi-person. Real bug found + fixed
+      independent of that: `_session_row()`'s default `_fetchone` param binds at
+      module-import time, so `get_session_model()` had to pass `_fetchone=fetchone`
+      explicitly or test patching would silently miss it. 534 backend tests green
+      (up from 519, peaked at 541 mid-step before the multi-person removal), 31
+      frontend tests (up from 13), `tsc`/build clean. code-reviewer: 2 passes —
+      1st (multi-person-inclusive draft) PASS with 2 WARN; after the removal, a
+      fresh review of the final diff PASS with 0 CRITICAL/WARN (confirmed
+      complete removal, no orphaned code, new `/session/job` route-level tests
+      correctly prove the `get_session_model` → suffix-composition wiring
+      end-to-end). build-validator PASS. No security-auditor run (pure data/
+      param-plumbing, no secrets/config/auth touched). Live-verified via Chrome:
+      Subject dropdown shows exactly Portrait/Nature/Product/Architecture, Style
+      dropdown shows all 9 presets. Full record: `dev_log.md`'s 2026-07-16
+      "imageLab Q3.3b" entry, `current_state.md`. **Q3.3 (a+b) now closed.**
   - `[ ]` Q3.4 — Optional: negative embeddings (spike)
 - `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
   `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,

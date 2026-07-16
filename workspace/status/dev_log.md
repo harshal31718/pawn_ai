@@ -6,6 +6,102 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q3.3b: subject-type axis + per-model preset variants (closes Q3.3)
+
+Deferred remainder of Q3.3, building on Q3.3a's registry foundation. Added the
+new orthogonal subject-type axis the plan called for (portrait/nature/product/
+architecture, composable with any style preset) plus 4 new style presets
+(analog_film, studio_product, golden_hour, editorial — 9 total) and, per the
+plan's explicit ask, per-model suffix variants for BOTH axes — every preset now
+carries an `sdxl_suffix` (keyword-scaffold) and a `flux_suffix` (natural-
+language sentence), replacing the single shared suffix Q3.3a shipped with.
+
+**Registry schema (`image_presets.json`) restructured**: from a flat array of 5
+`{id, label, suffix}` style objects into `{styles: [...], subject_types: [...]}`,
+each entry now `{id, label, sdxl_suffix, flux_suffix}`. `image_presets.py`
+rewritten to `IMAGE_STYLES`/`IMAGE_SUBJECT_TYPES` dicts, `get_preset_suffix`/
+`get_subject_type_suffix` both gained a `model_id` param (default `"sdxl"`,
+preserving Q3.3a's 1-arg backward compat).
+
+**Per-model suffix resolution needed a route-level fix on the warm-session
+path.** `/generate` always had `req.model` directly on the request, so applying
+the right suffix variant there was trivial. `/session/job` doesn't carry the
+model at all -- only `session_id`, and the model lives on the session row,
+resolved deep inside `submit_session_job`. An existing test
+(`test_generate_image_style_suffix_applied`) locks in that suffix composition
+must happen at the ROUTE layer, before `create_cold_job`/`submit_session_job`
+are called (it mocks those functions and inspects the prompt arg passed in) --
+so moving suffix logic into `image_session.py`'s choke point (the way Q3.2's
+negative-prompt merge was placed) wasn't an option without breaking that
+existing architectural contract. Added a new `image_session.get_session_model
+(user_id, session_id)` -- one extra lightweight DB lookup, gated behind `if
+req.params.style_preset or req.params.subject_type:` so it only fires when a
+preset is actually set, not on every job.
+
+**Real bug found while wiring that lookup up, not theorized in advance.**
+`get_session_model` initially called the existing `_session_row(user_id,
+session_id)` using its default `_fetchone=fetchone` parameter -- and every test
+patching `app.core.image_session.fetchone` silently failed to intercept it,
+hitting the real Postgres client instead (`psycopg.errors.InvalidTextRepresentation`
+on a test session id that isn't valid UUID). Root cause: Python default
+parameter values are bound once, at function-definition time (module import) --
+`patch("app.core.image_session.fetchone", ...)` reassigns the *module
+attribute*, which the already-bound default has no way to observe. Every
+existing caller of `_session_row` (`submit_session_job`, `extend_session`)
+sidesteps this by always explicitly passing `_fetchone=tx.fetchone` (for a
+different reason -- transaction participation -- but it happens to dodge the
+same hazard). Fixed `get_session_model` the same way: explicit `_fetchone=
+fetchone`, referencing the module-level name fresh at each call instead of
+relying on the default. Documented inline as a generalizable gotcha for any
+future new caller of `_session_row`.
+
+**Multi-person subject type: built, then explicitly rejected by the user mid-
+step, then fully removed.** The original draft included a fifth subject type,
+"multi-person/group", carrying an extended negative-prompt list (fused fingers/
+cloned face/etc. -- anatomy-artifact terms) and a UI caveat warning about SDXL's
+known cross-attention limitation with multiple subjects (blended faces/limbs).
+This was implemented, tested (541 backend tests at peak), and passed a full
+code-reviewer pass (0 CRITICAL, 2 WARN on unrelated issues). Then the user
+pushed back directly: *"why are we wasting time building multi-person feature
+for sdxl if the model is not suitable for it... no need to waste time on what
+does not work."* Asked the user explicitly via AskUserQuestion (keep as-is /
+drop entirely / keep with a stronger caveat) -- answer: **drop it entirely.**
+Removed completely, not just disabled: the `multi_person` registry entry, the
+`extended_negative`/`caveat` schema fields (unused by any other entry, so
+removed from the schema too rather than left as dead fields), `get_subject_type_
+extended_negative`/`get_subject_type_caveat` functions, `merge_negative_prompt`'s
+`subject_type` parameter and 3-way merge logic (reverted cleanly to Q3.2's
+original 2-arg-plus-style_preset shape), the frontend `MULTI_PERSON_CAVEAT`
+constant and its conditional caveat-rendering JSX, and every multi-person-
+specific test across 5 test files. `ImageJobParams.subject_type` and the route-
+level suffix-composition wiring stayed -- those were never part of the
+rejected feature, just infrastructure the remaining 4 subject types still need.
+A second code-reviewer pass on the final post-removal diff confirmed the
+removal was complete (grepped the whole repo for `multi_person`/`extended_
+negative`/`caveat` -- every remaining hit is an explanatory comment about the
+deliberate exclusion, nothing orphaned) and re-verified the revert was clean.
+
+**Tests.** `test_image_presets.py` rewritten for the two-axis schema (9 style
+ids, 4 subject-type ids, per-model variant checks, backward-compat 1-arg call).
+New `/session/job` route-level tests
+(`test_route_session_job_style_and_subject_suffix_applied`,
+`test_route_session_job_skips_session_lookup_when_no_preset_or_subject_type`) --
+these prove the `get_session_model` → suffix-composition → `submit_session_job`
+wiring end-to-end, not just each piece in isolation (a gap the first
+code-reviewer pass flagged and this closes). 534 backend tests green (up from
+519 at Q3.3a, peaked at 541 before the multi-person removal cost 7 net), 31
+frontend tests (up from 13). `tsc --noEmit`/`npm run build` clean. Live-verified
+via Chrome: Subject dropdown shows exactly Portrait/Nature/Product/Architecture
+(no Multi-Person option), Style dropdown shows all 9 presets. No security-
+auditor run (pure data/param-plumbing, no secrets/config/auth touched).
+
+**Q3.3 (a+b) is now closed.** Remaining Q3 work: Q3.1 (LLM prompt enhancer,
+blocked on the separate vision-plumbing plan's 3 open questions) and Q3.4
+(optional negative-embeddings spike). Q2/Q4/G1 remain unstarted per the
+project's own tracking.
+
+---
+
 ### [2026-07-16] — imageLab Q3.3a: style preset registry (replaces STYLE_SUFFIXES)
 
 Second Q3 build step. The plan's full Q3.3 ("Style + subject-type presets rebuilt")

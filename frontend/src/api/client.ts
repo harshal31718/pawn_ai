@@ -116,6 +116,7 @@ export interface ImageParams {
   style_preset?: string
   strength?: number
   seed?: number
+  subject_type?: string
 }
 
 export async function connectKaggle(model = 'sdxl'): Promise<void> {

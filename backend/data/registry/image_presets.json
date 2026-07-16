@@ -1,27 +1,84 @@
-[
-  {
-    "id": "photorealistic",
-    "label": "Photorealistic",
-    "suffix": ", RAW photo, 8K, ultra detailed, photorealistic, DSLR"
-  },
-  {
-    "id": "cinematic",
-    "label": "Cinematic",
-    "suffix": ", cinematic shot, anamorphic lens, dramatic lighting, film grain"
-  },
-  {
-    "id": "anime",
-    "label": "Anime",
-    "suffix": ", anime style, studio ghibli, detailed illustration, vibrant colors"
-  },
-  {
-    "id": "oil_painting",
-    "label": "Oil Painting",
-    "suffix": ", oil painting, impressionist, thick brushstrokes, canvas texture"
-  },
-  {
-    "id": "sketch",
-    "label": "Sketch",
-    "suffix": ", pencil sketch, charcoal drawing, black and white, cross-hatching"
-  }
-]
+{
+  "styles": [
+    {
+      "id": "photorealistic",
+      "label": "Photorealistic",
+      "sdxl_suffix": ", RAW photo, 8K, ultra detailed, photorealistic, DSLR",
+      "flux_suffix": ", captured with a high-end camera, RAW photo quality, ultra detailed and photorealistic"
+    },
+    {
+      "id": "cinematic",
+      "label": "Cinematic",
+      "sdxl_suffix": ", cinematic shot, anamorphic lens, dramatic lighting, film grain",
+      "flux_suffix": ", shot like a cinematic film still with anamorphic lens flare, dramatic lighting and visible film grain"
+    },
+    {
+      "id": "anime",
+      "label": "Anime",
+      "sdxl_suffix": ", anime style, studio ghibli, detailed illustration, vibrant colors",
+      "flux_suffix": ", in a vibrant anime illustration style reminiscent of Studio Ghibli, detailed and colorful"
+    },
+    {
+      "id": "oil_painting",
+      "label": "Oil Painting",
+      "sdxl_suffix": ", oil painting, impressionist, thick brushstrokes, canvas texture",
+      "flux_suffix": ", rendered as an impressionist oil painting with thick visible brushstrokes and canvas texture"
+    },
+    {
+      "id": "sketch",
+      "label": "Sketch",
+      "sdxl_suffix": ", pencil sketch, charcoal drawing, black and white, cross-hatching",
+      "flux_suffix": ", drawn as a black and white pencil and charcoal sketch with visible cross-hatching"
+    },
+    {
+      "id": "analog_film",
+      "label": "Analog Film",
+      "sdxl_suffix": ", 35mm film photography, Kodak Portra 400, light film grain, subtle vignette",
+      "flux_suffix": ", captured on 35mm film with warm Kodak Portra tones, soft grain and a gentle vignette"
+    },
+    {
+      "id": "studio_product",
+      "label": "Studio Product",
+      "sdxl_suffix": ", studio product photography, seamless white background, softbox lighting, high detail",
+      "flux_suffix": ", a professional studio product photograph on a seamless white background with soft softbox lighting"
+    },
+    {
+      "id": "golden_hour",
+      "label": "Golden Hour",
+      "sdxl_suffix": ", golden hour lighting, warm rim light, long soft shadows, sun flare",
+      "flux_suffix": ", bathed in warm golden hour light with long soft shadows and a gentle sun flare"
+    },
+    {
+      "id": "editorial",
+      "label": "Editorial",
+      "sdxl_suffix": ", editorial fashion photography, high fashion magazine style, bold composition",
+      "flux_suffix": ", shot in the style of high-fashion editorial photography with a bold, magazine-worthy composition"
+    }
+  ],
+  "subject_types": [
+    {
+      "id": "portrait",
+      "label": "Portrait / Single Person",
+      "sdxl_suffix": "",
+      "flux_suffix": ""
+    },
+    {
+      "id": "nature",
+      "label": "Nature / Landscape",
+      "sdxl_suffix": ", expansive natural landscape, sharp deep focus, f/11",
+      "flux_suffix": ", capturing an expansive natural landscape in sharp deep focus"
+    },
+    {
+      "id": "product",
+      "label": "Product / Object",
+      "sdxl_suffix": ", studio product shot, macro lens, f/11, deep focus, clean background",
+      "flux_suffix": ", photographed as a clean studio product shot with a macro lens and deep focus"
+    },
+    {
+      "id": "architecture",
+      "label": "Architecture",
+      "sdxl_suffix": ", wide-angle architectural photography, golden hour or blue hour lighting",
+      "flux_suffix": ", captured as wide-angle architectural photography during golden or blue hour"
+    }
+  ]
+}

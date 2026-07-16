@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core import generate, image_session
 from app.core.image_models import DEFAULT_IMAGE_MODEL
-from app.core.image_presets import get_preset_suffix
+from app.core.image_presets import get_preset_suffix, get_subject_type_suffix
 from app.core.image_session import ImageJobParams
 
 router = APIRouter(prefix="/generate", tags=["generate"])
@@ -120,7 +120,9 @@ async def generate_artifact(req: GenerateRequest, request: Request):
             )
         prompt = req.prompt.strip()
         if req.params.style_preset:
-            prompt += get_preset_suffix(req.params.style_preset)
+            prompt += get_preset_suffix(req.params.style_preset, req.model)
+        if req.params.subject_type:
+            prompt += get_subject_type_suffix(req.params.subject_type, req.model)
         init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
         params = req.params
         if init_b64:
@@ -198,8 +200,18 @@ async def session_job(req: SessionJobRequest, request: Request):
             detail="Field 'prompt' is required.",
         )
     prompt = req.prompt.strip()
-    if req.params.style_preset:
-        prompt += get_preset_suffix(req.params.style_preset)
+    if req.params.style_preset or req.params.subject_type:
+        # Per-model suffix variants (Q3.3b) need the session's model, which
+        # isn't on this request -- unlike /generate's req.model. One cheap
+        # lookup here beats duplicating submit_session_job's liveness check.
+        session_model = await run_in_threadpool(
+            image_session.get_session_model, user_id, req.session_id
+        )
+        if session_model:
+            if req.params.style_preset:
+                prompt += get_preset_suffix(req.params.style_preset, session_model)
+            if req.params.subject_type:
+                prompt += get_subject_type_suffix(req.params.subject_type, session_model)
     init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
     params = req.params
     if init_b64:

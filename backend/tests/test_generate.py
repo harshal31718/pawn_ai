@@ -431,6 +431,41 @@ def test_generate_image_style_suffix_applied(client):
     assert "cinematic shot" in stored_prompt
 
 
+def test_generate_image_style_suffix_uses_flux_variant_for_flux_model(client):
+    """Q3.3b: per-model suffix variants -- FLUX gets its natural-language
+    phrasing, not SDXL's keyword-scaffold suffix, for the same style preset."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-5", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={
+                "modality": "image", "prompt": "a city", "model": "flux",
+                "params": {"style_preset": "cinematic"},
+            },
+        )
+    stored_prompt = mk.call_args.args[2]
+    assert "cinematic shot, anamorphic lens" not in stored_prompt  # SDXL's variant
+    assert "cinematic film still" in stored_prompt  # FLUX's variant
+
+
+def test_generate_image_subject_type_suffix_applied(client):
+    """Q3.3b: subject-type suffix is appended after the style suffix."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-6", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={
+                "modality": "image", "prompt": "a mountain range",
+                "params": {"subject_type": "nature"},
+            },
+        )
+    stored_prompt = mk.call_args.args[2]
+    assert stored_prompt.startswith("a mountain range")
+    assert "landscape" in stored_prompt
+
+
 def test_generate_image_init_image_b64_stored(client):
     """Direct init_image_b64 is merged into params before job creation."""
     fake_b64 = "aGVsbG8="  # base64("hello")

@@ -2,6 +2,32 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q3.3b — Subject-type axis + per-model preset suffix variants — DONE
+(2026-07-16). Closes Q3.3.** New orthogonal subject-type preset axis (portrait/
+nature/product/architecture), composable with any style preset; 4 new style
+presets (analog_film/studio_product/golden_hour/editorial — 9 total). Both style
+and subject-type presets now carry per-model `sdxl_suffix`/`flux_suffix` variants
+(SDXL keyword-scaffold vs FLUX natural-language, per Q3.1's research) instead of
+one suffix shared across models. New `image_session.get_session_model()` lets the
+`/session/job` route resolve per-model suffixes too (it doesn't carry the model
+directly on the request, unlike `/generate`), gated so the extra DB lookup only
+fires when a style/subject preset is actually set. **A "multi-person/group"
+subject type (extended negative-prompt list + UI caveat) was built, then the
+user explicitly rejected it mid-step — "why are we wasting time building
+multi-person feature for sdxl if the model is not suitable for it... no need to
+waste time on what does not work" — and it was fully removed**, including the
+now-unused extended-negative/caveat mechanism (not left as dead code). Shipped
+scope: 4 subject types, no multi-person. Real bug found independently: a
+`_session_row()` default-parameter pitfall (bound at module-import time, so
+`get_session_model()` needed an explicit `_fetchone=fetchone` pass or test
+patching would silently miss it). 534 backend tests green (up from 519), 31
+frontend tests (up from 13); `tsc`/build clean. code-reviewer PASS (0 CRITICAL/
+WARN on the final post-removal diff). build-validator PASS. No security-auditor
+run (pure data/param-plumbing, no secrets/config/auth touched). Live-verified via
+Chrome: Subject dropdown shows exactly the 4 shipped types, Style dropdown shows
+all 9. See `workspace/plan/imageLab/phase_Q3_prompting_presets.md` §Q3.3 and
+`dev_log.md`'s 2026-07-16 "imageLab Q3.3b" entry.
+
 **imageLab Q3.3a — Style preset registry (replaces hardcoded STYLE_SUFFIXES) — DONE
 (2026-07-16).** Second Q3 step — deliberately scoped down from the plan's full Q3.3
 (registry + a new subject-type axis + composer chips UI); this sub-step is JUST the

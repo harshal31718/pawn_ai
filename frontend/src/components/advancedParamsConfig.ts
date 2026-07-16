@@ -1,5 +1,5 @@
 import type { ImageParams } from '../api/client'
-import { STYLE_PRESET_KEY_MAP, type AdvancedState } from '../types'
+import { STYLE_PRESET_KEY_MAP, SUBJECT_TYPE_KEY_MAP, type AdvancedState } from '../types'
 
 export type { AdvancedState, ParamState } from '../types'
 
@@ -66,6 +66,12 @@ export abstract class ModelAdvancedConfig {
       seed: forcedSeed !== undefined
         ? { enabled: true, value: forcedSeed }
         : { enabled: false, value: 0 },
+      // Q3.3b: orthogonal subject-type axis. "Portrait" is the existing
+      // default assumption -- no vocabulary injected -- so starting disabled
+      // with that value is a true no-op until the user picks something else.
+      // Stores the LABEL (matching stylePreset's convention below), not the
+      // key -- resolved through SUBJECT_TYPE_KEY_MAP at derive time.
+      subjectType: { enabled: false, value: 'Portrait' },
     }
   }
 
@@ -87,6 +93,8 @@ export abstract class ModelAdvancedConfig {
       p.style_preset = STYLE_PRESET_KEY_MAP[s.stylePreset.value] ?? ''
     if (s.strength.enabled) p.strength = s.strength.value
     if (s.seed.enabled) p.seed = s.seed.value
+    if (s.subjectType.enabled && s.subjectType.value)
+      p.subject_type = SUBJECT_TYPE_KEY_MAP[s.subjectType.value] ?? ''
     return p
   }
 }

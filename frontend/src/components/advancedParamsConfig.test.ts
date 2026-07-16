@@ -57,3 +57,30 @@ describe('per-model advanced-params config (base class + subclasses)', () => {
     expect(configFor('flux').defaultGuidance).toBe(0)
   })
 })
+
+describe('Q3.3b — subject-type axis', () => {
+  it('defaults subjectType to disabled with "Portrait" (the neutral default assumption)', () => {
+    const s = configFor('sdxl').initialAdvanced()
+    expect(s.subjectType.enabled).toBe(false)
+    expect(s.subjectType.value).toBe('Portrait')
+  })
+
+  it('derives subject_type into params only when enabled', () => {
+    const sdxl = configFor('sdxl')
+    const s = sdxl.initialAdvanced()
+    expect(sdxl.deriveParams(s).subject_type).toBeUndefined()
+    s.subjectType.enabled = true
+    s.subjectType.value = 'Architecture'
+    expect(sdxl.deriveParams(s).subject_type).toBe('architecture')
+  })
+
+  it('subject_type derivation is model-agnostic (same key regardless of SDXL/FLUX)', () => {
+    for (const modelId of ['sdxl', 'flux']) {
+      const config = configFor(modelId)
+      const s = config.initialAdvanced()
+      s.subjectType.enabled = true
+      s.subjectType.value = 'Nature / Landscape'
+      expect(config.deriveParams(s).subject_type).toBe('nature')
+    }
+  })
+})

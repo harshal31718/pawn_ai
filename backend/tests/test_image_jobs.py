@@ -185,6 +185,24 @@ def test_create_cold_job_skips_default_negative_under_anime_style():
     assert "negative_prompt" not in stored_params
 
 
+def test_create_cold_job_subject_type_round_trips_to_job_row():
+    """Q3.3b: subject_type is stored on the job row unchanged -- the actual
+    prompt-suffix vocabulary is applied route-side (routes/generate.py), this
+    just proves the field survives storage."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a mountain at dawn",
+            image_session.ImageJobParams(subject_type="nature"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["subject_type"] == "nature"
+
+
 def test_create_cold_job_flux_gets_no_default_negative():
     db = _FakeDB(rows={"image_jobs": []})
     p1, p2, p3 = _patch_db(db)

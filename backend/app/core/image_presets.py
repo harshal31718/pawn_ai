@@ -1,15 +1,23 @@
-"""Image-generation style preset registry (Q3.3a) — data, not code.
+"""Image-generation preset registry (Q3.3) — data, not code.
 
-Replaces the old hardcoded `STYLE_SUFFIXES` dict in `routes/generate.py` with a
-JSON-backed registry, following the same data/registry/*.json convention the
-chat model registry (`models.json`/`endpoints.json`) already uses. Loaded once
-at import time — this file is bind-mounted (`backend/data` in docker-compose.yml),
-so editing the JSON takes effect on the next backend restart, no rebuild needed.
+Two orthogonal, combinable axes:
+- **Style** (visual treatment: photorealistic, cinematic, anime, ...) — Q3.3a's
+  original 5 presets, replacing the old hardcoded `STYLE_SUFFIXES` dict in
+  `routes/generate.py`.
+- **Subject type** (portrait, nature, product, architecture) — new in Q3.3b,
+  composes with any style preset. A "multi-person/group" entry was deliberately
+  NOT added here: SDXL's cross-attention doesn't segment per-subject, so
+  results reliably degrade (blended faces/limbs) regardless of prompt
+  phrasing — not worth shipping a preset for a case the model handles poorly
+  (per the user's explicit call, 2026-07-16). Revisit if/when a model with
+  real multi-subject support (regional conditioning, ControlNet pose, etc.)
+  is added.
 
-Q3.3a is deliberately behavior-preserving: same 5 presets, same suffix strings,
-same single-suffix-per-preset shape (no per-model SDXL/FLUX variants yet). The
-per-model variants and the new subject-type axis (portrait/multi-person/nature/
-product/architecture) are Q3.3b, once this registry-load foundation is proven.
+Both axes carry per-model suffix variants (`sdxl_suffix` keyword-scaffold vs
+`flux_suffix` natural-language, per Q3.1's research) instead of one suffix
+shared across models. Loaded once at import time -- this file is bind-mounted
+(`backend/data` in docker-compose.yml), so editing the JSON takes effect on
+the next backend restart, no rebuild needed.
 """
 
 import json
@@ -17,23 +25,42 @@ import json
 from app.constants import IMAGE_PRESETS_FILE
 
 
-def _load_presets() -> dict[str, dict[str, str]]:
+def _load_registry() -> tuple[dict[str, dict], dict[str, dict]]:
     raw = json.loads(IMAGE_PRESETS_FILE.read_text(encoding="utf-8"))
-    presets: dict[str, dict[str, str]] = {}
-    for entry in raw:
-        presets[entry["id"]] = {"label": entry["label"], "suffix": entry["suffix"]}
-    return presets
+    styles = {entry["id"]: entry for entry in raw["styles"]}
+    subject_types = {entry["id"]: entry for entry in raw["subject_types"]}
+    return styles, subject_types
 
 
-IMAGE_PRESETS: dict[str, dict[str, str]] = _load_presets()
+IMAGE_STYLES: dict[str, dict] = {}
+IMAGE_SUBJECT_TYPES: dict[str, dict] = {}
+IMAGE_STYLES, IMAGE_SUBJECT_TYPES = _load_registry()
+
+# Back-compat alias: Q3.3a's original name, still used by a couple of test
+# files/comments that predate the subject-type split.
+IMAGE_PRESETS = IMAGE_STYLES
 
 
-def get_preset_suffix(preset_id: str | None) -> str:
-    """Look up a style preset's prompt suffix by id. Unknown/None id (a legacy
-    cached frontend sending a since-removed key, or no preset selected) falls
-    back to an empty string, matching the old dict's `.get(key, "")` behavior
-    -- never raises, generation must never block on an unrecognized preset."""
+def _suffix_for(entry: dict | None, model_id: str) -> str:
+    if entry is None:
+        return ""
+    return entry.get(f"{model_id}_suffix") or entry.get("sdxl_suffix", "")
+
+
+def get_preset_suffix(preset_id: str | None, model_id: str = "sdxl") -> str:
+    """Look up a style preset's prompt suffix by id, for the given model.
+    Unknown/None id (a legacy cached frontend sending a since-removed key, or
+    no preset selected) falls back to an empty string -- never raises,
+    generation must never block on an unrecognized preset."""
     if not preset_id:
         return ""
-    preset = IMAGE_PRESETS.get(preset_id)
-    return preset["suffix"] if preset else ""
+    return _suffix_for(IMAGE_STYLES.get(preset_id), model_id)
+
+
+def get_subject_type_suffix(subject_type_id: str | None, model_id: str = "sdxl") -> str:
+    """Same contract as get_preset_suffix, for the subject-type axis. None/
+    unknown/the default "portrait" id all resolve to an empty suffix (portrait
+    is the existing default assumption -- no vocabulary injected)."""
+    if not subject_type_id:
+        return ""
+    return _suffix_for(IMAGE_SUBJECT_TYPES.get(subject_type_id), model_id)
