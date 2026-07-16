@@ -166,7 +166,29 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     security-auditor run (pure data/param-merge, no secrets/config/auth touched).
     Full record: `dev_log.md`'s 2026-07-16 "imageLab Q3.2" entry, `current_state.md`.
   - `[ ]` Q3.1 — LLM prompt enhancer (blocked on vision-plumbing prerequisites)
-  - `[ ]` Q3.3 — Style + subject-type presets rebuilt
+  - `[~]` **Q3.3 — Style + subject-type presets rebuilt** (scoped into sub-steps, like Q3.2)
+    - `[x]` **Q3.3a — Registry-load foundation** ✓ (2026-07-16)
+      Moved the 5 existing style presets (photorealistic/cinematic/anime/oil_painting/
+      sketch) from a hardcoded `STYLE_SUFFIXES` dict in `routes/generate.py` into a
+      JSON-backed registry: new `data/registry/image_presets.json` +
+      `core/image_presets.py` (`get_preset_suffix()`, same `""`-fallback contract as
+      the old dict). Deliberately behavior-preserving — same suffixes, no per-model
+      variants or subject-type axis yet. **Real snag found by running tests, not
+      theorized:** defining `IMAGE_PRESETS_FILE` the same `DATA_DIR`-relative way as
+      `MODELS_FILE`/`ENDPOINTS_FILE` broke every backend test (the isolated per-worker
+      test `DATA_DIR` has a seeding step for the LLM registry but none for this static
+      file) — fixed by resolving it relative to the source tree instead, matching
+      `KAGGLE_TEMPLATES_DIR`'s existing pattern, documented inline in `constants.py`.
+      519 backend tests green (up from 513); the pre-existing `test_generate.py`
+      style-preset HTTP-route test (predates this diff) passes unchanged — the real
+      regression proof. `tsc --noEmit` clean (frontend untouched). code-reviewer PASS
+      (0 CRITICAL/WARN, 2 accepted NOTEs). build-validator PASS. No security-auditor
+      run (pure data-file load, no secrets/config/auth touched). Full record:
+      `dev_log.md`'s 2026-07-16 "imageLab Q3.3a" entry, `current_state.md`.
+    - `[ ]` Q3.3b — Subject-type axis (portrait/multi-person/nature/product/
+      architecture), 4 new style presets, per-model SDXL/FLUX suffix variants,
+      composer chips UI, multi-person extended-negative hookup (needs Q3.2's
+      `NON_PHOTOREAL_STYLE_PRESETS` machinery too)
   - `[ ]` Q3.4 — Optional: negative embeddings (spike)
 - `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
   `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,

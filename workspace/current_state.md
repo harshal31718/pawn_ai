@@ -2,6 +2,36 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q3.3a — Style preset registry (replaces hardcoded STYLE_SUFFIXES) — DONE
+(2026-07-16).** Second Q3 step — deliberately scoped down from the plan's full Q3.3
+(registry + a new subject-type axis + composer chips UI); this sub-step is JUST the
+registry-load-and-replace foundation, behavior-preserving. New
+`backend/data/registry/image_presets.json` (the same 5 presets — photorealistic/
+cinematic/anime/oil_painting/sketch — same exact suffix strings, moved out of a
+hardcoded dict in `routes/generate.py`). New `backend/app/core/image_presets.py`
+loader (`get_preset_suffix()`, falls back to `""` on unknown/None/empty, matching
+the old dict's `.get(key, "")`). **One real implementation wrinkle:** the registry
+test-isolation harness (`tests/conftest.py`'s per-worker `PAWN_DATA_DIR`) only seeds
+`models.json`/`endpoints.json` at runtime — there's no equivalent seeding for a
+static file, so defining `IMAGE_PRESETS_FILE` the same `DATA_DIR`-relative way as
+those two broke every single backend test with `FileNotFoundError`. Fixed by
+resolving it relative to the source tree instead (`Path(__file__).resolve().parent
+.parent / "data" / "registry" / "image_presets.json"`, matching the existing
+`KAGGLE_TEMPLATES_DIR` pattern) — sound because `image_presets.json` is genuinely
+static bundled data, never runtime-mutated, unlike the LLM model registry.
+Documented inline in `constants.py` so a future maintainer understands why this one
+file is special-cased against the sibling convention. Deferred to a future Q3.3b:
+the new subject-type preset axis (portrait/multi-person/nature/product/architecture),
+4 additional style presets, per-model (SDXL/FLUX) suffix variants, composer chips UI.
+519 backend tests green (up from 513); the pre-existing `test_generate.py` style-
+preset HTTP-route test (predates this diff) still passes unchanged — the real
+regression proof. `tsc --noEmit` clean (frontend untouched this step). code-reviewer
+PASS (0 CRITICAL/WARN, 2 informational NOTEs — the path-resolution deviation judged
+sound and well-documented; no error handling around the import-time JSON load judged
+acceptable for static bundled data). No security-auditor run (pure data-file load,
+no secrets/config/auth touched). See `workspace/plan/imageLab/phase_Q3_prompting_presets.md`
+§Q3.3 and `dev_log.md`'s 2026-07-16 "imageLab Q3.3a" entry.
+
 **imageLab Q3.2 — Default negatives (SDXL-family) — DONE (2026-07-16).** First step
 of the Q3 prompting/presets phase (Q2 deliberately skipped for now, per the user —
 optimize the pipeline before adding new models). SDXL now gets a research-backed

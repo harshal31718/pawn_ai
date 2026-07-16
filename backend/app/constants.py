@@ -6,6 +6,13 @@ DATA_DIR = Path(os.getenv("PAWN_DATA_DIR", "/app/data"))
 REGISTRY_DIR      = DATA_DIR / "registry"
 MODELS_FILE       = REGISTRY_DIR / "models.json"
 ENDPOINTS_FILE    = REGISTRY_DIR / "endpoints.json"
+# Static bundled data (versioned with the code, never written to at runtime,
+# no seeding step) -- resolved relative to the source tree like
+# KAGGLE_TEMPLATES_DIR below, NOT under the isolatable DATA_DIR. models.json/
+# endpoints.json above are genuinely user-mutable registry state (rewritten by
+# registry-refresh, isolated per test worker); presets aren't, so they don't
+# need or want that isolation.
+IMAGE_PRESETS_FILE = Path(__file__).resolve().parent.parent / "data" / "registry" / "image_presets.json"
 MEMORY_DIR        = DATA_DIR / "memory"
 MEMORY_DB         = MEMORY_DIR / "memory.db"
 RATE_LIMITS_DIR   = DATA_DIR / "rate_limits"

@@ -6,6 +6,80 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q3.3a: style preset registry (replaces STYLE_SUFFIXES)
+
+Second Q3 build step. The plan's full Q3.3 ("Style + subject-type presets rebuilt")
+bundles a lot together: a new JSON registry, a brand-new subject-type preset axis
+(portrait/multi-person/nature/product/architecture) on top of the existing style
+axis, per-model (SDXL vs FLUX) suffix variants, and a composer chips UI. Same call
+as Q3.2: scoped down to the smallest independently-shippable piece first — "Q3.3a"
+covers just the registry-load-and-replace, proving the pattern works and giving
+Q3.3b a real foundation instead of building both the plumbing and the new feature
+surface in one pass.
+
+**What shipped.** New `backend/data/registry/image_presets.json` — the same 5
+existing style presets (photorealistic/cinematic/anime/oil_painting/sketch), each
+with `id`/`label`/`suffix`, values copied byte-for-byte from the old hardcoded
+`STYLE_SUFFIXES` dict in `routes/generate.py`. New `backend/app/core/image_presets.py`:
+loads the JSON once at import time into `IMAGE_PRESETS`, exposes
+`get_preset_suffix(preset_id)` which falls back to `""` for unknown/`None`/empty
+input — same fallback contract the old dict's `.get(key, "")` had, so a stale
+cached frontend sending a since-removed preset key still can't error or block
+generation. `routes/generate.py`'s two call sites (the cold `/generate` handler and
+the warm `/session/job` handler) now call `get_preset_suffix(...)` instead of
+looking the key up in the removed dict — same insertion point, same logic, only
+the suffix's source changed.
+
+**Real implementation snag, found and fixed by actually running the tests (not
+theorized in advance).** Defined `IMAGE_PRESETS_FILE` in `constants.py` the same
+way as the existing `MODELS_FILE`/`ENDPOINTS_FILE` — `REGISTRY_DIR / "image_presets.json"`,
+where `REGISTRY_DIR` sits under `DATA_DIR`, itself overridable via `PAWN_DATA_DIR`.
+Ran the full suite: **every single backend test failed** with `FileNotFoundError`,
+not just the new ones. Root cause: `tests/conftest.py` isolates each test worker's
+`DATA_DIR` into a fresh empty temp directory specifically so tests can't corrupt
+real user data — and `models.json`/`endpoints.json` survive this because
+`registry.loader.load_registry()` calls `seed_registry()`, which writes fresh
+copies into whatever `DATA_DIR` currently points at on first use. There's no
+equivalent seeding step for `image_presets.json` (it's genuinely static — nothing
+ever regenerates or rewrites it at runtime, unlike the LLM model registry which
+`registry-refresh` can rewrite), so the isolated temp dir just never had the file.
+Fixed by resolving `IMAGE_PRESETS_FILE` relative to the source tree instead —
+`Path(__file__).resolve().parent.parent / "data" / "registry" / "image_presets.json"`
+— the exact same pattern `KAGGLE_TEMPLATES_DIR` two lines below it already uses for
+the (also static, also bundled, also never-isolated) Kaggle notebook templates.
+The on-disk location is unchanged (`backend/data/registry/image_presets.json`,
+still bind-mounted via `docker-compose.yml`'s `./backend/data:/app/data`) — only
+how the Python constant resolves that same path changed. Documented inline in
+`constants.py` with the reasoning (static bundled data vs. user-mutable seeded
+registry state) so this deliberate deviation from the sibling-constants pattern
+doesn't read as an inconsistency to a future maintainer.
+
+**Deferred to a future Q3.3b, not silently dropped:** the new subject-type preset
+axis (portrait/multi-person/nature/product/architecture, composable with the style
+axis), 4 additional style presets from the research (analog film, studio product,
+golden hour, editorial), per-model SDXL/FLUX suffix variants (today's single suffix
+applies identically to both models, same as before this diff), the multi-person
+extended-negative-list hookup (needs both this registry AND Q3.2's
+`NON_PHOTOREAL_STYLE_PRESETS`-adjacent machinery), and the composer chips UI.
+
+**Tests.** New `test_image_presets.py` (6 tests: registry loads exactly 5 presets,
+every preset has a label+suffix, all 5 suffix strings byte-match the old hardcoded
+dict's values, unknown/None/empty key all fall back to `""`). The real regression
+proof is a PRE-EXISTING test in `test_generate.py` (predates this diff, asserts
+`"cinematic shot"` appears in the stored prompt for a `style_preset: "cinematic"`
+request through the actual HTTP route) — it passes unchanged, proving the
+route-level behavior genuinely didn't shift. 519 backend tests green (up from
+513); `tsc --noEmit` clean (frontend untouched this step — the preset dropdown
+still reads from `frontend/src/types.ts`'s own `STYLE_PRESETS` const, unrelated to
+this backend-only registry move). code-reviewer PASS (0 CRITICAL/WARN, 2
+informational NOTEs — the path-resolution deviation judged sound and well-
+documented, no error handling around the import-time JSON load judged acceptable
+for static bundled data that fails fast on a packaging bug rather than degrading
+silently). No security-auditor run (pure data-file load, no secrets/config/auth
+touched).
+
+---
+
 ### [2026-07-16] — imageLab Q3.2: default negatives (SDXL-family)
 
 First build step of Q3 (prompting/presets). The user made an explicit call this

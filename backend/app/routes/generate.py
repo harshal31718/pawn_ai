@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core import generate, image_session
 from app.core.image_models import DEFAULT_IMAGE_MODEL
+from app.core.image_presets import get_preset_suffix
 from app.core.image_session import ImageJobParams
 
 router = APIRouter(prefix="/generate", tags=["generate"])
@@ -33,15 +34,6 @@ def _lock_for(key: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _locks[key] = lock
     return lock
-
-
-STYLE_SUFFIXES: dict[str, str] = {
-    "photorealistic": ", RAW photo, 8K, ultra detailed, photorealistic, DSLR",
-    "cinematic": ", cinematic shot, anamorphic lens, dramatic lighting, film grain",
-    "anime": ", anime style, studio ghibli, detailed illustration, vibrant colors",
-    "oil_painting": ", oil painting, impressionist, thick brushstrokes, canvas texture",
-    "sketch": ", pencil sketch, charcoal drawing, black and white, cross-hatching",
-}
 
 
 class GenerateRequest(BaseModel):
@@ -128,7 +120,7 @@ async def generate_artifact(req: GenerateRequest, request: Request):
             )
         prompt = req.prompt.strip()
         if req.params.style_preset:
-            prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
+            prompt += get_preset_suffix(req.params.style_preset)
         init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
         params = req.params
         if init_b64:
@@ -207,7 +199,7 @@ async def session_job(req: SessionJobRequest, request: Request):
         )
     prompt = req.prompt.strip()
     if req.params.style_preset:
-        prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
+        prompt += get_preset_suffix(req.params.style_preset)
     init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
     params = req.params
     if init_b64:

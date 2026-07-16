@@ -1,0 +1,27 @@
+[
+  {
+    "id": "photorealistic",
+    "label": "Photorealistic",
+    "suffix": ", RAW photo, 8K, ultra detailed, photorealistic, DSLR"
+  },
+  {
+    "id": "cinematic",
+    "label": "Cinematic",
+    "suffix": ", cinematic shot, anamorphic lens, dramatic lighting, film grain"
+  },
+  {
+    "id": "anime",
+    "label": "Anime",
+    "suffix": ", anime style, studio ghibli, detailed illustration, vibrant colors"
+  },
+  {
+    "id": "oil_painting",
+    "label": "Oil Painting",
+    "suffix": ", oil painting, impressionist, thick brushstrokes, canvas texture"
+  },
+  {
+    "id": "sketch",
+    "label": "Sketch",
+    "suffix": ", pencil sketch, charcoal drawing, black and white, cross-hatching"
+  }
+]
