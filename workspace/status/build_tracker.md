@@ -53,7 +53,11 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   sizes in `AdvancedParams.tsx` (Q1.1 headline fix), stock fp16 SDXL VAE (black images,
   Q1.2), no scheduler configured (Q1.3), base-SDXL realism ceiling (Q2 photoreal
   checkpoint rows), no prompt scaffolding/negatives (Q3), no face/detail pass (Q4).
-  Order Q1 → Q2 → Q3 → Q4; every step gated on the Q1.5 fixed-seed benchmark A/B.
+  Original order Q1 → Q2 → Q3 → Q4; **re-ordered 2026-07-16 per the user's explicit
+  call: skip Q2 (new checkpoint models) for now, do Q3 (prompting/presets) next —
+  optimize the existing pipeline before adding new models to it.** Q2 stays registered,
+  just deferred; revisit after Q3 (and optionally Q4) land. New order: Q1 (done) → Q3 →
+  Q4 → Q2 (deferred, pick a point to revisit).
   - `[x]` **Q1.1 — SDXL-native resolution buckets (headline fix)** ✓ (2026-07-16)
     Replaced the SD1.5-era `RATIO_TO_SIZE` global with six SDXL-native, model-aware
     buckets (`bucketsFor(modelId)`); default aspect ratio 1:1→3:4 portrait; server-side
