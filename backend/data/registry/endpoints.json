@@ -37,9 +37,9 @@
     "rpm_limit": 30,
     "rpd_limit": 1000,
     "tpm_limit": 12000,
-    "tpd_limit": null,
+    "tpd_limit": 100000,
     "active": true,
-    "last_verified": "2026-07-14"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-llama-3.3-70b-cerebras",
@@ -53,7 +53,7 @@
     "tpm_limit": null,
     "tpd_limit": 1000000,
     "active": false,
-    "last_verified": "2026-06-15"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-llama-3.3-70b-huggingface",
@@ -95,7 +95,7 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": false,
-    "last_verified": "2026-06-15"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-deepseek-r1-huggingface",
@@ -137,7 +137,7 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": false,
-    "last_verified": "2026-06-15"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-gpt-oss-120b-cerebras",
@@ -146,12 +146,12 @@
     "provider_model_id": "gpt-oss-120b",
     "base_url": "https://api.cerebras.ai/v1",
     "priority": 1,
-    "rpm_limit": 30,
+    "rpm_limit": 5,
     "rpd_limit": null,
-    "tpm_limit": null,
+    "tpm_limit": 30000,
     "tpd_limit": 1000000,
     "active": true,
-    "last_verified": "2026-07-14"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-gpt-oss-120b-groq",
@@ -162,10 +162,24 @@
     "priority": 2,
     "rpm_limit": 30,
     "rpd_limit": 1000,
-    "tpm_limit": null,
+    "tpm_limit": 8000,
     "tpd_limit": 200000,
     "active": true,
-    "last_verified": "2026-07-14"
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-qwen-3-32b-groq",
+    "model_id": "qwen-3-32b",
+    "provider": "groq",
+    "provider_model_id": "qwen/qwen3-32b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "priority": 1,
+    "rpm_limit": 60,
+    "rpd_limit": 1000,
+    "tpm_limit": 6000,
+    "tpd_limit": 500000,
+    "active": true,
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-qwen-3-32b-cerebras",
@@ -173,13 +187,13 @@
     "provider": "cerebras",
     "provider_model_id": "qwen-3-32b",
     "base_url": "https://api.cerebras.ai/v1",
-    "priority": 1,
+    "priority": 2,
     "rpm_limit": 30,
     "rpd_limit": null,
     "tpm_limit": null,
     "tpd_limit": 1000000,
     "active": false,
-    "last_verified": "2026-06-15"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-glm-4.7-cerebras",
@@ -188,12 +202,12 @@
     "provider_model_id": "zai-glm-4.7",
     "base_url": "https://api.cerebras.ai/v1",
     "priority": 1,
-    "rpm_limit": 30,
+    "rpm_limit": 5,
     "rpd_limit": null,
-    "tpm_limit": null,
+    "tpm_limit": 30000,
     "tpd_limit": 1000000,
     "active": true,
-    "last_verified": "2026-07-14"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-gemini-3-flash-google",
@@ -221,7 +235,7 @@
     "tpm_limit": null,
     "tpd_limit": null,
     "active": false,
-    "last_verified": "2026-07-14"
+    "last_verified": "2026-07-15"
   },
   {
     "id": "ep-text-embedding-004-google",
@@ -250,5 +264,159 @@
     "tpd_limit": null,
     "active": true,
     "last_verified": "2026-07-14"
+  },
+  {
+    "id": "ep-llama-3.1-8b-instant-groq",
+    "model_id": "llama-3.1-8b-instant",
+    "provider": "groq",
+    "provider_model_id": "llama-3.1-8b-instant",
+    "base_url": "https://api.groq.com/openai/v1",
+    "priority": 1,
+    "rpm_limit": 30,
+    "rpd_limit": 14400,
+    "tpm_limit": 6000,
+    "tpd_limit": 500000,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-gpt-oss-20b-groq",
+    "model_id": "gpt-oss-20b",
+    "provider": "groq",
+    "provider_model_id": "openai/gpt-oss-20b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "priority": 1,
+    "rpm_limit": 30,
+    "rpd_limit": 1000,
+    "tpm_limit": 8000,
+    "tpd_limit": 200000,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-llama-4-scout-groq",
+    "model_id": "llama-4-scout",
+    "provider": "groq",
+    "provider_model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
+    "base_url": "https://api.groq.com/openai/v1",
+    "priority": 1,
+    "rpm_limit": 30,
+    "rpd_limit": 1000,
+    "tpm_limit": 30000,
+    "tpd_limit": 500000,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-gemma-4-31b-cerebras",
+    "model_id": "gemma-4-31b",
+    "provider": "cerebras",
+    "provider_model_id": "gemma-4-31b",
+    "base_url": "https://api.cerebras.ai/v1",
+    "priority": 1,
+    "rpm_limit": 5,
+    "rpd_limit": null,
+    "tpm_limit": 30000,
+    "tpd_limit": 1000000,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-gemini-2.5-pro-google",
+    "model_id": "gemini-2.5-pro",
+    "provider": "google",
+    "provider_model_id": "gemini-2.5-pro",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "priority": 1,
+    "rpm_limit": 5,
+    "rpd_limit": 100,
+    "tpm_limit": 250000,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-north-mini-code-openrouter",
+    "model_id": "north-mini-code",
+    "provider": "openrouter",
+    "provider_model_id": "cohere/north-mini-code:free",
+    "base_url": "https://openrouter.ai/api/v1",
+    "priority": 1,
+    "rpm_limit": 20,
+    "rpd_limit": 50,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-hy3-openrouter",
+    "model_id": "hy3",
+    "provider": "openrouter",
+    "provider_model_id": "tencent/hy3:free",
+    "base_url": "https://openrouter.ai/api/v1",
+    "priority": 1,
+    "rpm_limit": 20,
+    "rpd_limit": 50,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-laguna-xs-openrouter",
+    "model_id": "laguna-xs",
+    "provider": "openrouter",
+    "provider_model_id": "poolside/laguna-xs-2.1:free",
+    "base_url": "https://openrouter.ai/api/v1",
+    "priority": 1,
+    "rpm_limit": 20,
+    "rpd_limit": 50,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-laguna-m-openrouter",
+    "model_id": "laguna-m",
+    "provider": "openrouter",
+    "provider_model_id": "poolside/laguna-m.1:free",
+    "base_url": "https://openrouter.ai/api/v1",
+    "priority": 1,
+    "rpm_limit": 20,
+    "rpd_limit": 50,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-nemotron-3-ultra-openrouter",
+    "model_id": "nemotron-3-ultra",
+    "provider": "openrouter",
+    "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "base_url": "https://openrouter.ai/api/v1",
+    "priority": 1,
+    "rpm_limit": 20,
+    "rpd_limit": 50,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-15"
+  },
+  {
+    "id": "ep-nemotron-3-nano-omni-reasoning-openrouter",
+    "model_id": "nemotron-3-nano-omni-reasoning",
+    "provider": "openrouter",
+    "provider_model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "base_url": "https://openrouter.ai/api/v1",
+    "priority": 1,
+    "rpm_limit": 20,
+    "rpd_limit": 50,
+    "tpm_limit": null,
+    "tpd_limit": null,
+    "active": true,
+    "last_verified": "2026-07-15"
   }
 ]
