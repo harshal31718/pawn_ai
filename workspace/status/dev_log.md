@@ -6,6 +6,32 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — Kaggle notebook fix: stop-race check crashed the whole run on a REST hiccup, unrelated to the tunnel outage
+
+User's tunnel is still down (same `loans-xml-everybody-postposted.trycloudflare.com`
+`NameResolutionError` as before — needs the user to restart cloudflared and
+update `POSTGREST_PUBLIC_URL` if the subdomain changed, not a code issue).
+But the traceback exposed a real, separate bug while that outage was
+happening: both session notebooks' model-load cell calls `get_session()`
+*after* the model has already loaded, purely to check whether the user
+clicked Stop mid-load (a race-closing guard). That call sat inside the same
+`try` block as the model load itself, so when it failed (tunnel down), the
+`except` mislabeled the session's error as `"model load failed: ..."` —
+even though SDXL/FLUX loaded fine — and re-raised, crashing the whole
+papermill run over an unrelated, transient REST call. Every other REST call
+in these notebooks (`_rest_patch`, added in the 2026-07-14 round-7 dead-
+session-detection pass) already tolerates exactly this kind of failure by
+design; this one call was missed. Fixed in both
+`image_sdxl_session/notebook.ipynb` and `image_flux_session/notebook.ipynb`:
+`_g = get_session()` now has its own try/except — a failure here just logs
+`[pawn] stop-race check failed (non-fatal, proceeding to ready): ...` and
+treats it as "user didn't stop", proceeding to mark the session `ready` as
+intended. Notebooks re-validated (`test_kaggle_session_templates.py`, 9
+tests green; both still `compile()` clean, cell count unchanged). **Still
+needs the user's tunnel restart** to confirm a real end-to-end generation —
+this fix only stops an unrelated crash from masking that the load itself
+actually succeeds.
+
 ### [2026-07-16] — F-11: attach-image (vision Q&A) + forced-SDXL/session generate_image
 
 Closed out the 2026-07-15/16 chat batch into
