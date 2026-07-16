@@ -65,6 +65,7 @@ export interface ConversationStore {
   pendingIds: Set<string>
   syncError: string | null
   draftConvId: string | null
+  draftProjectId: string | null
   streamingConvIds: Set<string>
   selectConversation: (id: string) => void
   createConversation: (targetProjectId?: string) => string
@@ -111,6 +112,10 @@ export function useConversationStore(
   // empty in-memory message buffer). It is NOT in `conversations`, not on Drive,
   // and not enqueued — it materializes only when the first message is sent.
   const [draftConvId, setDraftConvId] = useState<string | null>(null)
+  // The unsaved "New Project" draft — same contract as draftConvId: frontend-only,
+  // not in `projects`' persisted cache entry, not enqueued, until promoted by the
+  // first meaningful edit (rename, description, or starting a chat inside it).
+  const [draftProjectId, setDraftProjectId] = useState<string | null>(null)
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
   const [syncError, setSyncError] = useState<string | null>(null)
   // Which conversations are currently generating. Per-conversation so multiple
@@ -123,6 +128,7 @@ export function useConversationStore(
   const messagesByConvRef = useRef(messagesByConv)
   const activeConvIdRef = useRef(activeConvId)
   const draftConvIdRef = useRef(draftConvId)
+  const draftProjectIdRef = useRef(draftProjectId)
   // Target project (if any) a draft should land in once promoted on first send
   // (the "new chat in project" flow) — a plain ref since it's write-once,
   // read-once per draft and never drives a render itself.
@@ -139,6 +145,7 @@ export function useConversationStore(
   useEffect(() => { messagesByConvRef.current = messagesByConv }, [messagesByConv])
   useEffect(() => { activeConvIdRef.current = activeConvId }, [activeConvId])
   useEffect(() => { draftConvIdRef.current = draftConvId }, [draftConvId])
+  useEffect(() => { draftProjectIdRef.current = draftProjectId }, [draftProjectId])
   useEffect(() => { defaultModelRef.current = defaultModel }, [defaultModel])
 
   const touchLru = useCallback((id: string) => {
@@ -148,16 +155,27 @@ export function useConversationStore(
     lruRef.current = lruRef.current.filter((x) => x !== id)
   }, [])
 
-  // Persist (debounced) whenever the list or messages change. The unsaved draft is
-  // excluded — it's frontend-only until promoted on first message.
+  // Materialize a draft project: clears the draft slot (so "New project" opens a
+  // fresh one next time) and enqueues the real create op with whatever name it has
+  // at the moment of promotion — mirrors promoteDraft's chat-draft contract below.
+  const promoteProjectDraft = useCallback((id: string, name: string) => {
+    if (draftProjectIdRef.current !== id) return
+    draftProjectIdRef.current = null
+    setDraftProjectId(null)
+    syncRef.current?.enqueue({ kind: 'createProject', projectId: id, name })
+  }, [])
+
+  // Persist (debounced) whenever the list or messages change. The unsaved chat/project
+  // drafts are excluded — both are frontend-only until promoted.
   useEffect(() => {
     const messages: Record<string, PersistedMsg[]> = {}
     for (const [cid, msgs] of Object.entries(messagesByConv)) {
       if (cid === draftConvId) continue
       messages[cid] = toPersisted(msgs)
     }
-    scheduleSave(userId, { version: 1, conversations, projects, messages, lru: lruRef.current })
-  }, [conversations, projects, messagesByConv, draftConvId, userId])
+    const persistProjects = draftProjectId ? projects.filter((p) => p.id !== draftProjectId) : projects
+    scheduleSave(userId, { version: 1, conversations, projects: persistProjects, messages, lru: lruRef.current })
+  }, [conversations, projects, messagesByConv, draftConvId, draftProjectId, userId])
 
   // ── Background reconciliation ──────────────────────────────────────────────
 
@@ -283,13 +301,20 @@ export function useConversationStore(
       setActiveConvId(existingDraft)
       return existingDraft
     }
+    // Starting a chat inside a still-draft project is a meaningful action —
+    // promote the project now so the moveChat op (enqueued when this chat's own
+    // draft promotes on first send) has a real project to land in.
+    if (targetProjectId && targetProjectId === draftProjectIdRef.current) {
+      const draftProject = projectsRef.current.find((p) => p.id === targetProjectId)
+      promoteProjectDraft(targetProjectId, draftProject?.name ?? 'New Project')
+    }
     const id = newConvId()
     draftTargetProjectIdRef.current = targetProjectId ?? null
     setDraftConvId(id)
     setMessagesByConv((prev) => ({ ...prev, [id]: [] }))
     setActiveConvId(id)
     return id
-  }, [])
+  }, [promoteProjectDraft])
 
   // Convert the draft into a real conversation at first send: add its meta to the
   // list (sidebar row appears) and clear the draft. No create op — the chat route
@@ -383,12 +408,22 @@ export function useConversationStore(
 
   // ── Project mutators (Phase M — memory scoping) ─────────────────────────────
 
+  // New Project: with no name given, open a frontend-only DRAFT (same contract as
+  // createConversation) — nothing is created on Drive/Postgres and no op is
+  // enqueued until the draft is promoted by a rename, description edit, or a chat
+  // started inside it. At most one draft exists, so repeat "New project" clicks
+  // just re-focus it: no duplicate empty projects. A caller that does pass a name
+  // (e.g. an inline name-first creation flow) creates for real immediately, as
+  // before.
   const createProject = useCallback((name?: string): string => {
+    const existingDraft = draftProjectIdRef.current
+    if (existingDraft) return existingDraft
     const id = newConvId()
     const now = new Date().toISOString()
+    const trimmed = name?.trim()
     const project: CachedProject = {
       id,
-      name: name?.trim() || 'New Project',
+      name: trimmed || 'New Project',
       created_at: now,
       updated_at: now,
       chat_count: 0,
@@ -396,7 +431,12 @@ export function useConversationStore(
       _localUpdatedAt: Date.now(),
     }
     setProjects((prev) => [project, ...prev])
-    syncRef.current?.enqueue({ kind: 'createProject', projectId: id, name: project.name })
+    if (trimmed) {
+      syncRef.current?.enqueue({ kind: 'createProject', projectId: id, name: trimmed })
+    } else {
+      draftProjectIdRef.current = id
+      setDraftProjectId(id)
+    }
     return id
   }, [])
 
@@ -404,20 +444,29 @@ export function useConversationStore(
     setProjects((prev) =>
       prev.map((p) => (p.id === id ? { ...p, name, _localUpdatedAt: Date.now() } : p)),
     )
-    syncRef.current?.enqueue({ kind: 'renameProject', projectId: id, name })
-  }, [])
+    if (draftProjectIdRef.current === id) {
+      promoteProjectDraft(id, name)
+    } else {
+      syncRef.current?.enqueue({ kind: 'renameProject', projectId: id, name })
+    }
+  }, [promoteProjectDraft])
 
   const updateProjectDescription = useCallback((id: string, description: string) => {
     setProjects((prev) =>
       prev.map((p) => (p.id === id ? { ...p, description, _localUpdatedAt: Date.now() } : p)),
     )
+    if (draftProjectIdRef.current === id) {
+      const draftProject = projectsRef.current.find((p) => p.id === id)
+      promoteProjectDraft(id, draftProject?.name ?? 'New Project')
+    }
     syncRef.current?.enqueue({ kind: 'updateProjectDescription', projectId: id, description })
-  }, [])
+  }, [promoteProjectDraft])
 
   // Cascade, mirroring the backend: removes the project and every chat inside
   // it (their memory chunks go too, server-side) — there is no undo.
   const deleteProject = useCallback(
     (id: string) => {
+      const wasDraft = draftProjectIdRef.current === id
       const containedIds = new Set(
         conversationsRef.current.filter((c) => c.project_id === id).map((c) => c.id),
       )
@@ -434,7 +483,13 @@ export function useConversationStore(
         if (remaining.length > 0) selectConversation(remaining[0].id)
         else createConversation()
       }
-      syncRef.current?.enqueue({ kind: 'deleteProject', projectId: id })
+      if (wasDraft) {
+        // Never left the frontend — nothing to delete server-side.
+        draftProjectIdRef.current = null
+        setDraftProjectId(null)
+      } else {
+        syncRef.current?.enqueue({ kind: 'deleteProject', projectId: id })
+      }
     },
     [removeLru, selectConversation, createConversation],
   )
@@ -443,8 +498,12 @@ export function useConversationStore(
     setConversations((prev) =>
       prev.map((c) => (c.id === convId ? { ...c, project_id: projectId, _localUpdatedAt: Date.now() } : c)),
     )
+    if (draftProjectIdRef.current === projectId) {
+      const draftProject = projectsRef.current.find((p) => p.id === projectId)
+      promoteProjectDraft(projectId, draftProject?.name ?? 'New Project')
+    }
     syncRef.current?.enqueue({ kind: 'moveChat', convId, projectId })
-  }, [])
+  }, [promoteProjectDraft])
 
   const removeChatFromProject = useCallback((convId: string) => {
     setConversations((prev) =>
@@ -502,6 +561,7 @@ export function useConversationStore(
     pendingIds,
     syncError,
     draftConvId,
+    draftProjectId,
     streamingConvIds,
     selectConversation,
     createConversation,

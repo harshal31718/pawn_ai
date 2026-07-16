@@ -17,24 +17,27 @@ const SORT_LABELS: Record<SortKey, string> = {
 export default function ProjectsGalleryPage() {
   const navigate = useNavigate()
   const { store } = useOutletContext<LayoutContext>()
-  const { projects, createProject } = store
+  const { projects, createProject, draftProjectId } = store
 
   const [query, setQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('updated')
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
 
   const filtered = useMemo(() => {
+    // The draft project (unnamed "New project" not yet promoted) is intentionally
+    // frontend-only and shouldn't clutter the gallery until it's actually named.
+    const visible = draftProjectId ? projects.filter((p) => p.id !== draftProjectId) : projects
     const q = query.trim().toLowerCase()
     const list = q
-      ? projects.filter(
+      ? visible.filter(
           (p) => p.name.toLowerCase().includes(q) || (p.description ?? '').toLowerCase().includes(q),
         )
-      : projects
+      : visible
     return [...list].sort((a, b) => {
       if (sortKey === 'name') return a.name.localeCompare(b.name)
       return new Date(b.updated_at ?? b.created_at).getTime() - new Date(a.updated_at ?? a.created_at).getTime()
     })
-  }, [projects, query, sortKey])
+  }, [projects, draftProjectId, query, sortKey])
 
   function handleNewProject() {
     const id = createProject()
