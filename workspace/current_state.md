@@ -2,6 +2,30 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q1.2 — fp16 VAE fix (black-image killer) — DONE (2026-07-16).** Second
+root cause of the user's image-quality report: both SDXL Kaggle notebook templates
+loaded the stock fp16 SDXL VAE, which overflows fp16 precision (>65504 activations
+→ inf/NaN) and produces random black/broken decodes. Fixed in both the cold
+one-shot template (`image_sdxl/notebook.ipynb`, cell `ac47af57`) and the
+warm-session template (`image_sdxl_session/notebook.ipynb`, cell-2): load
+`madebyollin/sdxl-vae-fp16-fix` via `AutoencoderKL.from_pretrained(...,
+torch_dtype=torch.float16)` and assign `pipe.vae = vae` BEFORE the pipeline moves
+to cuda, so the fixed VAE travels to GPU with the rest of the pipeline. Loud
+`[pawn]` log line on load, matching the notebooks' existing diagnostic convention
+(interim runtime download per the plan's acceptable option — not yet added to the
+bundled Kaggle dataset). FLUX templates deliberately untouched (different VAE
+architecture, unaffected). New `backend/tests/test_kaggle_cold_templates.py`
+(mirrors the existing session-template test pattern) + a new test in
+`test_kaggle_session_templates.py`, both asserting the fix is present + correctly
+ordered before `.to("cuda")` on SDXL templates only, and absent from FLUX's. 494
+backend tests green (up from 488). code-reviewer PASS (0 findings — verified VAE
+assignment ordering, cell-0 invariant untouched, JSON validity, FLUX isolation).
+No security-auditor run (notebook template edit, no secrets/config/auth touched).
+Not yet live-verified against real Kaggle — folded into Q1.5's combined
+fixed-seed benchmark once Q1.3/Q1.4 land. See
+`workspace/plan/imageLab/phase_Q1_generation_fixes.md` §Q1.2 and `dev_log.md`'s
+2026-07-16 "imageLab Q1.2" entry.
+
 **imageLab Q1.1 — SDXL-native resolution buckets (headline quality fix) — DONE
 (2026-07-16).** Root cause of the user's "half-generated/deformed bodies" report:
 `AdvancedParams.tsx`'s aspect-ratio dropdown sent SD1.5-era sizes (512×512,

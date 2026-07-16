@@ -6,6 +6,71 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q1.2: fp16 VAE fix (black-image killer)
+
+Second step of the imageLab Quality Q1 correctness pass, via the build-step skill
+in auto mode. Root cause (from the same prior-session code audit as Q1.1): both
+SDXL Kaggle notebook templates loaded the pipeline with the stock fp16 SDXL VAE —
+this VAE's decoder produces activations that exceed fp16's ~65504 max, overflowing
+to inf/NaN, which manifests as random black or visibly broken/corrupted image
+decodes. Well-documented community issue with the base SDXL VAE; the fix
+(`madebyollin/sdxl-vae-fp16-fix`, a numerically-rescaled version of the same VAE
+weights that stays in fp16 range) is the standard mitigation.
+
+**Fix, both SDXL templates.** `image_sdxl/notebook.ipynb` (cold one-shot, cell
+`ac47af57`) and `image_sdxl_session/notebook.ipynb` (warm session, cell-2) both
+gained: `AutoencoderKL` added to the existing `from diffusers import
+AutoPipelineForText2Image` import line; after the pipeline's
+`from_pretrained(...)` call and before `pipe = pipe.to("cuda")`, load
+`vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix",
+torch_dtype=torch.float16)` and assign `pipe.vae = vae`. Ordering matters —
+assigning before `.to("cuda")` means the single existing `.to("cuda")` call moves
+the whole pipeline (including the swapped-in VAE) to GPU together, rather than
+needing a second explicit `.to("cuda")` just for the VAE. Added a
+`print("[pawn] loading fp16-safe VAE (madebyollin/sdxl-vae-fp16-fix)...")` line
+matching the notebooks' existing `[pawn]`-prefixed diagnostic-log convention
+(used elsewhere for supervisor/PATCH failures) — the plan's "acceptable interim"
+option, since bundling the ~335MB VAE weights into the Kaggle dataset itself
+(the "preferred" option, avoiding any runtime download per the project's BEAM
+no-runtime-downloads rule) wasn't done this pass. FLUX notebooks were not touched
+at all — FLUX uses a different VAE architecture and was never affected by this
+bug.
+
+**Notebook edits done via a Python script, not manual JSON editing.** `.ipynb`
+files are JSON with `source` as a list of per-line strings; hand-editing raw
+JSON text risks subtle formatting corruption (extra/missing `\n` entries,
+mismatched cell array boundaries). Wrote a small script that loads each notebook
+with `json.load`, finds the exact cell by id (`ac47af57` for cold,
+`cells[2]` for session), splices the new lines in at the right point by matching
+the existing `pipe = pipe.to("cuda")` line, then re-serializes with
+`json.dump(..., indent=1)`. Verified both files re-parse as valid JSON and every
+cell still `compile()`s cleanly after the edit.
+
+**Tests.** New `backend/tests/test_kaggle_cold_templates.py` (6 tests) — no test
+file previously existed for the cold one-shot templates at all (only the
+warm-session ones had `test_kaggle_session_templates.py`), so this establishes
+the same pattern (valid JSON, payload placeholder present, cells compile) plus
+the new `test_sdxl_cold_template_has_fp16_vae_fix` (asserts the fix is present +
+correctly ordered on SDXL, and explicitly absent on FLUX — a regression guard
+against the SDXL-only fix ever leaking into the FLUX template). Added the mirror
+test `test_sdxl_session_template_has_fp16_vae_fix` to the existing session-
+template test file. 494 backend tests green (up from 488,
+`docker compose exec backend pytest -q` — rebuild required first, `backend/tests/`
+isn't bind-mounted). code-reviewer PASS with 0 findings — independently verified
+the VAE-before-cuda ordering in both notebooks, confirmed the session template's
+cell-0 (the model-agnostic payload/supervisor code, which an existing test
+requires stay byte-identical across every warm-session template) was untouched
+by this edit, confirmed no unintended JSON reformatting of unrelated cells/
+metadata from the re-serialization script, and confirmed FLUX templates contain
+zero mentions of `madebyollin`/`AutoencoderKL`. No security-auditor run (notebook
+template edit only, no secrets/config/auth touched).
+
+**Not yet done:** live verification (20 consecutive warm generations, zero black
+frames) — that's Q1.5's fixed-seed A/B benchmark, still deferred until Q1.3/Q1.4
+land so Q1's full correctness pass gets one combined live check.
+
+---
+
 ### [2026-07-16] — imageLab Q1.1: SDXL-native resolution buckets (headline quality fix)
 
 First step of the imageLab Quality plan (`workspace/plan/imageLab/`), run via the

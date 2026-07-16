@@ -111,6 +111,26 @@ def test_session_template_cell1_wraps_pip_install(session_notebooks):
         assert "try:" in src and "dependency install failed" in src, path
 
 
+def test_sdxl_session_template_has_fp16_vae_fix(session_notebooks):
+    """Q1.2: the stock fp16 SDXL VAE overflows fp16 (>65504 activations ->
+    inf/NaN), producing random black/broken decodes. The SDXL session
+    template's model-load cell (cell-2) must load madebyollin's fp16-fix VAE
+    and assign it onto the pipeline before it's moved to cuda. FLUX uses a
+    different VAE architecture and is deliberately unaffected."""
+    for path, nb in session_notebooks.items():
+        src = "".join(nb["cells"][2]["source"])
+        if "sdxl" in path.name.lower() or "sdxl" in str(path).lower():
+            assert "madebyollin/sdxl-vae-fp16-fix" in src, f"{path} missing the VAE fix"
+            assert "pipe.vae = vae" in src, f"{path} missing the VAE assignment"
+            assert src.index("pipe.vae = vae") < src.index('pipe = pipe.to("cuda")'), (
+                f"{path}: VAE must be assigned before the pipeline moves to cuda"
+            )
+        else:
+            assert "madebyollin/sdxl-vae-fp16-fix" not in src, (
+                f"{path}: SDXL-only VAE fix leaked into a non-SDXL template"
+            )
+
+
 def test_session_template_supervisor_has_unreachable_self_exit(session_notebooks):
     """The supervisor must eventually give up and free the GPU if PostgREST
     is unreachable for the kernel's entire life -- otherwise a dead-tunnel

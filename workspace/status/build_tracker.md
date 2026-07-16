@@ -66,7 +66,19 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     SDXL and FLUX default to 3:4 — 896×1152, all six buckets render correctly in the
     dropdown. Real Kaggle image-gen A/B still folded into Q1.5's combined benchmark
     once Q1.2–Q1.4 land.
-  - `[ ]` Q1.2 — fp16 VAE fix (black-image killer)
+  - `[x]` **Q1.2 — fp16 VAE fix (black-image killer)** ✓ (2026-07-16)
+    Both SDXL notebooks (cold `image_sdxl/notebook.ipynb` + warm-session
+    `image_sdxl_session/notebook.ipynb`) now load `madebyollin/sdxl-vae-fp16-fix`
+    via `AutoencoderKL.from_pretrained(..., torch_dtype=torch.float16)`, assigned
+    to `pipe.vae` before `.to("cuda")`. FLUX untouched (confirmed via diff — zero
+    changes). New `test_kaggle_cold_templates.py` (6 tests, first test coverage
+    for the cold templates at all) + 1 new test in `test_kaggle_session_templates.py`,
+    both asserting fix-present + correct-order on SDXL, fix-absent on FLUX. 494
+    backend tests green (up from 488). code-reviewer PASS (0 findings).
+    build-validator PASS. No security-auditor run (notebook template edit, no
+    secrets/config/auth touched). Full record: `dev_log.md`'s 2026-07-16
+    "imageLab Q1.2" entry, `current_state.md`. Not yet live-verified against
+    real Kaggle — folded into Q1.5's combined benchmark once Q1.3/Q1.4 land.
   - `[ ]` Q1.3 — Scheduler + tuned defaults
   - `[ ]` Q1.4 — Seed control + FLUX negative-prompt honesty
   - `[ ]` Q1.5 — A/B benchmark set + live verification
