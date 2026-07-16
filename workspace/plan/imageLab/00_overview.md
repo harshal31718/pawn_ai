@@ -35,9 +35,8 @@ research-backed quality program executed entirely on the existing Kaggle pipelin
 | `phase_Q4_detail_post.md` | two-pass hires fix, face detailer, refiner, FreeU — the polish layer |
 | `phase_G1_generations_management.md` | feature (not quality): delete/edit/reorder generations in the Generations tab, requested 2026-07-15 |
 
-Related but living elsewhere: **F-1 chat image-gen tool** in
-`plan/plan_feature_additions_2026-07-15.md` (feature, not quality — unchanged);
-**videoLab** consumes imageLab images ("Animate") so every Q-phase win compounds there.
+Related but living elsewhere: **F-1 chat image-gen tool** in `plan/chat/` (feature,
+not quality — unchanged).
 
 ## 4. Ground rules
 

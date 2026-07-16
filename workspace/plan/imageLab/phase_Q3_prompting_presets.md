@@ -6,14 +6,20 @@ research findings. Everything here is prompt-plumbing; no new weights except opt
 negative embeddings.
 
 **Read first:** `01_research_quality.md` §5, `routes/generate.py` (`STYLE_SUFFIXES`),
-`core/normalize.py` (LLM plumbing), videoLab v2 `phase_P6_orchestration_quality.md` §P6.1
-(same enhancer design — imageLab lands it first, videoLab reuses).
+`core/normalize.py` (LLM plumbing).
 
 **Branch:** `dev`. Steps Q3.1–Q3.4.
 
 ---
 
 ## Q3.1 — LLM prompt enhancer
+
+**Superseded by `workspace/plan/plan_vision_prompt_enhancement.md` (2026-07-15)** — that
+plan makes this vision-aware (analyzes an attached img2img reference image, not just
+text) and formalizes the Groq→Gemini→raw-prompt fallback chain this section left
+unspecified. The per-model research below (SDXL keyword-scaffold vs FLUX
+natural-language) is unchanged and feeds that plan's §3.3 prompt-schema design — read
+this section for the research, the new plan for the actual mechanics/build order.
 
 **Files:** new `backend/app/core/image_prompting.py`, `routes/generate.py`,
 `frontend` composer toggle, tests.
@@ -45,9 +51,9 @@ logic: default + user negative concatenated unless user opts out), UI hint, test
 
 ## Q3.3 — Style presets rebuilt (imageLab's mini preset registry)
 
-**Files:** `data/registry/image_presets.json` (new — mirrors videoLab v2 P4's design at
-smaller scale), `routes/generate.py` (replace the hardcoded `STYLE_SUFFIXES` dict with
-registry load; keep old keys working), composer chips UI, tests.
+**Files:** `data/registry/image_presets.json` (new), `routes/generate.py` (replace the
+hardcoded `STYLE_SUFFIXES` dict with registry load; keep old keys working), composer
+chips UI, tests.
 
 - Categories: style (photoreal, cinematic, analog film, studio product, golden hour,
   editorial), look (b&w, warm, moody), plus per-preset optional negative additions and

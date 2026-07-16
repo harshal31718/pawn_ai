@@ -60,7 +60,7 @@ export default function ProjectSection({
 
   return (
     <div className="px-2 pb-1">
-      <div className="flex items-center justify-between px-1 py-1">
+      <div className="sticky top-0 z-10 bg-theme-surface flex items-center justify-between px-1 py-1">
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
@@ -81,7 +81,7 @@ export default function ProjectSection({
         </button>
       </div>
       {!collapsed && (
-        <div className="space-y-0.5">
+        <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
           {projects.map((project) => (
             <ProjectRow
               key={project.id}

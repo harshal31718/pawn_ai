@@ -56,8 +56,7 @@ proves itself on the benchmark set before becoming part of the default boost rec
   still show base-detail weakness after hires+face+FreeU — fine-tuned checkpoints (Q2)
   typically don't need it, and it costs a second model load on T4.
 - Closeout: re-run the full benchmark set (sdxl/juggernaut/realvis × boost on/off);
-  archive the grid in Drive; update dev_log + this folder's overview success criteria;
-  fold learnings back into videoLab (shared prompting/preset patterns).
+  archive the grid in Drive; update dev_log + this folder's overview success criteria.
 
 ---
 

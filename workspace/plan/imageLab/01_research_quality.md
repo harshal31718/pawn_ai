@@ -78,8 +78,7 @@ FLUX.1-dev (better than schnell) is non-commercial-licensed and 20–30 steps (s
   accepting and silently dropping it); realism descriptors ("amateur photo, natural skin
   texture, film grain") matter; frame as Subject → Action → Environment → Lighting → Style.
 - **LLM prompt enhancer** (Q3): PAWN already has `normalize.chat_complete` — a per-model
-  system prompt turns "a girl in a café" into a full photoreal scaffold. Same design as
-  videoLab v2 P6.1; imageLab gets it first, videoLab reuses it.
+  system prompt turns "a girl in a café" into a full photoreal scaffold.
 
 ## 6. Detail/polish techniques (Q4 menu, all Diffusers-native, T4-viable)
 

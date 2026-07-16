@@ -11,13 +11,43 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
-## Registered plans awaiting build (2026-07-15) — planning only, no steps started
+## Registered plans awaiting build (2026-07-15, re-ordered 2026-07-16) — planning only, no steps started
 
-- `[ ]` **videoLab V1–V4** — `workspace/plan/videoLab/` (read `00_overview.md` first;
-  V5 gated on the v2 decision point, V6 deferred). Steps V1.1–V4.4 get registered here
-  individually when a build session picks them up.
-- `[ ]` **videoLab 2.0 P1–P7** — `workspace/plan/videoLab/v2/` (after basic V1–V3 live;
-  recommended order P1 → P2 → P4 → P6-core → P3 → P5 → P7).
+**Cross-plan order: chat → imageLab.** videoLab is deferred — no plans to implement it
+for now; its plan folder (`workspace/plan/videoLab/`, V1–V6 + `v2/` P1–P7) is parked
+as-is and will only be picked up at the very end, after chat/ and imageLab/ are both
+done, per the user's instruction (see `workspace/plan/README.md`).
+
+- `[ ]` **Feature additions & fixes F-1/F-2/F-6/F-7/F-8/F-9/F-10** — `workspace/plan/chat/`
+  — **build first, ahead of imageLab** (see `workspace/plan/README.md`).
+  - `[ ]` F-1 chat image-gen agent tool (`phase_F1_image_generation.md`) — file recreated
+    2026-07-15 (lost in the `chat/` reorg, content recovered from git history).
+  - `[ ]` F-2 search-tab ModelSwitcher (`phase_F2_model_switcher.md`) — re-verified
+    2026-07-15, original premise did not reproduce against current code; needs the
+    user to re-confirm live before this is buildable.
+  - `[ ]` F-6 Groq default model (`phase_F6_groq_default.md`) — refined 2026-07-15,
+    scope narrowed to `pick_model_by_capability` only (its `pick_by_capability`
+    sibling has no production caller).
+  - `[ ]` F-7 agent half-generation fix (`phase_F7_agent_half_generation_fix.md`) —
+    root cause independently confirmed against current `graph.py` 2026-07-15.
+  - `[ ]` F-8 sync warning relocation (`phase_F8_sync_warning_relocation.md`) —
+    confirmed against current `Sidebar.tsx` 2026-07-15.
+  - `[x]` F-9 sidebar scroll bug + clumsy project/chat row styling
+    (`phase_F9_sidebar_scroll_and_project_ui.md`) — live-verified 2026-07-16 via
+    Chrome against the real `docker compose watch` stack: expanding both projects
+    with a short viewport pushed the flat chat list out of view, and scrolling the
+    shared region reached it while header/actions/profile stayed pinned; the
+    quieter nested-chat-row active state was confirmed visually. **Same session,
+    user-requested follow-up:** sticky "Projects"/"Chats" section-label rows within
+    that shared scroll region (`ProjectSection.tsx`'s header row and `Sidebar.tsx`'s
+    "Chats" label both gained `sticky top-0 z-10 bg-theme-surface`) — live-verified:
+    scrolling past the `asdgasd` project let `suiiiii` scroll underneath while the
+    "Projects" label stayed stuck to the top. `tsc --noEmit` + `npm run build` clean.
+  - `[ ]` F-10 Projects gallery page + sidebar cap (`phase_F10_projects_gallery_page.md`)
+    — plan-only, from the user's follow-up request; needs 3 open questions answered
+    (where description is edited, sidebar trigger for the gallery, card layout) before
+    it's buildable. Individual sidebar project-row click behavior must stay unchanged.
+  - `[x]` F-3 docs wording done 2026-07-15; F-4/F-5 parked, not registered.
 - `[ ]` **Image Lab open items I-2..I-5** — `workspace/plan/imageLab/open_items.md`
   (moved into the imageLab plan folder 2026-07-15). `[x]` I-1 FLUX OOM merged + live-verified
   2026-07-15 (real Kaggle FLUX generation succeeded, no CUDA OOM); I-2/I-4 need the user +
@@ -28,9 +58,21 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
   Q1.2), no scheduler configured (Q1.3), base-SDXL realism ceiling (Q2 photoreal
   checkpoint rows), no prompt scaffolding/negatives (Q3), no face/detail pass (Q4).
   Order Q1 → Q2 → Q3 → Q4; every step gated on the Q1.5 fixed-seed benchmark A/B.
-- `[ ]` **Feature additions F-1/F-2** — `workspace/plan/plan_feature_additions_2026-07-15.md`.
-  F-1 chat image-gen agent tool; F-2 search-tab ModelSwitcher (needs lock-vs-switch call).
-  `[x]` F-3 docs wording done 2026-07-15; F-4/F-5 parked, not registered.
+- `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
+  `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,
+  user-requested). Image+prompt → vision model analysis → refined prompt → generation
+  model, provider chain Groq (default) → Gemini (fallback) → raw prompt (final
+  fallback), for imageLab's img2img reference image. Supersedes imageLab Q3.1's
+  enhancer mechanics (its per-model prompt research is unchanged and feeds this plan's
+  §3.3). The plan file also scopes a videoLab reuse of this same plumbing — parked,
+  not active, until videoLab is picked back up at the end.
+  **Real prerequisite gaps found:** `llm_core`/`normalize.chat_complete` have no
+  multimodal (`image_url` content-part) support today; no vision-capable Groq model is
+  registered (current Groq rows are text-only); `ModelEntry` has no `supports_vision`
+  flag. **3 open questions for the user before building** (plan §5): exact live Groq
+  vision model id (registry-refresh at build time), default-on-for-every-generation vs
+  image-only trigger, and where Groq-specific provider-pinning logic should live (same
+  open question F-6 raised for orchestrator routing).
 - `[ ]` **Generations tab management (G1)** — `workspace/plan/imageLab/phase_G1_generations_management.md`
   (registered 2026-07-15, user-requested feature). Delete (queued/done/error; never running),
   edit a queued prompt, reorder the queue — needs a new `queue_pos` column + backend

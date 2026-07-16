@@ -6,6 +6,121 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — Chat build kicked off; F-9 live-verified + sticky sidebar section headers
+
+Cross-plan order set to chat → imageLab (videoLab deferred to the very end,
+moved out of the repo to `C:\Users\harsh\Desktop\PAWN_videoLab` — see the
+prior session's `plan/README.md`/`build_tracker.md` re-scoping). Started
+building `plan/chat/` per its suggested order, beginning with F-9.
+
+**F-9 (sidebar scroll bug + clumsy project/chat row styling) — live-verified.**
+Code for both fixes had already landed in an earlier session; this session
+exercised it for real via Chrome against the running `docker compose watch`
+stack (real account, 2 real projects, 7 real chats). Expanded both projects
+under a constrained sidebar height — the flat chat list was pushed out of
+view, and scrolling the shared `flex-1 min-h-0 overflow-y-auto` region
+(`Sidebar.tsx`) reached it while header/New chat/Image Lab/Search/profile
+card all stayed pinned, confirming the scroll-region fix holds. The nested
+chat row's quieter `bg-theme-brand/15` active state was visually confirmed
+against the top-level project row's full-strength active fill.
+
+**User-requested follow-up, same session:** lock the "Projects"/"Chats"
+section-label rows to the top of that shared scroll region while their own
+lists scroll underneath (classic sticky-section-header pattern). Added
+`sticky top-0 z-10 bg-theme-surface` to `ProjectSection.tsx`'s "Projects"
+header row and `Sidebar.tsx`'s "Chats" label — both are direct children of
+the same scroll container, so the hand-off between the two sticky headers
+works via plain CSS `sticky` semantics, no extra JS. Live-verified: scrolling
+past the `asdgasd` project let `suiiiii` scroll underneath while "Projects"
+stayed stuck at the top. `tsc --noEmit` + `npm run build` clean.
+See `plan/chat/phase_F9_sidebar_scroll_and_project_ui.md` §5.
+
+**Next up:** F-7 (agent half-generation fix), per `plan/chat/00_overview.md`'s
+suggested order.
+
+---
+
+### [2026-07-15] — Registry refresh: full provider catalog sweep + benchmark-grounded tiering + `registry-refresh` skill rewrite
+
+User-requested: the registry was under-using free-tier providers (only Gemini
+Flash/Flash-Lite from Google, 3 models from Groq, etc.) and the existing
+`registry-refresh` skill only diffed against already-known models rather than
+enumerating each provider's full current catalog, with capability-level
+tiering based on a naming/size guess instead of real benchmark data. Ran 6
+parallel research passes (one per provider: google, groq, cerebras,
+huggingface+github, openrouter; one for benchmark tiering via Artificial
+Analysis Intelligence Index v4.1 + LMArena) and applied the findings directly
+(user pre-approved apply-without-pausing for this run).
+
+**3 real production bugs found and fixed:** Groq's `deepseek-r1-distill-llama-70b`
+was fully decommissioned 2026-02-27 — PAWN's endpoint was still `active: true`
+and would have errored on every call; Cerebras deprecated `llama-3.3-70b` and
+`qwen-3-32b` specifically on that provider (2026-02-16) — that Cerebras
+endpoint stayed wrongly active for one of them (`qwen-3-32b`'s Cerebras
+endpoint) with a stale RPM value (registry said 30, Cerebras's current docs
+say all 3 of its models share 5 RPM/30K TPM/1M TPD); two OpenRouter `:free`
+models PAWN relied on (`llama-3.3-70b-instruct:free`, `deepseek-r1:free`) have
+rotated out of the free catalog entirely (corroborated via two independent
+fetches of `GET /api/v1/models`) — both already read `active: false` from an
+earlier stale check, left as-is, `last_verified` bumped.
+
+**New models added (9), all `active: true`:** `llama-3.1-8b-instant` (groq,
+fast), `gpt-oss-20b` (groq, fast), `llama-4-scout` (groq, balanced,
+**vision-capable — first `supports_vision: true` entry**, preview status),
+`gemma-4-31b` (cerebras, balanced, vision-capable, preview), `gemini-2.5-pro`
+(google, research, vision-capable, tight free limits — 5 RPM/100 RPD — placed
+after the more generous existing research-tier entries in file order so
+internal role resolution doesn't prefer it first), and 5 experimental
+OpenRouter `:free` models found via two corroborated fetches of the public
+models API: `north-mini-code` (cohere, fast), `hy3` (tencent, research/
+reasoning), `laguna-xs`/`laguna-m` (poolside, research/reasoning),
+`nemotron-3-ultra`/`nemotron-3-nano-omni-reasoning` (nvidia, research/
+reasoning) — all appended after established research-tier models
+(deepseek-r1, glm-4.7) in file order given their unfamiliar/low-confidence
+sourcing (unrecognized model families, no benchmark-leaderboard hit — flagged
+in `capability_tags`/display name as "experimental" for future review). Also
+added a Groq endpoint for the existing `qwen-3-32b` model (Cerebras's now
+deprecated for it) and corrected `qwen-3-32b`'s `capability_level` from
+`balanced` to `fast` per Artificial Analysis's Intelligence Index (score 9,
+non-reasoning — same bracket as Llama 3.3 70B) — also flipped the model back
+to `active: true` now that it has a live Groq endpoint. `deepseek-r1-distill`
+similarly corrected `balanced` → `fast` (index 10, "distilled" reasoning
+lineage behaves like a fast-tier model) though it stays `active: false`
+pending a live Groq vision-model-class replacement or reactivation.
+
+**Skipped, not added (sourcing too weak to trust):** several GitHub Models
+candidates (gpt-4o, gpt-4.1, o4-mini, Phi-4, Mistral-large-2411,
+mistral-small-3.1) — GitHub's own catalog docs page 404'd for the research
+pass and only third-party corroboration existed; several HuggingFace-routed
+models (DeepSeek-V3.1/V3.2, Qwen2.5-72B, Phi-4 via Featherless/DeepInfra) —
+those backends are effectively paid-only through HF's router even though the
+same models are sometimes free directly from their own provider. Gemini
+3.5 Flash / 3.1 Flash-Lite / Gemma-3-via-Google-AI-Studio — also skipped:
+rate limits unconfirmed (Google's own rate-limits page no longer publishes
+numbers) and Gemma-3-via-Google reportedly 429s immediately for some free
+accounts per developer forum reports.
+
+**Code (one-time prerequisite, not registry data):** `ModelEntry` gained
+`supports_vision: bool = False` (`registry/schemas.py`); `resolver.
+pick_model_by_capability` gained `require_vision: bool = False` mirroring the
+existing `require_tools` param (`resolver.py`) — enables PAWN's planned
+vision-grounded prompt enhancer (`plan_vision_prompt_enhancement.md`) to
+filter for a vision-capable model. Not wired into any route yet — that's the
+separate plan's own build step. 438 backend tests green (`docker compose exec
+backend pytest`), registry JSON validated with `json.load`.
+
+**Skill rewritten:** `.claude/skills/registry-refresh/SKILL.md` — the old
+version only diffed against already-known models and used a crude naming/size
+heuristic for capability tiering; it now mandates enumerating each provider's
+FULL current catalog every run (not just checking known models) and grounding
+`fast`/`balanced`/`research` in an actual benchmark leaderboard (LMArena /
+Artificial Analysis Intelligence Index), plus documents the specific gaps
+this session found (silent Groq/Cerebras deprecations, OpenRouter's
+free-catalog churn) as the reason for the rewrite. Cadence: run at least
+monthly.
+
+---
+
 ### [2026-07-15] — Branch cleanup (docs/deployment-plan, worktree-flux-oom-fix merged + deleted) + FLUX OOM fix live-verified
 
 Repo housekeeping: 4 branches existed (`dev`, `main`, `docs/deployment-plan`,

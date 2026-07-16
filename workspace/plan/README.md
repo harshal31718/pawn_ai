@@ -1,26 +1,39 @@
-# workspace/plan — Start Here (written 2026-07-15)
+# workspace/plan — Start Here (written 2026-07-15, re-ordered 2026-07-16)
 
 Entry point for any agent picking up planned work. Every plan folder is self-contained
 (read its `00_overview*.md` first); this file only adds the cross-plan ordering and the
 human-dependency list that lives nowhere else.
 
-> **Top recommendation: start with imageLab Q1** — it's the smallest diff with the biggest
-> visible payoff (kills the half-generated/black/unreal image flaws), and its notebook
-> recipes (resolution buckets, VAE fix, scheduler) feed straight into videoLab's templates.
+> **Top recommendation: start with `chat/`.** Cross-plan order is now: **chat → imageLab**.
+> **videoLab is deferred — no plans to implement it for now; it will only be picked up
+> at the very end**, once `chat/` and `imageLab/` are both done. Its plan files stay put
+> in `videoLab/` untouched; nothing else in this workspace should reference it in the
+> meantime.
 
 ## Recommended cross-plan order
 
-1. **imageLab Q1** (`imageLab/phase_Q1_generation_fixes.md`) — smallest diffs, biggest
-   user-visible win (fixes half-generated/black/soft images). Do before videoLab: the
-   notebook recipes (buckets, VAE, scheduler) carry into videoLab templates, and videoLab's
-   "Animate" feature consumes imageLab output.
-2. **imageLab I-1** (`imageLab/open_items.md`) — FLUX OOM: rebase `worktree-flux-oom-fix`,
+1. **chat/ F-9** (sidebar scroll bug) — **fixes already applied in code 2026-07-15**,
+   only needs live re-verification. **F-1 / F-2 / F-6 / F-7 / F-8 / F-10** — remaining
+   filler/feature items in `chat/`, see its own `00_overview.md` for order.
+2. **imageLab Q1** (`imageLab/phase_Q1_generation_fixes.md`) — smallest diffs, biggest
+   user-visible win (fixes half-generated/black/soft images).
+3. **imageLab I-1** (`imageLab/open_items.md`) — FLUX OOM: rebase `worktree-flux-oom-fix`,
    live-verify, merge. Quick, already written.
-3. **imageLab Q2 → Q3 → Q4** — realism checkpoints, prompting, polish.
-4. **videoLab V1 → V4** (`videoLab/`) — skip V5 unless GPU budget is zero (see v2 §3.8).
-5. **videoLab 2.0 P1 → P2 → P4 → P6-core → P3 → P5 → P7** (`videoLab/v2/`).
-6. **F-1 / F-2** (`plan_feature_additions_2026-07-15.md`) — anytime as filler; F-2 needs a
-   user decision first (below).
+4. **imageLab Q2 → Q3 → Q4** — realism checkpoints, prompting, polish. Q3.1's enhancer
+   mechanics are superseded by `plan_vision_prompt_enhancement.md` (below) — build the
+   shared vision plumbing there first if Q3 is picked up after it lands.
+5. **Vision-grounded prompt enhancement** (`plan_vision_prompt_enhancement.md`) — imageLab
+   plumbing (image+prompt → vision-model refine → generation model, Groq→Gemini→raw
+   chain); build before/alongside imageLab Q3 once its 3 open questions are answered.
+   (The plan file's own text also scopes a videoLab reuse of this plumbing — out of
+   scope until videoLab is picked back up; treat those sections as parked, not active.)
+
+**videoLab — deferred to the very end, not currently planned for implementation.** Its
+plan folder (`videoLab/`, phases V1–V6, and `videoLab/v2/`, phases P1–P7) stays exactly
+where it is with no code-side dependency on it; once `chat/` and `imageLab/` are fully
+done, revisit `videoLab/00_overview.md` to resume. At that point the user intends to
+move the `videoLab/` folder out of this application entirely, so treat anything inside
+it as self-contained and not to be cross-referenced from other plan files.
 
 ## Rules that apply to ALL of it
 
@@ -34,18 +47,23 @@ human-dependency list that lives nowhere else.
 ## Needs the USER, not an agent (blockers to surface early)
 
 - Kaggle creds + a restarted cloudflared tunnel for ALL live verifications
-  (imageLab I-2/I-4, Q-phase A/Bs, videoLab V1.5/V2.4).
-- Publishing Kaggle weight datasets (one-time per model: Wan2.2-5B, Juggernaut, RealVis…).
-- F-2 decision: search-tab model switcher — lock-with-tooltip vs switchable.
-- videoLab 2.0: fal/Replicate/RunPod keys + a monthly budget number (P1 default $25).
+  (imageLab I-2/I-4, Q-phase A/Bs).
+- Publishing Kaggle weight datasets (one-time per model: Juggernaut, RealVis…).
+- F-2 decision: search-tab model switcher — re-verify it still reproduces before
+  deciding lock-with-tooltip vs switchable (didn't reproduce against current code as
+  of 2026-07-15).
+- Vision prompt enhancement: confirm the currently-live free-tier Groq vision model id,
+  whether enhancement is default-on for every generation or image-only, and where
+  Groq-specific provider-pinning logic should live (`plan_vision_prompt_enhancement.md` §5).
 - Manual Drive cleanup: merge duplicate "PAWN" root folders; delete orphaned
   `pawn-image-flux-1-schnell` kernel.
 - Prod deploys (imageLab I-3) only in an explicit deployment session — standing instruction.
 
 ## Folder map
 
+- `chat/` — feature additions + bug fixes F-1/F-2/F-6..F-10 + open items
 - `imageLab/` — quality program Q1–Q4 + open items (I-1..I-5)
-- `videoLab/` — free-tier video gen V1–V6 (+ `v2/` premium tier P1–P7)
-- `plan_feature_additions_2026-07-15.md` — F-1..F-5 (F-3 done; F-4/F-5 parked)
+- `plan_vision_prompt_enhancement.md` — imageLab vision-grounded prompt-enhancement
+  plumbing (supersedes imageLab Q3.1 mechanics)
 - `plan_findings.md` — user's notepad, don't process without being asked
 - History of completed plans → `workspace/implemented_phases/`

@@ -1,6 +1,8 @@
 # PAWN — Current State
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
+
+**Chat F-9 — sidebar scroll bug + project/chat row styling + sticky section headers — DONE, live-verified (2026-07-16).** Build order is now chat → imageLab (videoLab deferred to the end, see `plan/README.md`); F-9 is the first chat step. Live-verified via Chrome against the real `docker compose watch` stack: the shared `flex-1 min-h-0 overflow-y-auto` scroll region (`Sidebar.tsx`) correctly reaches chats hidden behind expanded projects while header/actions/profile stay pinned; the nested chat row's quieter active state holds. User requested one more live UI tweak this session: lock the "Projects"/"Chats" section-label rows to the top while their lists scroll underneath — added `sticky top-0 z-10 bg-theme-surface` to both labels (`ProjectSection.tsx`, `Sidebar.tsx`), confirmed live. `tsc --noEmit` + `npm run build` clean. See `plan/chat/phase_F9_sidebar_scroll_and_project_ui.md` §5.
 
 **FLUX CUDA OOM fix (I-1) — DONE, merged + live-verified (2026-07-15).** `worktree-flux-oom-fix` (commit `ac1390b`, `max_memory={0:"13GiB",1:"13GiB"}` cap + `local_files_only=True` on both FLUX notebook templates) merged into `dev`; branch deleted. Also cleaned up the stale `docs/deployment-plan` branch (merged, deleted) and a stale remote-only `origin/imageLab` ref (already fully merged) — only `dev`/`main` remain. Full 438-test backend suite green post-merge. Live-verified same day: a real Kaggle FLUX.1-schnell generation completed successfully over a freshly-reconnected `cloudflared` tunnel, no CUDA OOM. (A first attempt failed, but root cause was an unrelated stale tunnel URL/network issue, not this fix; a separate slow-generation report traced to the UI's Inference Steps slider being manually set to 45 — FLUX.1-schnell is distilled for ~4 steps.) See `plan/imageLab/open_items.md` I-1 and `dev_log.md`'s 2026-07-15 branch-cleanup entry.
 
