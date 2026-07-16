@@ -35,19 +35,6 @@ def _lock_for(key: str) -> asyncio.Lock:
     return lock
 
 
-# Strong refs to in-flight background workers. asyncio keeps only WEAK refs to
-# tasks, so without holding them here a GC cycle could collect a running cold-job
-# worker mid-Kaggle-call and silently drop the job (it would stay 'running' until
-# reaped) — exactly the lost-result class of bug W.1 fixes.
-_bg_tasks: set[asyncio.Task] = set()
-
-
-def _spawn_bg(coro) -> None:
-    task = asyncio.create_task(coro)
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
-
-
 STYLE_SUFFIXES: dict[str, str] = {
     "photorealistic": ", RAW photo, 8K, ultra detailed, photorealistic, DSLR",
     "cinematic": ", cinematic shot, anamorphic lens, dramatic lighting, film grain",
@@ -162,7 +149,13 @@ async def generate_artifact(req: GenerateRequest, request: Request):
         except RuntimeError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         if created:
-            _spawn_bg(_run_cold_job_bg(user_id, req.model, job_id))
+            # F-1 fix: spawn via image_session's own shared lock/task registry
+            # (not this module's _lock_for/_spawn_bg) -- the chat generate_image
+            # tool creates cold jobs too, and both entry points must serialize
+            # against the SAME lock per (user, model), or two cold runs of the
+            # same model triggered from different places (Image Lab UI vs. chat)
+            # could race the same single-writer Kaggle kernel slug.
+            image_session.spawn_cold_job_bg(user_id, req.model, job_id)
         return {"job_id": job_id, "status": "queued"}
 
     else:
@@ -176,13 +169,6 @@ async def generate_artifact(req: GenerateRequest, request: Request):
 # Every generation is a durable image_jobs row tracked from the server, so the UI
 # survives refresh/tab-switch and the button derives from job state (no duplicate
 # submit). Supabase/Kaggle work is blocking → off-loaded to the threadpool.
-
-
-async def _run_cold_job_bg(user_id: str, model: str, job_id: str) -> None:
-    """Fire-and-forget worker: serialise same-model cold runs behind the per-
-    (user, model) lock (single-writer slug), then run the blocking round-trip."""
-    async with _lock_for(f"{user_id}:{model}"):
-        await run_in_threadpool(image_session.run_cold_job, job_id)
 
 
 @router.get("/jobs")

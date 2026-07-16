@@ -26,6 +26,7 @@ Every DB + Kaggle call here is BLOCKING -- routes invoke them via
 run_in_threadpool so the event loop is never stalled.
 """
 
+import asyncio
 import secrets as _secrets
 import sys
 import time as _time
@@ -34,6 +35,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 from psycopg.types.json import Json
+from starlette.concurrency import run_in_threadpool
 
 from app import config
 from app.constants import (
@@ -601,6 +603,41 @@ def run_cold_job(job_id: str) -> None:
             "update image_jobs set status = 'error', error = %s, done_at = %s where id = %s",
             (str(e)[:300], _iso(_now()), job_id),
         )
+
+
+# --- Shared cold-job bg-task/lock state (F-1 fix) ---------------------------
+# A kernel slug is single-writer, so two concurrent cold runs of the same
+# (user, model) -- however they were triggered -- must never overlap. This
+# used to be a per-caller-module lock/task-set (routes/generate.py had its
+# own copy, and the chat generate_image tool duplicated it again), which only
+# serialized runs triggered through the SAME entry point: a cold job started
+# from Image Lab and one started from chat for the same (user, model) at
+# roughly the same time could still race each other. Centralized here so
+# every caller shares the same lock/task registry regardless of entry point.
+_cold_job_locks: dict[str, asyncio.Lock] = {}
+_cold_job_bg_tasks: set[asyncio.Task] = set()
+
+
+def _cold_job_lock_for(key: str) -> asyncio.Lock:
+    lock = _cold_job_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _cold_job_locks[key] = lock
+    return lock
+
+
+def spawn_cold_job_bg(user_id: str, model: str, job_id: str) -> None:
+    """Fire-and-forget worker for a cold job, serialized per (user, model)
+    across every caller. Strong ref held in _cold_job_bg_tasks -- asyncio
+    only keeps a WEAK ref to a task, so without this a GC pass could collect
+    a running worker mid-Kaggle-call and silently drop the job."""
+    async def _run() -> None:
+        async with _cold_job_lock_for(f"{user_id}:{model}"):
+            await run_in_threadpool(run_cold_job, job_id)
+
+    task = asyncio.create_task(_run())
+    _cold_job_bg_tasks.add(task)
+    task.add_done_callback(_cold_job_bg_tasks.discard)
 
 
 def reap_stale_jobs(user_id: str) -> None:

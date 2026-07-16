@@ -208,11 +208,29 @@ def test_route_generate_image_is_non_blocking(client):
     assert args[:3] == ("test-user-id", "sdxl", "a city")
 
 
+def test_route_generate_image_spawns_shared_worker_on_create(client):
+    """When create_cold_job actually creates a new job (created=True), the
+    route spawns via image_session's shared spawn_cold_job_bg -- the same
+    entry point the chat generate_image tool uses."""
+    with patch("app.routes.generate.image_session.create_cold_job",
+               return_value=("j10", True)), \
+         patch("app.routes.generate.image_session.spawn_cold_job_bg") as bg:
+        resp = client.post("/generate", json={"modality": "image", "prompt": "a city"})
+    assert resp.status_code == 200
+    bg.assert_called_once_with("test-user-id", "sdxl", "j10")
+
+
 def test_route_generate_image_dedup_skips_worker(client):
-    """When create_cold_job de-dups (created=False), no new worker is dispatched."""
+    """When create_cold_job de-dups (created=False), no new worker is dispatched.
+
+    F-1 fix: the cold-job spawn now goes through image_session's own shared
+    lock/task registry (spawn_cold_job_bg), not a route-local helper -- shared
+    with the chat generate_image tool so two cold runs of the same (user,
+    model) triggered from different entry points can't race the same
+    single-writer Kaggle kernel slug."""
     with patch("app.routes.generate.image_session.create_cold_job",
                return_value=("dup", False)), \
-         patch("app.routes.generate._run_cold_job_bg") as bg:
+         patch("app.routes.generate.image_session.spawn_cold_job_bg") as bg:
         resp = client.post("/generate", json={"modality": "image", "prompt": "a city"})
     assert resp.status_code == 200
     assert resp.json()["job_id"] == "dup"

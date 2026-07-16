@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ImageJobChip from './ImageJobChip'
 import type { TraceEntry } from '../types'
 
 interface Props {
@@ -29,6 +30,18 @@ const TOOL_PAST: Record<string, string> = {
   get_datetime: 'Checked the time',
 }
 const SUBAGENTS = new Set(['researcher', 'summarizer', 'coder'])
+
+// F-1: generate_image's observation is "Image generation started (job_id=<id>). ..."
+// (see backend/app/agent/tools/generate_image.py) -- extracted here rather than
+// adding a dedicated TraceEntry field, since every other tool's result already
+// flows through the same plain-string `observation`.
+const IMAGE_JOB_ID_RE = /job_id=([\w-]+)/
+
+function extractImageJobId(entry: TraceEntry): string | null {
+  if (entry.name !== 'generate_image' || !entry.observation) return null
+  const match = entry.observation.match(IMAGE_JOB_ID_RE)
+  return match ? match[1] : null
+}
 
 function bareName(name: string): string {
   return name.startsWith('delegate_') ? name.slice('delegate_'.length) : name
@@ -160,6 +173,7 @@ function ToolCard({ item }: { item: ToolItem }) {
   const preview = item.entry.observation ?? item.entry.detail
   const nResults = item.results.length
   const hasBody = Boolean(preview) || nResults > 0
+  const imageJobId = extractImageJobId(item.entry)
 
   return (
     <div className="rounded-md border border-theme-ai-bubble-text/10 bg-theme-surface/40 my-1 overflow-hidden">
@@ -181,6 +195,11 @@ function ToolCard({ item }: { item: ToolItem }) {
         </span>
         {hasBody && <Chevron open={open} />}
       </button>
+      {imageJobId && (
+        <div className="px-2 pb-1.5">
+          <ImageJobChip jobId={imageJobId} />
+        </div>
+      )}
       {open && hasBody && (
         <div className="px-2 pb-1.5 border-t border-theme-ai-bubble-text/10">
           {preview && (

@@ -179,6 +179,80 @@ F-1 (chat image-gen tool), per `plan/chat/00_overview.md`'s suggested order.
 
 ---
 
+### [2026-07-16] — F-2 skipped (needs the user); F-1 chat image-gen tool + a user-reported auto-title bug fixed
+
+**F-2 skipped again**, per its own plan file's explicit gate: the file-level
+bug it originally described doesn't reproduce against current code, and
+pinning down the actual trigger (if any) needs the user to describe/
+reproduce the exact screen+flow — not something an engineering session can
+resolve by guessing. Moved on to F-1.
+
+**F-1 — chat-side `generate_image` agent tool.** New `agent/tools/
+generate_image.py`: checks `image_session.get_session_status` first (a live
+warm session serves in seconds via `submit_session_job`), else
+`create_cold_job` + a background worker, returning `job_id` immediately —
+never blocks the tool loop on a multi-minute Kaggle render. Gated in
+`registry.py` on a new `key_store.has_kaggle_creds(user_id)` helper
+(mirrors `has_search_key`'s pattern exactly). Frontend: new `components/
+ImageJobChip.tsx` polls `GET /generate/job/{id}` (the same `getJob` client
+helper Image Lab's own monitor uses) every 3s until a terminal status, then
+renders the image inline (or a plain error line) — wired into `TraceView.
+tsx`'s `ToolCard`, visible unconditionally rather than hidden behind the
+card's collapse chevron, since the image itself is the point.
+
+**code-reviewer found one real, worth-fixing WARN mid-build:** the tool's
+first draft duplicated `routes/generate.py`'s own per-(user,model) lock +
+background-task-set for cold jobs as a *separate* module-level dict inside
+`generate_image.py`. Both are keyed identically, but two different Python
+dicts don't coordinate with each other — a cold run triggered from chat and
+one triggered from the Image Lab UI for the *same* model at roughly the
+same time could still race the same single-writer Kaggle kernel slug,
+defeating the entire point of the lock. Fixed by centralizing the registry
+into `core/image_session.py` itself (new `spawn_cold_job_bg`,
+`_cold_job_lock_for`, module-level `_cold_job_locks`/`_cold_job_bg_tasks`);
+`routes/generate.py`'s own now-redundant `_run_cold_job_bg`/`_spawn_bg`/
+`_bg_tasks` were deleted (not left as dead duplicates) and its single call
+site now calls the shared function instead.
+
+12 new/updated tests (`test_agent_tools_image.py`: registry gating incl.
+partial-creds, warm/cold routing, dedup-no-respawn, graceful
+`NotConfiguredError` degradation, tool spec shape; `test_image_jobs.py`:
+the route's cold-job spawn now asserted against the shared
+`spawn_cold_job_bg`, both the spawn-on-create and skip-on-dedup cases).
+Full backend suite green (464 — one flaky `sqlite3.OperationalError:
+database is locked` failure on the first `pytest -n auto` run, confirmed
+non-reproducing on an immediate re-run, matching the known xdist/bind-mount
+issue already documented in `conftest.py`, not a regression). `tsc --noEmit`
++ `npm run build` clean. code-reviewer: PASS with the race above fixed, and
+one WARN accepted-not-closed — the plan's own §2.3 asked for "one
+route-level integration test" (a full `/chat` round-trip with a mocked LLM
+emitting a `generate_image` tool call); judged not worth adding this
+session given the tool handler is already thoroughly unit-tested and
+`graph.py`'s own tool-dispatch mechanics are covered generically elsewhere,
+with no live Kaggle stack available to make a true end-to-end test
+meaningful anyway. No security-auditor run (no new secret surface — reads
+existing Kaggle creds via the existing `key_store.get_kaggle`).
+
+**Also fixed, user-requested live from a screenshot showing every chat
+stuck as "New Chat":** a real bug in `routes/chat.py`'s `generate_title` —
+it called `resolver.pick_model_by_capability("fast")` **without
+`user_id`**, so the capability-level model pick skipped the BYOK key check
+entirely and could return a model the user holds no key for; the
+following `chat_stream` call (which correctly receives the real `user_id`)
+then failed on the missing key, and the bare `except Exception: pass`
+swallowed it, falling through to a hardcoded `"New Chat"` literal — forever,
+for every affected user, regardless of what they actually typed. Fixed:
+`user_id` now passed through to `pick_model_by_capability`; new
+`core/title.py`'s `derive_fallback_title(first_prompt)` (no LLM call —
+plain whitespace-collapse + word-boundary truncation, ellipsis if cut)
+replaces the bare `"New Chat"` fallback, so even a fully-failed title call
+still gives the user something real derived from what they asked. 8 new
+tests in `test_title.py` (the pure-function edge cases, plus two
+regression tests pinning the `user_id`-must-reach-`pick_model_by_capability`
+bug and the fallback-on-failure path). Full suite green.
+
+---
+
 ### [2026-07-15] — Registry refresh: full provider catalog sweep + benchmark-grounded tiering + `registry-refresh` skill rewrite
 
 User-requested: the registry was under-using free-tier providers (only Gemini

@@ -11,6 +11,7 @@ from app.exceptions import NotConfiguredError, ProviderError, NoEndpointError
 from app import events
 from app.constants import TRACE_MAX_ENTRIES
 from app.core import key_store
+from app.core.title import derive_fallback_title
 from app.core.drive_factory import call_drive, require_drive_for_user
 from app.storage import conversations_drive
 from app.memory.summarize import summarize_conversation_task
@@ -95,7 +96,14 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None  # optional conversation ID for persistence
 
 async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None) -> str:
-    """Helper to generate a short title for the conversation using the first user prompt."""
+    """Helper to generate a short title for the conversation using the first
+    user prompt. Falls back to a plain truncation of the prompt itself
+    (derive_fallback_title) on any failure — a real bug here (this used to
+    call pick_model_by_capability("fast") without user_id, so it could pick
+    a model the user holds no BYOK key for; chat_stream would then fail on
+    the real user_id and the exception was silently swallowed) left chats
+    stuck on the literal "New Chat" forever instead of ever showing anything
+    prompt-derived."""
     system_prompt = (
         "You are a helpful assistant. Generate a short title (max 4-5 words) "
         "for a conversation starting with the user message. Return ONLY the "
@@ -106,7 +114,7 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
         {"role": "user", "content": first_prompt}
     ]
     try:
-        model_id = resolver.pick_model_by_capability("fast")
+        model_id = resolver.pick_model_by_capability("fast", user_id=user_id)
         title_text = ""
         async for token in chat_stream(model_id, messages, resolver, rate_limiter, user_id=user_id):
             title_text += token
@@ -115,7 +123,7 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
             return cleaned
     except Exception:
         pass
-    return "New Chat"
+    return derive_fallback_title(first_prompt)
 
 async def auto_title_background_task(conv_id: str, first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None):
     """Background task to generate and save the conversation title.

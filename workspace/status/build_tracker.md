@@ -20,11 +20,20 @@ done, per the user's instruction (see `workspace/plan/README.md`).
 
 - `[ ]` **Feature additions & fixes F-1/F-2/F-6/F-7/F-8/F-9/F-10** — `workspace/plan/chat/`
   — **build first, ahead of imageLab** (see `workspace/plan/README.md`).
-  - `[ ]` F-1 chat image-gen agent tool (`phase_F1_image_generation.md`) — file recreated
-    2026-07-15 (lost in the `chat/` reorg, content recovered from git history).
+  - `[x]` F-1 chat image-gen agent tool (`phase_F1_image_generation.md`) — done
+    2026-07-16: new `agent/tools/generate_image.py`, gated on `key_store.has_kaggle_creds`;
+    new `components/ImageJobChip.tsx` renders the result inline in `TraceView.tsx`.
+    Found + fixed a real cross-module race (code-reviewer WARN) by centralizing the
+    cold-job lock/bg-task registry into `core/image_session.py`, shared by
+    `routes/generate.py` too. 12 new/updated tests, full suite green (464); `tsc`/build
+    clean. Not yet live-verified against a real Kaggle account (needs the user's own
+    creds).
   - `[ ]` F-2 search-tab ModelSwitcher (`phase_F2_model_switcher.md`) — re-verified
     2026-07-15, original premise did not reproduce against current code; needs the
-    user to re-confirm live before this is buildable.
+    user to re-confirm live before this is buildable. **Skipped again 2026-07-16**
+    (auto-build session) — this genuinely needs the user to describe/reproduce the
+    exact screen+flow, not an engineering call; moved on to F-1 instead per the
+    plan's own "drop this item if it's stale" allowance.
   - `[x]` F-6 Groq default model (`phase_F6_groq_default.md`) — done 2026-07-16
     in `resolver.py`'s `pick_model_by_capability` only (its `pick_by_capability`
     sibling untouched, no production caller). Plan's premise that `ModelEntry`
@@ -70,6 +79,17 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     (where description is edited, sidebar trigger for the gallery, card layout) before
     it's buildable. Individual sidebar project-row click behavior must stay unchanged.
   - `[x]` F-3 docs wording done 2026-07-15; F-4/F-5 parked, not registered.
+  - `[x]` **Chat auto-title fix (not a numbered F-item — user-requested live 2026-07-16,
+    from a screenshot showing every chat stuck as "New Chat")**. Root cause: `routes/
+    chat.py`'s `generate_title` called `resolver.pick_model_by_capability("fast")`
+    **without `user_id`**, so it could pick a model the user holds no BYOK key for;
+    the follow-up `chat_stream` call (which DOES get the real `user_id`) then failed
+    on the missing key, the exception was silently swallowed, and the hardcoded
+    `"New Chat"` was returned forever. Fixed: passes `user_id` through; new
+    `core/title.py`'s `derive_fallback_title(first_prompt)` (whitespace-collapsed,
+    word-boundary-truncated, no LLM call) is now the fallback instead of the bare
+    literal, so a chat gets a real prompt-derived name even if every model call
+    fails. 8 new tests (`test_title.py`), full suite green.
 - `[ ]` **Image Lab open items I-2..I-5** — `workspace/plan/imageLab/open_items.md`
   (moved into the imageLab plan folder 2026-07-15). `[x]` I-1 FLUX OOM merged + live-verified
   2026-07-15 (real Kaggle FLUX generation succeeded, no CUDA OOM); I-2/I-4 need the user +
