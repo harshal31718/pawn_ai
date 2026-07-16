@@ -43,3 +43,33 @@ today. Ask the user to reproduce it live (which exact screen/flow, and does the 
 reappear on reload) so the actual trigger (if any) can be pinned down, or drop this item
 if it's stale. Given the small size, this is fine as a filler item once re-confirmed —
 just not "recommended" at its original confidence level anymore.
+
+## 5. Re-confirmed 2026-07-16 — not a bug, closed
+
+User's concrete concern: with a Groq key configured, models like
+`llama-3.1-8b-instant`/`gpt-oss-20b` seemed to be missing from the switcher. Traced live
+via Chrome against the real stack:
+
+- Settings showed Google/Groq/Kaggle/HuggingFace/GitHub Models/Tavily all configured,
+  **OpenRouter not configured**.
+- Opened the switcher: both named example models were actually present and correctly
+  grouped (Fast tier). Counted the full dropdown (12 models) against the registry's 18
+  active user-facing models — the 6 missing ones (`north-mini-code`, `hy3`, `laguna-xs`,
+  `laguna-m`, `nemotron-3-ultra`, `nemotron-3-nano-omni-reasoning`) are exactly, and only,
+  the models whose sole provider is OpenRouter.
+- `AppContext.tsx`'s `availableModels = models.filter((m) => m.providers?.some((p) =>
+  configuredProviders.includes(p)))` is working exactly as designed — a model with no
+  configured provider can't actually be called, so hiding it from the picker is correct,
+  not a bug.
+- Confirmed the backend orchestrator is NOT more restrictive than this: `Resolver.
+  pick_model_by_capability` (used by the orchestrator/execute-loop/final-synthesis/
+  subagents, per F-6's investigation this same session) iterates the full
+  `registry.user_models()` list independent of anything the frontend chose to display —
+  it has the identical BYOK constraint (no key ⇒ genuinely can't call that provider), just
+  applied per-model instead of the frontend's per-provider pre-filter. Adding an
+  OpenRouter key would surface those 6 models in the picker AND make them available to
+  the orchestrator simultaneously, no code change needed either way.
+
+**Verdict: not a bug — closed.** No code changes made. If the user later wants unconfigured-
+provider models shown-but-locked (a discovery aid) instead of hidden, that's a real, scoped
+feature request for a future session, not a fix to this one.

@@ -28,12 +28,14 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     `routes/generate.py` too. 12 new/updated tests, full suite green (464); `tsc`/build
     clean. Not yet live-verified against a real Kaggle account (needs the user's own
     creds).
-  - `[ ]` F-2 search-tab ModelSwitcher (`phase_F2_model_switcher.md`) — re-verified
-    2026-07-15, original premise did not reproduce against current code; needs the
-    user to re-confirm live before this is buildable. **Skipped again 2026-07-16**
-    (auto-build session) — this genuinely needs the user to describe/reproduce the
-    exact screen+flow, not an engineering call; moved on to F-1 instead per the
-    plan's own "drop this item if it's stale" allowance.
+  - `[x]` F-2 search-tab ModelSwitcher (`phase_F2_model_switcher.md`) — **re-scoped
+    and closed 2026-07-16, not a bug.** User's concrete concern (Groq configured,
+    but some models missing from the switcher) traced live: the only models
+    missing are the 6 whose sole provider is OpenRouter (unconfigured) — `App
+    Context.tsx`'s provider-based filter is working as designed, and the backend
+    orchestrator (`pick_model_by_capability`) isn't more restrictive than the
+    picker either, confirmed against F-6's same-session resolver investigation.
+    No code changes.
   - `[x]` F-6 Groq default model (`phase_F6_groq_default.md`) — done 2026-07-16
     in `resolver.py`'s `pick_model_by_capability` only (its `pick_by_capability`
     sibling untouched, no production caller). Plan's premise that `ModelEntry`
