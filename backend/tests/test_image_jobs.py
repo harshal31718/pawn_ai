@@ -114,6 +114,27 @@ def test_create_cold_job_snaps_old_sd15_resolution_to_native_bucket():
     assert stored_params["height"] == 1344
 
 
+def test_create_cold_job_seed_round_trips_to_job_row():
+    """Q1.4: seed is stored on the cold job row unchanged, same as the warm
+    session path. NOTE: run_cold_job (below) does not currently forward
+    job.params to generate.generate_image() at all -- a pre-existing,
+    seed-independent gap on the cold one-shot path (see dev_log's Q1.4 entry)
+    -- so this only proves storage round-trips correctly, not that a cold
+    job's seed reaches Kaggle."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(seed=42),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["seed"] == 42
+
+
 # --- run_cold_job (the background worker) ------------------------------------
 
 

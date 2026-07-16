@@ -94,7 +94,27 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     (notebook + data-field edit, no secrets/config/auth touched). Full record:
     `dev_log.md`'s 2026-07-16 "imageLab Q1.3" entry, `current_state.md`. Not yet
     live-verified — folded into Q1.5's combined benchmark once Q1.4 lands.
-  - `[ ]` Q1.4 — Seed control + FLUX negative-prompt honesty
+  - `[x]` **Q1.4 — Seed control + FLUX negative-prompt honesty** ✓ (2026-07-16)
+    `ImageJobParams.seed`, warm-session notebooks (SDXL + FLUX) build a
+    `torch.Generator(device="cuda").manual_seed(seed)` and pass it into both
+    text2img/img2img branches. Frontend: seed field + 🎲 randomize in
+    `AdvancedParams.tsx`, seed shown + "reuse seed" action on Generations rows
+    (`GenerationsPanel.tsx` → `triggerReuseSeed` on `ImageGenerator.tsx`, mirrors
+    the existing Refine pattern). FLUX negative-prompt field now hidden entirely
+    (was always shown then silently dropped). **Real gap found + deliberately
+    scoped out:** the cold one-shot path never forwards `job.params` to Kaggle at
+    all (`generate.py`'s `generate_image()` only sends `{"prompt": prompt}`) — a
+    pre-existing, systemic issue predating Q1, not seed-specific; flagged, not
+    fixed here (see `dev_log.md`). Seed generator added only to the two
+    warm-session templates, not the two cold ones (verified empty grep). New
+    template-grep test (both SDXL+FLUX) + 2 backend round-trip tests + 5 frontend
+    tests. 499 backend tests green (up from 496), 13 frontend tests (up from 8),
+    `tsc`/build clean. code-reviewer PASS (0 CRITICAL/WARN — independently
+    re-verified the scoping decision against generate.py). build-validator PASS.
+    No security-auditor run (notebook + param-plumbing, no secrets/config/auth
+    touched). Full record: `dev_log.md`'s 2026-07-16 "imageLab Q1.4" entry,
+    `current_state.md`. **Q1.1-Q1.4 correctness pass complete.** Not yet
+    live-verified — Q1.5 next (needs the user + real Kaggle).
   - `[ ]` Q1.5 — A/B benchmark set + live verification
 - `[ ]` **Vision-grounded prompt enhancement (imageLab)** —
   `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,

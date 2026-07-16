@@ -6,6 +6,105 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-16] — imageLab Q1.4: seed control + FLUX negative-prompt honesty
+
+Fourth and final step of the imageLab Quality Q1 correctness pass, via the
+build-step skill in auto mode. Two independent asks from the plan: (1) fixed
+seed support so a user (or Q1.5's own A/B benchmark) can regenerate the exact
+same image for comparison; (2) stop showing a negative-prompt field for FLUX,
+which silently ignores it today (FLUX is guidance-free — CFG locked to 0 —
+and its pipeline call has no `negative_prompt` parameter at all).
+
+**Real discovery mid-step, correctly scoped out.** Before touching any
+notebook, checked whether the cold one-shot generation path even reads
+per-request params at all — it doesn't. `core/generate.py`'s
+`generate_image(user_id, prompt, model)` builds its Kaggle payload as
+literally `{"prompt": prompt}`; `image_session.run_cold_job()` calls it as
+`generate.generate_image(job["user_id"], job["prompt"], job["model"])` —
+`job["params"]` is fetched from the row but never passed in. This means every
+Advanced Param — not just seed — silently never reaches Kaggle on the cold
+path: Q1.1's resolution-bucket snapping, Q1.3's tuned CFG/scheduler, and this
+step's seed/negative-prompt work are all effectively warm-session-only
+features today, even though the cold path's job row happily stores whatever
+params the user picked. This is a pre-existing, systemic gap that predates
+the entire Q1 plan and isn't something a "seed control" step should silently
+grow to fix (a correct fix means auditing and re-plumbing `generate_image()`'s
+signature and every call site, a materially bigger change). Decision: scope
+Q1.4 to the warm-session path only (the one path where params genuinely work
+end-to-end today), add the seed field/generator/plumbing there, and document
+the gap loudly instead of pretending it doesn't exist — both in a test
+docstring (`test_create_cold_job_seed_round_trips_to_job_row` in
+`test_image_jobs.py`, which proves storage-only round-trip and explicitly
+states it does NOT prove Kaggle delivery) and here. Flagged as a real
+follow-up item, not yet turned into a numbered plan step.
+
+**Seed plumbing (warm-session path only).** `ImageJobParams` gained
+`seed: int | None = None`. Both `image_sdxl_session/notebook.ipynb` and
+`image_flux_session/notebook.ipynb`'s serve loop (cell-3) gained, right after
+`p = job.get("params") or {}`: `seed = p.get("seed")` then
+`generator = torch.Generator(device="cuda").manual_seed(seed) if seed is not
+None else None`, with `generator=generator` passed into BOTH the text2img and
+img2img `pipe(...)` calls (four call sites total across the two notebooks —
+missing even one would have silently broken determinism for that specific
+generation mode). `torch` was already imported in cell-2 of both notebooks
+from earlier steps, so no new import needed in cell-3 (same kernel process,
+same namespace).
+
+**Frontend.** `AdvancedParams.tsx` gained a `seed: ParamState<number>` field
+(disabled by default, value 0) with a number input + a 🎲 randomize button
+(`Math.floor(Math.random() * 2_147_483_647)` — bounded well under int4/JS
+safe-integer limits). New `forcedSeed?: { value: number; nonce: number }`
+prop + a `useEffect` keyed on `nonce` (not just `value`) forces a re-apply
+even when reusing the identical seed twice in a row, mirroring the existing
+`showStrength`-forces-enable pattern already in this file. `initialAdvanced()`
+gained an optional second `forcedSeed` param so a freshly-mounted panel can
+start pre-seeded too, not just an already-mounted one reacting to the prop.
+
+**"Reuse seed" round trip.** `GenerationsPanel.tsx`'s `JobRow` now extracts
+`job.params?.seed` (type-guarded, same pattern as the existing `style_preset`
+extraction) and renders it as a small `🎲 <seed>` button next to the created-
+time label; clicking it calls a new `onReuseSeed` prop (type `ReuseSeedHandler`
+in `types.ts`, modeled directly on the existing `RefineHandler`). Wired
+through `ImageLabPage.tsx` exactly like the existing "Refine" flow: a new
+`triggerReuseSeed(seed)` method added alongside `triggerRefine` on
+`ImageGenerator.tsx`'s `useImperativeHandle` object, which sets the forced-
+seed state (bumping `nonce`) and opens the Advanced panel so the user
+actually sees the seed took effect.
+
+**FLUX negative-prompt honesty.** The whole Negative Prompt UI block in
+`AdvancedParams.tsx` is now wrapped in `{!isFlux && (...)}` instead of always
+rendering, so FLUX users never see a field that does nothing. Defense in
+depth: `deriveParams` also gained an explicit `modelId !== 'flux'` guard
+before emitting `negative_prompt`, so even if `AdvancedState` somehow carried
+a stale `enabled: true` from elsewhere, FLUX generations still never send it.
+
+**Tests.** New `test_session_template_serve_loop_honors_seed` in
+`test_kaggle_session_templates.py` — iterates every registered session
+template (both SDXL and FLUX, not hardcoded to one), asserting seed
+extraction, generator construction, `generator=generator,` appears exactly
+twice (both inference branches) per notebook, and correct ordering. Two new
+backend param-passthrough tests (`test_submit_session_job_seed_round_trips_to_
+job_row` in `test_image_session.py`, `test_create_cold_job_seed_round_trips_to
+_job_row` in `test_image_jobs.py` — the latter's docstring is the loud
+documentation of the cold-path gap above). 5 new frontend tests in
+`AdvancedParams.test.ts`: default-disabled seed, forced-seed pre-population,
+seed-only-derives-when-enabled, FLUX-never-derives-negative-prompt (even with
+a stale enabled flag), SDXL-still-derives-it-normally. 499 backend tests
+green (up from 496), 13 frontend tests (up from 8); `tsc`/`npm run build`
+clean. code-reviewer PASS (0 CRITICAL/WARN) — independently re-verified the
+cold-path scoping decision against the actual `generate.py` code (confirmed
+genuine, not assumed), confirmed the `forcedSeed` nonce pattern has no
+stale-closure or infinite-loop risk, confirmed FLUX's negative-prompt
+suppression is defense-in-depth (JSX + derive-layer), confirmed all four
+`generator=generator,` call sites across both notebooks. No security-auditor
+run (notebook + param-plumbing edit, no secrets/config/auth touched).
+
+**Q1 correctness pass (Q1.1-Q1.4) is now complete.** Next: Q1.5 — define the
+6-prompt fixed-seed benchmark set and run the combined pre/post live A/B on a
+real warm SDXL session (needs the user + a real Kaggle account).
+
+---
+
 ### [2026-07-16] — imageLab Q1.3: scheduler + tuned defaults
 
 Third step of the imageLab Quality Q1 correctness pass, via the build-step skill

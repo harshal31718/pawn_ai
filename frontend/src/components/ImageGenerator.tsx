@@ -12,7 +12,7 @@ import {
   type ImageParams,
 } from '../api/client'
 import AdvancedParams from './AdvancedParams'
-import type { RefineHandler } from '../types'
+import type { RefineHandler, ReuseSeedHandler } from '../types'
 
 export interface ModelDef {
   id: string
@@ -63,7 +63,7 @@ function elapsed(createdAt?: string | null): string {
 }
 
 const ImageGenerator = forwardRef<
-  { triggerRefine: RefineHandler },
+  { triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler },
   {
     model: ModelDef
     isConnected: boolean
@@ -84,6 +84,7 @@ const ImageGenerator = forwardRef<
   const [error, setError] = useState<string | null>(null)
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
   const [headerDuration, setHeaderDuration] = useState(30)
+  const [forcedSeed, setForcedSeed] = useState<{ value: number; nonce: number } | null>(null)
   const sessionBusy = busyAction !== null
   const [, setTick] = useState(0)
 
@@ -169,6 +170,10 @@ const ImageGenerator = forwardRef<
       })
       setPrompt('')
       setError(null)
+    },
+    triggerReuseSeed(seed: number) {
+      setForcedSeed((prev) => ({ value: seed, nonce: (prev?.nonce ?? 0) + 1 }))
+      setIsAdvancedOpen(true)
     },
   }))
 
@@ -430,7 +435,7 @@ const ImageGenerator = forwardRef<
           </button>
         </div>
 
-        <AdvancedParams modelId={model.id} onChange={setAdvParams} showStrength={!!initImage} open={isAdvancedOpen} />
+        <AdvancedParams modelId={model.id} onChange={setAdvParams} showStrength={!!initImage} open={isAdvancedOpen} forcedSeed={forcedSeed ?? undefined} />
 
         <textarea
           value={prompt}

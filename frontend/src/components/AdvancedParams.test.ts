@@ -71,3 +71,39 @@ describe('Q1.3 — scheduler + tuned defaults', () => {
     expect(DEFAULT_GUIDANCE.flux).toBe(0)
   })
 })
+
+describe('Q1.4 — seed control + FLUX negative-prompt honesty', () => {
+  it('seed is disabled with value 0 by default', () => {
+    const s = initialAdvanced('sdxl')
+    expect(s.seed.enabled).toBe(false)
+    expect(s.seed.value).toBe(0)
+  })
+
+  it('a forced seed (reuse-seed) is pre-enabled with the given value', () => {
+    const s = initialAdvanced('sdxl', 987654321)
+    expect(s.seed.enabled).toBe(true)
+    expect(s.seed.value).toBe(987654321)
+  })
+
+  it('derives seed into params only when enabled', () => {
+    const s = initialAdvanced('sdxl')
+    expect(deriveParams(s, 'sdxl').seed).toBeUndefined()
+    s.seed.enabled = true
+    s.seed.value = 42
+    expect(deriveParams(s, 'sdxl').seed).toBe(42)
+  })
+
+  it('never derives negative_prompt for FLUX, even if state carries a stale enabled value', () => {
+    const s = initialAdvanced('flux')
+    s.negativePrompt.enabled = true
+    s.negativePrompt.value = 'blurry'
+    expect(deriveParams(s, 'flux').negative_prompt).toBeUndefined()
+  })
+
+  it('still derives negative_prompt normally for SDXL', () => {
+    const s = initialAdvanced('sdxl')
+    s.negativePrompt.enabled = true
+    s.negativePrompt.value = 'blurry'
+    expect(deriveParams(s, 'sdxl').negative_prompt).toBe('blurry')
+  })
+})

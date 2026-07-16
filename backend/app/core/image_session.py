@@ -62,6 +62,7 @@ class ImageJobParams(BaseModel):
     style_preset: str | None = None
     strength: float | None = None          # img2img: 0.1–1.0 (lower = closer to source)
     init_image_b64: str | None = None      # img2img: base64 source image (stored transiently)
+    seed: int | None = None                # Q1.4: fixed seed for reproducible A/Bs
 
 
 # Job statuses still owned by a (live) worker -- used for de-dup + liveness.

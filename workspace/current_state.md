@@ -2,6 +2,50 @@
 
 Last updated: 2026-07-16
 
+**imageLab Q1.4 — Seed control + FLUX negative-prompt honesty — DONE
+(2026-07-16).** Fourth and final correctness fix in the Q1 pass. Added
+end-to-end seed plumbing on the warm-session path: `ImageJobParams.seed: int |
+None` (backend), a seed field in `AdvancedParams.tsx` with a 🎲 randomize
+button (max `2_147_483_647`, well under `int4`/JS-safe-integer limits), and
+both `image_sdxl_session`/`image_flux_session` notebook templates now build a
+`torch.Generator(device="cuda").manual_seed(seed)` in the serve loop and pass
+it into BOTH the text2img and img2img inference branches. Generations rows
+(`GenerationsPanel.tsx`) now show the seed used and a "🎲 reuse seed" action
+that round-trips through a new `triggerReuseSeed` imperative handle on
+`ImageGenerator.tsx` (mirrors the existing `triggerRefine` pattern) — clicking
+it opens Advanced and pre-populates the seed field via a `{value, nonce}`
+prop so reusing the identical seed twice in a row still re-applies. FLUX
+negative-prompt honesty: the field is now hidden entirely for FLUX (its
+pipeline call doesn't accept `negative_prompt` at all — guidance-free, CFG
+locked to 0), not just silently dropped; `deriveParams` also guards against
+ever emitting it for FLUX as defense-in-depth. **Real gap found and
+deliberately scoped out:** the cold one-shot generation path
+(`core/generate.py`'s `generate_image()`, called from
+`image_session.run_cold_job()`) never forwards `job.params` to Kaggle at
+all — only `{"prompt": prompt}` is sent. This is a pre-existing, systemic gap
+predating this whole Q1 plan (it silently defeats Q1.1's resolution
+snapping, Q1.3's tuned CFG/scheduler, and this step's negative-prompt/seed
+work for any generation that lands on the cold path rather than a warm
+session) — NOT fixed here, since it's not seed-specific and is a much larger
+surface than one Q1.4 step warrants. Seed generator code was added ONLY to
+the two warm-session templates, correctly not to the two cold templates
+(confirmed: no `seed` string anywhere in either cold `.ipynb`). Flagged as a
+follow-up item — see `workspace/plan/imageLab/open_items.md` (needs a new
+entry) or a fresh plan step; not tracked as a numbered Q-step yet. New
+template-grep test (`test_session_template_serve_loop_honors_seed`, both
+SDXL and FLUX) + 2 new backend param-passthrough tests (warm + cold storage
+round-trip, cold test's docstring explicitly documents the gap above) + 5
+new frontend tests. 499 backend tests green (up from 496), 13 frontend tests
+(up from 8); `tsc`/`npm run build` clean. code-reviewer PASS (0
+CRITICAL/WARN; verified the scoping decision against the real code, verified
+seed correctly reaches both inference branches on both models, verified the
+`forcedSeed` nonce pattern has no stale-closure/infinite-loop risk). No
+security-auditor run (notebook + param-plumbing edit, no secrets/config/auth
+touched). Not yet live-verified against real Kaggle — this closes out all of
+Q1's correctness fixes (Q1.1-Q1.4); Q1.5's combined fixed-seed A/B benchmark
+is next. See `workspace/plan/imageLab/phase_Q1_generation_fixes.md` §Q1.4
+and `dev_log.md`'s 2026-07-16 "imageLab Q1.4" entry.
+
 **imageLab Q1.3 — Scheduler + tuned defaults — DONE (2026-07-16).** Third
 correctness fix in the Q1 pass: neither SDXL notebook configured a scheduler
 (library default), and CFG defaulted to 7.5 — too high for photoreal output.

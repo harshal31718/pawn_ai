@@ -39,7 +39,13 @@ export interface AdvancedState {
   negativePrompt: ParamState<string>
   stylePreset: ParamState<string>
   strength: ParamState<number>
+  seed: ParamState<number>
 }
+
+// Q1.4: max value for a 🎲 randomize click. Bounded well under 2^32 so it's
+// always representable as a JS safe integer and fits comfortably as a
+// Postgres int4 job-params field without any range-check surprises.
+const MAX_RANDOM_SEED = 2_147_483_647
 
 // Per-model floor: SDXL wants ~30 steps for good quality (its notebook default);
 // FLUX.1-schnell is distilled for ~4 steps and gains nothing from more. Used so a
@@ -53,7 +59,7 @@ export const DEFAULT_STEPS: Record<string, number> = { sdxl: 30, flux: 4 }
 // distillation), so its default here is just for slider display consistency.
 export const DEFAULT_GUIDANCE: Record<string, number> = { sdxl: 5, flux: 0 }
 
-export function initialAdvanced(modelId: string): AdvancedState {
+export function initialAdvanced(modelId: string, forcedSeed?: number): AdvancedState {
   return {
     aspectRatio: { enabled: false, value: '3:4' },
     steps: { enabled: false, value: DEFAULT_STEPS[modelId] ?? 20 },
@@ -61,6 +67,9 @@ export function initialAdvanced(modelId: string): AdvancedState {
     negativePrompt: { enabled: false, value: '' },
     stylePreset: { enabled: false, value: '' },
     strength: { enabled: false, value: 0.6 },
+    seed: forcedSeed !== undefined
+      ? { enabled: true, value: forcedSeed }
+      : { enabled: false, value: 0 },
   }
 }
 
@@ -76,11 +85,16 @@ export function deriveParams(s: AdvancedState, modelId: string = 'sdxl'): ImageP
   }
   if (s.steps.enabled) p.num_inference_steps = s.steps.value
   if (s.guidanceScale.enabled) p.guidance_scale = s.guidanceScale.value
-  if (s.negativePrompt.enabled && s.negativePrompt.value.trim())
+  // Q1.4 honesty rule: FLUX's pipeline call doesn't accept negative_prompt at
+  // all (guidance-free — CFG 0 means there's nothing for a negative prompt to
+  // steer away from), so never send one for FLUX even if state carries a
+  // stale enabled value from somewhere.
+  if (modelId !== 'flux' && s.negativePrompt.enabled && s.negativePrompt.value.trim())
     p.negative_prompt = s.negativePrompt.value.trim()
   if (s.stylePreset.enabled && s.stylePreset.value)
     p.style_preset = STYLE_PRESET_KEY_MAP[s.stylePreset.value] ?? ''
   if (s.strength.enabled) p.strength = s.strength.value
+  if (s.seed.enabled) p.seed = s.seed.value
   return p
 }
 
@@ -92,15 +106,29 @@ export default function AdvancedParams({
   showStrength,
   onStrengthEnabledChange,
   open,
+  forcedSeed,
 }: {
   modelId: string
   onChange: (p: ImageParams) => void
   showStrength?: boolean
   onStrengthEnabledChange?: (enabled: boolean) => void
   open: boolean
+  // Q1.4 "reuse seed": pass { value, nonce } from a Generations row's Reuse
+  // action. `nonce` (not just `value`) drives the effect below, so reusing
+  // the SAME seed value twice in a row still re-applies it.
+  forcedSeed?: { value: number; nonce: number }
 }) {
   const [s, setS] = useState<AdvancedState>(() => initialAdvanced(modelId))
   const isFlux = modelId === 'flux'
+
+  useEffect(() => {
+    if (forcedSeed === undefined) return
+    setS((prev) => {
+      const next = { ...prev, seed: { enabled: true, value: forcedSeed.value } } as AdvancedState
+      onChange(deriveParams(next, modelId))
+      return next
+    })
+  }, [forcedSeed?.nonce, forcedSeed?.value, onChange, modelId])
 
   function update<K extends keyof AdvancedState>(key: K, patch: Partial<AdvancedState[K]>) {
     const next = { ...s, [key]: { ...s[key], ...patch } } as AdvancedState
@@ -218,19 +246,47 @@ export default function AdvancedParams({
         </div>
       </div>
 
-      {/* Negative Prompt */}
+      {/* Negative Prompt — Q1.4 honesty rule: hidden for FLUX (guidance-free,
+          the pipeline call doesn't accept negative_prompt at all) instead of
+          showing a field that silently does nothing. */}
+      {!isFlux && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={s.negativePrompt.enabled}
+              onChange={(e) => update('negativePrompt', { enabled: e.target.checked })}
+              className="w-3.5 h-3.5 rounded accent-theme-brand" />
+            <span className="text-xs font-medium text-theme-text">Negative Prompt</span>
+          </label>
+          <div className={rowCls(s.negativePrompt.enabled)}>
+            <input type="text" value={s.negativePrompt.value}
+              onChange={(e) => update('negativePrompt', { value: e.target.value })}
+              placeholder="avoid: blurry, cartoon, text…"
+              className={CTL} />
+          </div>
+        </div>
+      )}
+
+      {/* Seed — Q1.4: fixed seed for reproducible A/Bs, with a randomize action */}
       <div className="space-y-1">
         <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={s.negativePrompt.enabled}
-            onChange={(e) => update('negativePrompt', { enabled: e.target.checked })}
+          <input type="checkbox" checked={s.seed.enabled}
+            onChange={(e) => update('seed', { enabled: e.target.checked })}
             className="w-3.5 h-3.5 rounded accent-theme-brand" />
-          <span className="text-xs font-medium text-theme-text">Negative Prompt</span>
+          <span className="text-xs font-medium text-theme-text">Seed</span>
         </label>
-        <div className={rowCls(s.negativePrompt.enabled)}>
-          <input type="text" value={s.negativePrompt.value}
-            onChange={(e) => update('negativePrompt', { value: e.target.value })}
-            placeholder="avoid: blurry, cartoon, text…"
-            className={CTL} />
+        <div className={rowCls(s.seed.enabled)}>
+          <div className="flex items-center gap-2">
+            <input type="number" min={0} max={MAX_RANDOM_SEED} value={s.seed.value}
+              onChange={(e) => update('seed', { value: Math.max(0, Number(e.target.value) || 0) })}
+              className={CTL} />
+            <button type="button"
+              title="Randomize seed"
+              onClick={() => update('seed', { value: Math.floor(Math.random() * MAX_RANDOM_SEED) })}
+              className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg border border-theme-border/60 text-sm hover:bg-theme-surface-hover cursor-pointer">
+              🎲
+            </button>
+          </div>
+          <div className="text-[10px] text-theme-text-muted">same prompt + seed = reproducible A/B</div>
         </div>
       </div>
 

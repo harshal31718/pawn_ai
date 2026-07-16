@@ -84,6 +84,9 @@ import type { ConversationMeta, JobResult, Project } from './api/client'
 
 export type RefineHandler = (job: JobResult, imageSrc: string) => void
 
+// Q1.4: "Reuse seed" on a Generations row populates the composer's seed field.
+export type ReuseSeedHandler = (seed: number) => void
+
 /** A conversation in the client cache. `_synced` is false until the backend has
  *  acknowledged the conversation exists; `_localUpdatedAt` is a client clock used
  *  to decide whether a server title should overwrite a local (user) rename. */

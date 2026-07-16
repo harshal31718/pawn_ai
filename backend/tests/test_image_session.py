@@ -313,6 +313,34 @@ def test_submit_session_job_snaps_old_sd15_resolution_to_native_bucket():
     assert stored_params["height"] == 1344
 
 
+def test_submit_session_job_seed_round_trips_to_job_row():
+    """Q1.4: a fixed seed submitted via ImageJobParams must round-trip
+    unchanged into the persisted job row's params -- reproducible A/Bs depend
+    on the exact seed the user picked reaching the notebook (via the row),
+    not a snapped/derived value like width/height."""
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "sdxl",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job(
+            "user-1", "s1", "a red apple",
+            image_session.ImageJobParams(seed=123456789),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert stored_params["seed"] == 123456789
+
+
 def test_submit_session_job_missing_session_raises():
     from app.exceptions import NotConfiguredError
 

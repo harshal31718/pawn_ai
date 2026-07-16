@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getJob, type JobResult } from '../api/client'
-import { STYLE_PRESET_LABEL_MAP, type RefineHandler } from '../types'
+import { STYLE_PRESET_LABEL_MAP, type RefineHandler, type ReuseSeedHandler } from '../types'
 
 /**
  * The Generations monitor (Phase W.2) — a collapsible panel listing every job
@@ -45,10 +45,12 @@ function JobRow({
   job,
   onView,
   onRefine,
+  onReuseSeed,
 }: {
   job: JobResult
   onView: (src: string, alt: string, jobId: string) => void
   onRefine?: RefineHandler
+  onReuseSeed?: ReuseSeedHandler
 }) {
   const [src, setSrc] = useState<string | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -101,6 +103,7 @@ function JobRow({
 
   const presetKey = typeof job.params?.style_preset === 'string' ? job.params.style_preset : null
   const stylePreset = presetKey ? (STYLE_PRESET_LABEL_MAP[presetKey] ?? presetKey) : null
+  const seed = typeof job.params?.seed === 'number' ? job.params.seed : null
 
   const running = job.status === 'running'
 
@@ -196,6 +199,17 @@ function JobRow({
               {job.status}
             </span>
             <span className="text-[9px] text-theme-text-muted shrink-0">{relTime(job.created_at)}</span>
+            {seed !== null && (
+              <button
+                type="button"
+                title="Reuse this seed"
+                onClick={() => onReuseSeed?.(seed)}
+                disabled={!onReuseSeed}
+                className="shrink-0 text-[9px] font-mono text-theme-text-muted hover:text-theme-brand disabled:hover:text-theme-text-muted disabled:cursor-default cursor-pointer"
+              >
+                🎲 {seed}
+              </button>
+            )}
             {job.status === 'error' && job.error && (
               <span className="text-[9px] text-red-500 truncate" title={job.error}>
                 {job.error}
@@ -236,9 +250,11 @@ function JobRow({
 export default function GenerationsPanel({
   jobs,
   onRefine,
+  onReuseSeed,
 }: {
   jobs: JobResult[]
   onRefine?: RefineHandler
+  onReuseSeed?: ReuseSeedHandler
 }) {
   const [lightbox, setLightbox] = useState<{ src: string; alt: string; jobId: string } | null>(null)
 
@@ -271,7 +287,7 @@ export default function GenerationsPanel({
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
         {jobs.map((j) => (
-          <JobRow key={j.job_id} job={j} onView={(src, alt, jobId) => setLightbox({ src, alt, jobId })} onRefine={onRefine} />
+          <JobRow key={j.job_id} job={j} onView={(src, alt, jobId) => setLightbox({ src, alt, jobId })} onRefine={onRefine} onReuseSeed={onReuseSeed} />
         ))}
       </div>
 

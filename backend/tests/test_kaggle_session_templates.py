@@ -163,6 +163,26 @@ def test_sdxl_session_template_has_scheduler_and_tuned_cfg(session_notebooks):
             )
 
 
+def test_session_template_serve_loop_honors_seed(session_notebooks):
+    """Q1.4: both SDXL and FLUX serve loops (cell-3) must build a
+    torch.Generator seeded from the job's `seed` param when present, and pass
+    it into BOTH the text2img and img2img inference calls -- unlike Q1.2/Q1.3,
+    this applies to every model's session template, not just SDXL."""
+    for path, nb in session_notebooks.items():
+        cell3 = "".join(nb["cells"][3]["source"])
+        assert 'seed = p.get("seed")' in cell3, f"{path} missing seed extraction"
+        assert (
+            'generator = torch.Generator(device="cuda").manual_seed(seed) if seed is not None else None'
+            in cell3
+        ), f"{path} missing the generator construction"
+        assert cell3.count("generator=generator,") == 2, (
+            f"{path}: both text2img and img2img branches must pass the seeded generator"
+        )
+        assert cell3.index('seed = p.get("seed")') < cell3.index("generator=generator,"), (
+            f"{path}: seed must be resolved before it's used in an inference call"
+        )
+
+
 def test_session_template_supervisor_has_unreachable_self_exit(session_notebooks):
     """The supervisor must eventually give up and free the GPU if PostgREST
     is unreachable for the kernel's entire life -- otherwise a dead-tunnel
