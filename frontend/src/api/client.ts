@@ -3,6 +3,11 @@ import type { Citation, TraceEntry } from '../types'
 // Fallback to localhost for local dev without a .env file
 export const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
+/** Thrown for a sync-queue op that can never succeed (e.g. its target project
+ * or chat was deleted out from under it) — syncQueue.ts drops these
+ * immediately instead of retrying forever with the generic backoff path. */
+export class PermanentSyncError extends Error {}
+
 function getToken(): string | null {
   return localStorage.getItem('pawn-token')
 }
@@ -343,6 +348,9 @@ export async function streamChat(
   /** F-11: a one-turn image attachment (vision Q&A) -- never persisted,
    *  sent once alongside this request only. */
   image?: { b64: string; mime: string },
+  /** Composer's mode picker (Fast / Pro / Create Image) -- a hint that
+   *  short-circuits the backend router's own classify heuristic. */
+  modeHint?: 'fast' | 'pro' | 'image',
 ): Promise<void> {
   const { onToken, onDone, onError, onRateLimit, onStep, onToolCall, onToolResult, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
     callbacks
@@ -358,6 +366,7 @@ export async function streamChat(
         ...(docId ? { doc_id: docId } : {}),
         ...(conversationId ? { conversation_id: conversationId } : {}),
         ...(image ? { image_b64: image.b64, image_mime: image.mime } : {}),
+        ...(modeHint ? { mode_hint: modeHint } : {}),
       }),
       signal,
     })
@@ -649,6 +658,11 @@ export async function moveChatToProject(projectId: string, convId: string): Prom
     headers: authHeaders(),
   })
   if (handle401(res)) throw new Error('Session expired')
+  // Unlike delete, a 404 here is NOT success — the chat was never actually
+  // moved. But it also can never succeed (the project or the chat itself is
+  // gone), so it must not retry forever either: PermanentSyncError tells
+  // syncQueue to drop the op instead of backing off and retrying.
+  if (res.status === 404) throw new PermanentSyncError(await errorDetail(res))
   if (!res.ok) throw new Error(await errorDetail(res))
 }
 

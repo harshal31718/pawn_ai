@@ -100,6 +100,11 @@ class ChatRequest(BaseModel):
     # message for this turn's direct-answer call, then discarded.
     image_b64: str | None = None
     image_mime: str | None = None
+    # Composer's mode picker (Fast / Pro / Create Image) -- an explicit hint
+    # that short-circuits classify_node's heuristic/LLM routing entirely
+    # rather than feeding into it. None (no selection reached the request)
+    # falls back to the normal heuristic classify.
+    mode_hint: Literal["fast", "pro", "image"] | None = None
 
 async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None) -> str:
     """Helper to generate a short title for the conversation using the first
@@ -254,6 +259,7 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "has_image": bool(req.image_b64),
         "image_b64": req.image_b64,
         "image_mime": req.image_mime,
+        "mode_hint": req.mode_hint,
         "difficulty": "light",
         "needs_agent": False,
         "plan": [],

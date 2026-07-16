@@ -5,6 +5,7 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import EditProjectDetailsModal from '../components/EditProjectDetailsModal'
 import KebabMenu from '../components/KebabMenu'
 import MessageInput from '../components/MessageInput'
+import type { Mode } from '../components/ModePicker'
 import { clearMemory, rebuildMemory } from '../api/client'
 import { useAppContext } from '../contexts/AppContext'
 import type { LayoutContext } from './Layout'
@@ -21,16 +22,20 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const { store } = useOutletContext<LayoutContext>()
-  const { projects, conversations, createConversation, renameProject, updateProjectDescription, deleteProject } = store
-  const { displayName, availableModels } = useAppContext()
+  const { projects, conversations, createProjectChat, renameProject, updateProjectDescription, deleteProject } = store
+  const { displayName } = useAppContext()
 
   const [draft, setDraft] = useState('')
-  const [selectedProvider, setSelectedProvider] = useState(availableModels[0]?.model_id || 'gemini-2.5-flash')
+  const [mode, setMode] = useState<Mode>('fast')
   const [isEditingName, setIsEditingName] = useState(false)
   const [nameValue, setNameValue] = useState('')
   const [isEditingDetails, setIsEditingDetails] = useState(false)
   const [descriptionExpanded, setDescriptionExpanded] = useState(false)
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
+  // The chat must actually be assigned to this project (awaited, not raced in
+  // the background) before its window opens — see createProjectChat's doc
+  // comment for the live-reproduced bug this replaced.
+  const [isStartingChat, setIsStartingChat] = useState(false)
 
   const project = projects.find((p) => p.id === projectId)
   const chats = conversations
@@ -61,17 +66,30 @@ export default function ProjectPage() {
     setIsEditingDetails(false)
   }
 
-  function handleSend(content: string) {
-    if (!content.trim()) return
-    const newId = createConversation(projectId)
-    navigate(`/project/${projectId}/chat/${newId}`, { state: { pendingMessage: content } })
+  async function handleSend(content: string) {
+    if (!content.trim() || isStartingChat || !projectId) return
+    setIsStartingChat(true)
+    try {
+      const newId = await createProjectChat(projectId)
+      navigate(`/project/${projectId}/chat/${newId}`, { state: { pendingMessage: content } })
+    } catch (err: any) {
+      alert(`Failed to start a chat in this project: ${err.message}`)
+      setIsStartingChat(false)
+    }
   }
 
-  function handleUpload(file: File) {
-    const newId = createConversation(projectId)
-    navigate(`/project/${projectId}/chat/${newId}`, {
-      state: { pendingMessage: draft.trim() || undefined, pendingUploadFile: file },
-    })
+  async function handleUpload(file: File) {
+    if (isStartingChat || !projectId) return
+    setIsStartingChat(true)
+    try {
+      const newId = await createProjectChat(projectId)
+      navigate(`/project/${projectId}/chat/${newId}`, {
+        state: { pendingMessage: draft.trim() || undefined, pendingUploadFile: file },
+      })
+    } catch (err: any) {
+      alert(`Failed to start a chat in this project: ${err.message}`)
+      setIsStartingChat(false)
+    }
   }
 
   function confirmDelete() {
@@ -167,9 +185,9 @@ export default function ProjectPage() {
             onChange={setDraft}
             onSend={handleSend}
             onUpload={handleUpload}
-            selectedProvider={selectedProvider}
-            onChangeProvider={setSelectedProvider}
-            models={availableModels}
+            disabled={isStartingChat}
+            mode={mode}
+            onChangeMode={setMode}
           />
         </div>
 

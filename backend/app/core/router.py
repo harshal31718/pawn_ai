@@ -31,6 +31,24 @@ _IMAGE_GEN_KEYWORDS = [
     "create an image", "create a picture", "make an image", "make a picture",
     "draw a picture", "draw me", "image of", "picture of",
 ]
+# Found live (2026-07-16): a short, casually-phrased memory-recall request
+# ("search the memory of project, i asked you to remember X in another
+# chat") is heuristically "light" (under ROUTER_LIGHT_CHAR_THRESHOLD, no
+# heavy keyword) -> needs_agent=False -> direct_answer_node, which has ZERO
+# tools bound. search_memory/doc_search are only ever reachable through the
+# agent loop, so a message like this could never actually search memory no
+# matter how it was phrased -- the model correctly (and unhelpfully)
+# reported it had no such access. Unlike _IMAGE_GEN_KEYWORDS this needs no
+# has_*_creds gate: search_memory/doc_search are bound whenever the chat has
+# a scope at all (registry.py's `ctx.scope_type is not None`), which is true
+# for every real chat.
+_MEMORY_RECALL_KEYWORDS = [
+    "search the memory", "search memory", "search your memory",
+    "remember", "recall", "you told me", "i told you",
+    "we discussed", "we talked about", "mentioned before",
+    "earlier chat", "previous chat", "other chat", "another chat",
+    "last time", "what did i say", "what did i tell you",
+]
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
@@ -57,6 +75,7 @@ def _needs_agent(difficulty: str, text: str, has_search_key: bool, has_kaggle_cr
         or _has_url(text)
         or (has_search_key and _matches_any_keyword(text, _TIME_SENSITIVE_KEYWORDS))
         or (has_kaggle_creds and _matches_any_keyword(text, _IMAGE_GEN_KEYWORDS))
+        or _matches_any_keyword(text, _MEMORY_RECALL_KEYWORDS)
     )
 
 

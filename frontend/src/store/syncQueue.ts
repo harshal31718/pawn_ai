@@ -12,6 +12,7 @@ import {
   deleteConversation,
   deleteProject as deleteProjectApi,
   moveChatToProject,
+  PermanentSyncError,
   removeChatFromProject,
   renameProject as renameProjectApi,
   updateConversationTitle,
@@ -22,6 +23,14 @@ import type { QueuedOp, SyncOp } from '../types'
 const QUEUE_VERSION = 1
 const MAX_BACKOFF_MS = 30_000
 const SYNC_ERROR_MSG = 'Some changes are not yet synced…'
+// A moveChat enqueued right after creating a chat inside a project can race
+// the chat's own lazy server-side creation (no dedicated "create inside
+// project" endpoint -- see useConversationStore's createConversation) and
+// get a transient 404 ("conversation not found yet") on its very first try.
+// That looks identical to the true-permanent case (target project deleted)
+// from the client's perspective, so don't honor PermanentSyncError until a
+// few ordinary retries have had a chance to let the race resolve.
+const MIN_ATTEMPTS_BEFORE_PERMANENT_DROP = 3
 
 interface SyncQueueOpts {
   /** Called when a create/rename op for a conversation succeeds (mark _synced). */
@@ -217,12 +226,22 @@ export class SyncQueue {
       }
       this.setStatus(this.queue.length ? this.status : null)
       this.persist()
-    } catch {
-      item.attempts += 1
-      item.nextAttemptAt =
-        Date.now() + Math.min(MAX_BACKOFF_MS, 2 ** item.attempts * 1000) + Math.random() * 500
-      this.setStatus(SYNC_ERROR_MSG)
-      this.persist()
+    } catch (err) {
+      if (err instanceof PermanentSyncError && item.attempts >= MIN_ATTEMPTS_BEFORE_PERMANENT_DROP) {
+        // Still 404ing after several retries -- its target project/chat is
+        // genuinely gone, not just not-created-yet. Drop it instead of
+        // retrying forever, else the "not yet synced" banner never clears.
+        console.warn('[syncQueue] dropping unrecoverable op', item.op, err)
+        this.queue = this.queue.filter((x) => x.id !== item.id)
+        this.setStatus(this.queue.length ? this.status : null)
+        this.persist()
+      } else {
+        item.attempts += 1
+        item.nextAttemptAt =
+          Date.now() + Math.min(MAX_BACKOFF_MS, 2 ** item.attempts * 1000) + Math.random() * 500
+        this.setStatus(SYNC_ERROR_MSG)
+        this.persist()
+      }
     } finally {
       this.processing = false
       this.notify()

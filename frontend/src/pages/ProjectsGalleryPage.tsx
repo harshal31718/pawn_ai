@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import ConfirmDialog from '../components/ConfirmDialog'
 import KebabMenu from '../components/KebabMenu'
+import NewProjectDialog from '../components/NewProjectDialog'
 import { FolderIcon, MagnifierIcon } from '../components/icons'
 import type { CachedProject } from '../types'
 import type { LayoutContext } from './Layout'
@@ -20,12 +21,13 @@ const SORT_LABELS: Record<SortKey, string> = {
 export default function ProjectsGalleryPage() {
   const navigate = useNavigate()
   const { store } = useOutletContext<LayoutContext>()
-  const { projects, createProject, deleteProject, draftProjectId } = store
+  const { projects, createProject, updateProjectDescription, deleteProject, draftProjectId } = store
 
   const [query, setQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('updated')
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CachedProject | null>(null)
+  const [isCreatingProject, setIsCreatingProject] = useState(false)
 
   const filtered = useMemo(() => {
     // The draft project (unnamed "New project" not yet promoted) is intentionally
@@ -44,7 +46,13 @@ export default function ProjectsGalleryPage() {
   }, [projects, draftProjectId, query, sortKey])
 
   function handleNewProject() {
-    const id = createProject()
+    setIsCreatingProject(true)
+  }
+
+  function handleCreateProject(name: string, description: string) {
+    const id = createProject(name)
+    if (description) updateProjectDescription(id, description)
+    setIsCreatingProject(false)
     navigate(`/project/${id}`)
   }
 
@@ -175,6 +183,12 @@ export default function ProjectsGalleryPage() {
         destructive
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <NewProjectDialog
+        open={isCreatingProject}
+        onCreate={handleCreateProject}
+        onCancel={() => setIsCreatingProject(false)}
       />
     </div>
   )

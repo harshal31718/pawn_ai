@@ -72,15 +72,16 @@ def create_project(
 def list_projects(drive: DriveStorage) -> List[Dict[str, Any]]:
     projects_folder = _projects_folder(drive)
     subfolders = drive.list_subfolders(projects_folder)
+    contents = drive.read_files_in_folders([f["id"] for f in subfolders], "project.json")
     results = []
     for folder in subfolders:
-        meta_id = drive.find_file("project.json", folder["id"])
-        if meta_id:
-            try:
-                meta = json.loads(drive.download_text(meta_id))
-                results.append(meta)
-            except (json.JSONDecodeError, Exception):
-                pass
+        raw = contents.get(folder["id"])
+        if raw is None:
+            continue
+        try:
+            results.append(json.loads(raw))
+        except (json.JSONDecodeError, Exception):
+            pass
     results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return results
 
@@ -149,15 +150,16 @@ def list_project_chats(drive: DriveStorage, project_id: str) -> List[Dict[str, A
     if not project_folder_id:
         return []
     subfolders = drive.list_subfolders(project_folder_id)
+    contents = drive.read_files_in_folders([f["id"] for f in subfolders], "meta.json")
     results = []
     for folder in subfolders:
-        meta_id = drive.find_file("meta.json", folder["id"])
-        if meta_id:
-            try:
-                meta = json.loads(drive.download_text(meta_id))
-                results.append(meta)
-            except (json.JSONDecodeError, Exception):
-                pass
+        raw = contents.get(folder["id"])
+        if raw is None:
+            continue
+        try:
+            results.append(json.loads(raw))
+        except (json.JSONDecodeError, Exception):
+            pass
     results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return results
 

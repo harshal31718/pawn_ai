@@ -8,7 +8,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { fetchConversation, fetchConversations, getProjects } from '../api/client'
+import {
+  createConversation as createConversationApi,
+  fetchConversation,
+  fetchConversations,
+  getProjects,
+  moveChatToProject as moveChatToProjectApi,
+} from '../api/client'
 import type { CachedConversation, CachedProject, Message, PersistedMsg } from '../types'
 import {
   flushPending,
@@ -69,6 +75,7 @@ export interface ConversationStore {
   streamingConvIds: Set<string>
   selectConversation: (id: string) => void
   createConversation: (targetProjectId?: string) => string
+  createProjectChat: (projectId: string) => Promise<string>
   promoteDraft: (id: string) => void
   deleteConversation: (id: string) => void
   renameConversation: (id: string, title: string) => void
@@ -343,6 +350,45 @@ export function useConversationStore(
     }
   }, [touchLru])
 
+  // Starting a chat from a project's own landing composer (ProjectPage), as
+  // opposed to a standalone "New chat": the project id must be assigned
+  // BEFORE the chat window opens, not raced in the background. The
+  // create-then-immediate-move pattern above (promoteDraft) enqueues its
+  // moveChat op fire-and-forget at promote time, which can beat the chat's
+  // own lazy server-side creation and 404 on the first try (found live,
+  // 2026-07-16 — a chat created this way stayed in the standalone `chats/`
+  // Drive folder, invisible to project-scoped memory, until the sync
+  // queue's retries happened to land afterwards). This does the same two
+  // server calls directly, awaited in order, so the conversation is
+  // guaranteed to exist before the move is attempted — no race, no need to
+  // rely on retry-based eventual consistency.
+  const createProjectChat = useCallback(async (projectId: string): Promise<string> => {
+    const id = newConvId()
+    await createConversationApi(undefined, defaultModelRef.current, id)
+    await moveChatToProjectApi(projectId, id)
+    const now = new Date().toISOString()
+    const meta: CachedConversation = {
+      id,
+      title: 'New Chat',
+      created_at: now,
+      updated_at: now,
+      model_id: defaultModelRef.current,
+      message_count: 0,
+      project_id: projectId,
+      _synced: true,
+      _localUpdatedAt: Date.now(),
+    }
+    setConversations((prev) => [meta, ...prev])
+    setMessagesByConv((prev) => ({ ...prev, [id]: [] }))
+    // Make it the active conversation synchronously, exactly as the draft-based
+    // createConversation does — otherwise ChatPage mounts on the new URL with a
+    // stale activeConvId and its own handleSend (`activeConvId ?? createConversation()`)
+    // spawns a SECOND, orphaned draft instead of sending into this pre-scoped chat.
+    setActiveConvId(id)
+    touchLru(id)
+    return id
+  }, [touchLru])
+
   const deleteConversation = useCallback(
     (id: string) => {
       const remaining = conversationsRef.current.filter((c) => c.id !== id)
@@ -565,6 +611,7 @@ export function useConversationStore(
     streamingConvIds,
     selectConversation,
     createConversation,
+    createProjectChat,
     promoteDraft,
     deleteConversation,
     renameConversation,

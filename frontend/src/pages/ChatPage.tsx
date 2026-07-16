@@ -3,6 +3,7 @@ import { useParams, useOutletContext, useNavigate, useLocation } from 'react-rou
 import type { Message, Segment, TraceEntry } from '../types'
 import ChatWindow from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
+import type { Mode } from '../components/ModePicker'
 import InteractiveGridBackground from '../components/InteractiveGridBackground'
 import { useAppContext } from '../contexts/AppContext'
 import {
@@ -80,6 +81,7 @@ export default function ChatPage() {
     models,
     displayName,
     backgroundEffect,
+    defaultModel,
   } = useAppContext()
 
   const {
@@ -101,7 +103,10 @@ export default function ChatPage() {
   // Rate-limit cooldowns are per-conversation (epoch-ms when the lock lifts)
   const [rateLimitUntil, setRateLimitUntil] = useState<Record<string, number>>({})
   const [now, setNow] = useState(() => Date.now())
-  const [selectedProvider, setSelectedProvider] = useState('gemini-2.5-flash')
+
+  // Composer's mode picker (Fast / Pro / Create Image) -- a routing hint
+  // sent with every /chat call, not a per-conversation persisted setting.
+  const [mode, setMode] = useState<Mode>('fast')
 
   // Document upload states
   const [attachedDoc, setAttachedDoc] = useState<{ id: string; name: string } | null>(null)
@@ -187,12 +192,9 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConvId, conversations])
 
-  // When the active conversation changes, sync the model picker to its model
-  // and drop any attached document.
+  // When the active conversation changes, drop any attached document/image.
   useEffect(() => {
     if (!activeConvId) return
-    const conv = conversations.find((c) => c.id === activeConvId)
-    if (conv?.model_id) setSelectedProvider(conv.model_id)
     setAttachedDoc(null)
     setAttachedImage((prev) => {
       if (prev) URL.revokeObjectURL(prev.previewUrl)
@@ -200,14 +202,6 @@ export default function ChatPage() {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConvId])
-
-  // Coerce selected provider when available models change.
-  useEffect(() => {
-    if (availableModels.length === 0) return
-    const ids = availableModels.map((m) => m.model_id)
-    if (!ids.includes(selectedProvider)) setSelectedProvider(availableModels[0].model_id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableModels, selectedProvider])
 
   // Tick once a second while any conversation is rate-limited.
   useEffect(() => {
@@ -481,11 +475,12 @@ export default function ChatPage() {
           )
         },
       },
-      selectedProvider,
+      defaultModel,
       attachedDoc?.id || undefined,
       convId,
       controller.signal,
       imageToSend ? { b64: imageToSend.b64, mime: imageToSend.mime } : undefined,
+      mode,
     )
   }
 
@@ -647,13 +642,12 @@ export default function ChatPage() {
                 onUpload={handleUpload}
                 isUploading={isUploading}
                 onUploadImage={handleUploadImage}
-                selectedProvider={selectedProvider}
-                onChangeProvider={setSelectedProvider}
-                models={availableModels}
                 attachment={attachedDoc}
                 onRemoveAttachment={() => setAttachedDoc(null)}
                 imageAttachment={attachedImage}
                 onRemoveImageAttachment={handleRemoveImageAttachment}
+                mode={mode}
+                onChangeMode={setMode}
               />
             </div>
           </div>
@@ -681,13 +675,12 @@ export default function ChatPage() {
             onUpload={handleUpload}
             isUploading={isUploading}
             onUploadImage={handleUploadImage}
-            selectedProvider={selectedProvider}
-            onChangeProvider={setSelectedProvider}
-            models={availableModels}
             attachment={attachedDoc}
             onRemoveAttachment={() => setAttachedDoc(null)}
             imageAttachment={attachedImage}
             onRemoveImageAttachment={handleRemoveImageAttachment}
+            mode={mode}
+            onChangeMode={setMode}
           />
         </div>
       </div>

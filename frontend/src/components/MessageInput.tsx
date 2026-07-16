@@ -1,8 +1,22 @@
 import { useRef, useState, useEffect, type KeyboardEvent } from 'react'
-import KebabMenu from './KebabMenu'
-import ModelSwitcher from './ModelSwitcher'
+import ModePicker, { type Mode } from './ModePicker'
 import { PlusIcon } from './icons'
-import type { RegistryModel } from '../api/client'
+
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+const DOC_EXTENSIONS = ['.pdf', '.txt']
+const ATTACH_ACCEPT = [...DOC_EXTENSIONS, ...IMAGE_EXTENSIONS].join(',')
+
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  const name = file.name.toLowerCase()
+  return IMAGE_EXTENSIONS.some((ext) => name.endsWith(ext))
+}
+
+function isDocFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  if (DOC_EXTENSIONS.some((ext) => name.endsWith(ext))) return true
+  return file.type === 'application/pdf' || file.type.startsWith('text/')
+}
 
 interface Props {
   value: string
@@ -15,9 +29,6 @@ interface Props {
   /** F-11: attach an image for a one-turn vision Q&A (not RAG-indexed, not
    *  image generation) -- separate from the PDF attach flow above. */
   onUploadImage?: (file: File) => void
-  selectedProvider?: string
-  onChangeProvider?: (id: string) => void
-  models?: RegistryModel[]
   /** Attached document chip, rendered INSIDE the input island (2026-07-13 UX
    *  fix: the chip used to float loose above the input over the canvas). */
   attachment?: { name: string } | null
@@ -28,6 +39,10 @@ interface Props {
    *  own shape rather than overloading one prop with a union. */
   imageAttachment?: { name: string; previewUrl: string } | null
   onRemoveImageAttachment?: () => void
+  /** Composer's mode picker (Fast / Pro / Create Image) -- a hint sent to
+   *  the backend router, not a client-side behavior switch. */
+  mode: Mode
+  onChangeMode: (mode: Mode) => void
 }
 
 export default function MessageInput({
@@ -39,16 +54,14 @@ export default function MessageInput({
   onUpload,
   isUploading = false,
   onUploadImage,
-  selectedProvider = '',
-  onChangeProvider,
-  models = [],
   attachment = null,
   onRemoveAttachment,
   imageAttachment = null,
   onRemoveImageAttachment,
+  mode,
+  onChangeMode,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const imageInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isMultiLine, setIsMultiLine] = useState(false)
   const prevDisabledRef = useRef(disabled)
@@ -104,19 +117,21 @@ export default function MessageInput({
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (!file) return
-    onUpload?.(file)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
-  }
-
-  function handleImageFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
     if (!file) return
-    onUploadImage?.(file)
-    if (imageInputRef.current) {
-      imageInputRef.current.value = ''
+
+    if (isImageFile(file)) {
+      if (onUploadImage) {
+        onUploadImage(file)
+      } else {
+        alert('Invalid format: image attachments aren\'t supported here.')
+      }
+    } else if (isDocFile(file)) {
+      onUpload?.(file)
+    } else {
+      alert('Invalid format: only PDF, TXT, and image files (png, jpg, webp, gif) are supported.')
     }
   }
 
@@ -126,17 +141,9 @@ export default function MessageInput({
         type="file"
         ref={fileInputRef}
         onChange={handleFileChange}
-        accept=".pdf,.txt"
+        accept={ATTACH_ACCEPT}
         className="hidden"
         id="file-upload-input"
-      />
-      <input
-        type="file"
-        ref={imageInputRef}
-        onChange={handleImageFileChange}
-        accept="image/*"
-        className="hidden"
-        id="image-upload-input"
       />
 
       {/* Unified Connected Island Input */}
@@ -204,36 +211,31 @@ export default function MessageInput({
         {/* 2. Divider line: Visible only in multi-line mode */}
         <div className={`w-full border-t border-theme-border/10 order-2 my-1 ${isMultiLine ? 'block' : 'hidden'}`} />
 
-        {/* 3. Attach Button — "+" opens a kebab-style menu (F-11): Attach PDF
-            (unchanged) and Attach image (new, vision Q&A). */}
+        {/* 3. Attach Button — "+" opens the file picker directly (single
+            "Attach files" action covering docs + images; unsupported
+            formats are rejected client-side in handleFileChange). */}
         <div className={`shrink-0 ${isMultiLine ? 'order-3' : 'order-1'}`}>
-          <KebabMenu
-            title="Attach"
-            icon={<PlusIcon className="w-5 h-5" />}
-            buttonClassName="rounded-full p-2 text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0 flex items-center justify-center h-9 w-9 active:scale-95 cursor-pointer"
-            items={[
-              { label: 'Attach PDF', onClick: () => fileInputRef.current?.click() },
-              { label: 'Attach image', onClick: () => imageInputRef.current?.click() },
-            ]}
-          />
+          <button
+            type="button"
+            title="Attach files"
+            disabled={disabled || isUploading}
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded-full p-2 text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0 flex items-center justify-center h-9 w-9 active:scale-95 cursor-pointer"
+          >
+            <PlusIcon className="w-5 h-5" />
+          </button>
         </div>
 
         {/* 4. Layout Spacer: Visible only in multi-line mode to push send button right */}
         <div className={`order-4 flex-1 ${isMultiLine ? 'block' : 'hidden'}`} />
 
-        {/* 5. Model Selector — separated from text cluster by a thin border */}
-        {selectedProvider && onChangeProvider && models.length > 0 && (
-          <div className={`shrink-0 border-l border-theme-border/30 pl-1 transition-all duration-150 ${isMultiLine ? 'order-5' : 'order-3'}`}>
-            <ModelSwitcher
-              selected={selectedProvider}
-              onChange={onChangeProvider}
-              disabled={disabled || isUploading}
-              models={models}
-            />
-          </div>
-        )}
+        {/* 5. Mode Picker — Fast / Pro / Create Image, in the old
+            model-switcher slot; sends a routing hint to the backend. */}
+        <div className={`shrink-0 border-l border-theme-border/30 pl-1 transition-all duration-150 ${isMultiLine ? 'order-5' : 'order-3'}`}>
+          <ModePicker value={mode} onChange={onChangeMode} />
+        </div>
 
-        {/* 6. Send / Stop Button — animated wrapper slides to make space for model selector */}
+        {/* 6. Send / Stop Button */}
         <div className={`
           overflow-hidden transition-all duration-200 shrink-0
           ${isMultiLine ? 'order-6' : 'order-4'}

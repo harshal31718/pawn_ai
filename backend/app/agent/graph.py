@@ -84,6 +84,10 @@ class AgentState(TypedDict):
     has_image: bool
     image_b64: Optional[str]
     image_mime: Optional[str]
+    # Composer's mode picker (Fast / Pro / Create Image) -- an explicit hint
+    # that short-circuits classify_node's heuristic/LLM routing (see
+    # classify_node below). None when no selection reached the request.
+    mode_hint: Optional[str]
     # Router (A.5) output.
     difficulty: str
     needs_agent: bool
@@ -127,6 +131,20 @@ async def classify_node(
     # turn won't have once direct_answer_node builds it).
     if state.get("has_image"):
         return {"difficulty": "light", "needs_agent": False}
+
+    # Composer's mode picker: an explicit user choice always wins over the
+    # heuristic/LLM router below. "fast" forces the zero-overhead direct-
+    # answer path; "pro" forces the full plan->execute agent loop; "image"
+    # forces the agent loop with difficulty='light' so plan_node skips
+    # straight to a single tool-calling turn (generate_image is bound there
+    # whenever the user has Kaggle creds, same as the heuristic path).
+    mode_hint = state.get("mode_hint")
+    if mode_hint == "fast":
+        return {"difficulty": "light", "needs_agent": False}
+    if mode_hint == "pro":
+        return {"difficulty": "heavy", "needs_agent": True}
+    if mode_hint == "image":
+        return {"difficulty": "light", "needs_agent": True}
 
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")

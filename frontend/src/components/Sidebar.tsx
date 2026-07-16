@@ -20,6 +20,7 @@ interface Props {
   onDelete: (id: string) => void
   onRename: (id: string, newTitle: string) => void
   onMoveChatToProject: (convId: string, projectId: string) => void
+  onRemoveChatFromProject: (convId: string) => void
   isOpen: boolean
   onClose: () => void
   onOpen: () => void
@@ -42,6 +43,7 @@ export default function Sidebar({
   onDelete,
   onRename,
   onMoveChatToProject,
+  onRemoveChatFromProject,
   isOpen,
   onClose,
   onOpen,
@@ -60,7 +62,14 @@ export default function Sidebar({
   const inputRef = useRef<HTMLInputElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const standaloneConversations = conversations.filter((c) => !c.project_id)
+  // The Chats section lists EVERY chat — standalone ones show their bare
+  // title, project-attached ones are prefixed "Project / Title" — sorted
+  // newest-first. (Previously it filtered to standalone-only, so a chat
+  // created inside a project never appeared here at all.)
+  const projectNameById = new Map(projects.map((p) => [p.id, p.name]))
+  const allConversations = [...conversations].sort(
+    (a, b) => (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0),
+  )
 
   const isChatActive = location.pathname.startsWith('/chat/')
   const isImageLabActive = location.pathname === '/imagelab'
@@ -323,23 +332,25 @@ export default function Sidebar({
                 {/* Conversations List */}
                 {!chatsCollapsed && (
                 <div className="pb-2">
-              {standaloneConversations.length === 0 ? (
+              {allConversations.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-8 text-theme-text-muted select-none">
                   <ChatBubbleIcon className="w-6 h-6 opacity-40" />
                   <span className="text-xs">No conversations yet</span>
                   <span className="text-[10px] opacity-60">Click &quot;New chat&quot; to start</span>
                 </div>
               ) : (
-                standaloneConversations.map((conv) => {
+                allConversations.map((conv) => {
                   const isActive = conv.id === activeId
                   const isEditing = conv.id === editingId
+                  const projectName = conv.project_id ? projectNameById.get(conv.project_id) : undefined
 
                   return (
                     <div
                       key={conv.id}
                       onClick={() => {
                         if (!isEditing) {
-                          handleSelectConversation(conv.id)
+                          if (conv.project_id) handleSelectProjectChat(conv.id, conv.project_id)
+                          else handleSelectConversation(conv.id)
                         }
                       }}
                       className={`
@@ -348,7 +359,9 @@ export default function Sidebar({
                         ${isActive ? 'bg-black/25 dark:bg-black/40 text-theme-text' : 'text-theme-text-muted hover:text-theme-text hover:bg-theme-surface-hover'}
                       `}
                     >
-                      {/* Title */}
+                      {/* Title — project-attached chats are prefixed with their
+                          project name (muted "Project / "); standalone chats show
+                          the bare title. */}
                       {isEditing ? (
                         <input
                           ref={inputRef}
@@ -364,6 +377,9 @@ export default function Sidebar({
                         />
                       ) : (
                         <span className="flex-1 truncate pr-6 select-none" onDoubleClick={(e) => handleStartRename(conv, e)}>
+                          {projectName && (
+                            <span className="text-theme-text-muted/70">{projectName} / </span>
+                          )}
                           {conv.title}
                         </span>
                       )}
@@ -408,13 +424,18 @@ export default function Sidebar({
                               title="More options"
                               items={[
                                 { label: 'Rename', onClick: () => handleStartRename(conv) },
-                                {
-                                  label: 'Add to project',
-                                  submenu: projects.map((p) => ({
-                                    label: p.name,
-                                    onClick: () => handleAddToProject(conv.id, conv.title, p.id, p.name),
-                                  })),
-                                },
+                                conv.project_id
+                                  ? {
+                                      label: 'Remove from project',
+                                      onClick: () => onRemoveChatFromProject(conv.id),
+                                    }
+                                  : {
+                                      label: 'Add to project',
+                                      submenu: projects.map((p) => ({
+                                        label: p.name,
+                                        onClick: () => handleAddToProject(conv.id, conv.title, p.id, p.name),
+                                      })),
+                                    },
                                 {
                                   label: 'Memory',
                                   submenu: [

@@ -25,6 +25,7 @@ export default function Layout() {
         onDelete={store.deleteConversation}
         onRename={store.renameConversation}
         onMoveChatToProject={store.moveChatToProject}
+        onRemoveChatFromProject={store.removeChatFromProject}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onOpen={() => setIsSidebarOpen(true)}
