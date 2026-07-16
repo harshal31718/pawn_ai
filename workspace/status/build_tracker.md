@@ -62,8 +62,10 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     fixed), build-validator PASS on re-check (1st pass FAIL — frontend bucket table
     wasn't model-aware yet, doc updates pending — both closed). No security-auditor run
     (no secrets/config/auth touched). Full record: `dev_log.md`'s 2026-07-16 "imageLab
-    Q1.1" entry, `current_state.md`. Not yet live-verified against real Kaggle — folded
-    into Q1.5's combined benchmark once Q1.2–Q1.4 land.
+    Q1.1" entry, `current_state.md`. UI live-verified via Chrome (2026-07-16): both
+    SDXL and FLUX default to 3:4 — 896×1152, all six buckets render correctly in the
+    dropdown. Real Kaggle image-gen A/B still folded into Q1.5's combined benchmark
+    once Q1.2–Q1.4 land.
   - `[ ]` Q1.2 — fp16 VAE fix (black-image killer)
   - `[ ]` Q1.3 — Scheduler + tuned defaults
   - `[ ]` Q1.4 — Seed control + FLUX negative-prompt honesty
