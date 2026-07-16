@@ -104,6 +104,26 @@ suggested order.
 
 ---
 
+### [2026-07-16] — F-8 sync warning relocation
+
+Straight cut-paste in `Sidebar.tsx`: the offline/unsynced-changes banner
+moved from directly under the Search input box (where it pushed the
+Projects/Chats lists down) to directly above the User Profile Card at the
+bottom of the sidebar. No other logic touched. `tsc --noEmit` + `npm run
+build` clean.
+
+Live-verified via Chrome against the real `docker compose watch` stack:
+temporarily forced the banner to render (`(syncError || true)` + placeholder
+text) to screenshot the new position, then reverted both changes
+immediately — `git diff` confirmed only the intended relocation survived.
+Confirmed the banner renders cleanly above the profile card and the
+Projects/Chats lists are no longer pushed down.
+
+**Next up:** F-6 (Groq as default orchestrator model), per
+`plan/chat/00_overview.md`'s suggested order.
+
+---
+
 ### [2026-07-15] — Registry refresh: full provider catalog sweep + benchmark-grounded tiering + `registry-refresh` skill rewrite
 
 User-requested: the registry was under-using free-tier providers (only Gemini

@@ -44,8 +44,11 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     double-failure gap). Live-verified via Chrome: a real heavy/research
     query (with a genuine mid-flight provider failover) rendered a full
     synthesized answer end to end, no half-generation.
-  - `[ ]` F-8 sync warning relocation (`phase_F8_sync_warning_relocation.md`) —
-    confirmed against current `Sidebar.tsx` 2026-07-15.
+  - `[x]` F-8 sync warning relocation (`phase_F8_sync_warning_relocation.md`) —
+    done 2026-07-16, straight cut-paste in `Sidebar.tsx` (banner moved from
+    under Search to directly above the User Profile Card). `tsc --noEmit` +
+    `npm run build` clean; live-verified via Chrome (temporary force-render,
+    reverted, confirmed via `git diff`).
   - `[x]` F-9 sidebar scroll bug + clumsy project/chat row styling
     (`phase_F9_sidebar_scroll_and_project_ui.md`) — live-verified 2026-07-16 via
     Chrome against the real `docker compose watch` stack: expanding both projects

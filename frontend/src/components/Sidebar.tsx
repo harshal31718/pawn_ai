@@ -276,16 +276,6 @@ export default function Sidebar({
               </div>
             </div>
 
-            {/* Offline / unsynced changes banner */}
-            {syncError && (
-              <div className="px-3 pb-2 shrink-0">
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
-                  <span className="truncate">{syncError}</span>
-                </div>
-              </div>
-            )}
-
             {isSearching ? (
               <SearchResults
                 matchedProjects={matchedProjects}
@@ -457,6 +447,18 @@ export default function Sidebar({
                 </div>
                 </div>
               </>
+            )}
+
+            {/* Offline / unsynced changes banner -- F-8: relocated to the
+                bottom of the sidebar (above the profile card) so it no
+                longer pushes the Projects/Chats lists down. */}
+            {syncError && (
+              <div className="px-3 pt-2 shrink-0">
+                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                  <span className="truncate">{syncError}</span>
+                </div>
+              </div>
             )}
 
             {/* User Profile Card */}

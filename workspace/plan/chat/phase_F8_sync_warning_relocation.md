@@ -31,3 +31,17 @@ verbatim, since F-9 already touched this file this session). Both blocks are pla
 - Verify that the warning box `"Some changes are not yet synced..."` displays cleanly at the very bottom of the sidebar list, right above the user profile section.
 - Ensure the project and conversation list items are no longer pushed down by the warning box at the top.
 - Confirm `npm run build` is clean and has no compiler errors.
+
+## 4. DONE (2026-07-16)
+
+`Sidebar.tsx`: the banner block moved from directly under the Search input
+(`pb-2`) to directly above the `{/* User Profile Card */}` div (`pt-2`,
+matching the flipped position). Straight cut-paste, no other logic touched.
+`tsc --noEmit` + `npm run build` both clean.
+
+Live-verified via Chrome: forced the banner to render (temporary
+`(syncError || true)` + placeholder text, both reverted immediately after
+the screenshot — `git diff` confirms only the intended relocation survives)
+against the real `docker compose watch` stack. Confirmed: banner renders
+cleanly at the bottom right above the profile card, and the Projects/Chats
+lists are no longer pushed down.
