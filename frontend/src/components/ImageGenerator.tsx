@@ -76,6 +76,11 @@ const ImageGenerator = forwardRef<
   { triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler; triggerEdit: EditHandler },
   {
     model: ModelDef
+    // This model's jobs (newest-fetched slice), kept in sync by ImageLabPage
+    // via periodic polling + onJobsChanged after any GenerationsPanel mutation
+    // (delete/edit/reorder). Used to derive "Latest" from real history instead
+    // of only this component's own submit-and-watch state.
+    jobs: JobResult[]
     isConnected: boolean
     onSubmitted: () => void
     session: SessionStatus | null
@@ -83,7 +88,7 @@ const ImageGenerator = forwardRef<
     busyAction: 'start' | 'stop' | 'extend' | null
     setBusyAction: (action: 'start' | 'stop' | 'extend' | null) => void
   }
->(function ImageGenerator({ model, isConnected, onSubmitted, session, setSession, busyAction, setBusyAction }, ref) {
+>(function ImageGenerator({ model, jobs, isConnected, onSubmitted, session, setSession, busyAction, setBusyAction }, ref) {
   const [prompt, setPrompt] = useState('')
   const [advParams, setAdvParams] = useState<ImageParams>({})
   const [initImage, setInitImage] = useState<InitImage | null>(null)
@@ -305,6 +310,32 @@ const ImageGenerator = forwardRef<
       clearInterval(id)
     }
   }, [watchIds, onSubmitted, session, hasSession])
+
+  // "Latest" should always reflect real history for this model, not just
+  // whatever this component itself last submitted-and-watched -- and must
+  // disappear the moment that job is deleted from the Generations tab
+  // (GenerationsPanel's delete -> onJobsChanged -> ImageLabPage's
+  // refreshAllJobs -> this `jobs` prop updates).
+  const latestDoneSummary = jobs.reduce<JobResult | null>((best, j) => (
+    j.status === 'done' && (!best || (j.created_at ?? '') > (best.created_at ?? '')) ? j : best
+  ), null)
+
+  useEffect(() => {
+    setLatestResult((prev) => {
+      if (!prev) return prev
+      const stillExists = jobs.some((j) => j.job_id === prev.job_id)
+      return stillExists ? prev : null
+    })
+  }, [jobs])
+
+  useEffect(() => {
+    if (latestResult || !latestDoneSummary) return
+    let active = true
+    getJob(latestDoneSummary.job_id).then((full) => {
+      if (active) setLatestResult(full)
+    }).catch(() => { /* keep showing nothing over a stale/wrong result */ })
+    return () => { active = false }
+  }, [latestResult, latestDoneSummary?.job_id])
 
   const busy = submitting
 

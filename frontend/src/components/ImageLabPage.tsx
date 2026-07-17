@@ -222,6 +222,7 @@ export default function ImageLabPage({ onClose }: Props) {
                     <ImageGenerator
                       ref={m.id === activeModelId ? generatorRef : undefined}
                       model={m}
+                      jobs={allJobs.filter((j) => j.model === m.id)}
                       isConnected={!!connected[m.id]}
                       onSubmitted={refreshAllJobs}
                       session={sessions[m.id] ?? null}
