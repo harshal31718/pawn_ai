@@ -6,6 +6,53 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — Chat: attached file/image shown as a card on the sent message
+(user-requested, not a numbered step)
+
+Attaching a PDF/doc or image and sending previously left no trace in the chat
+transcript — the composer's chip either disappeared (image) or kept lingering and
+resending on every follow-up turn (doc, since `doc_id` was resent with every `/chat`
+call), with no indication on the sent bubble that anything was attached. New
+`Message.attachment` field (`types.ts`, live-session only — not sent to or read back
+from the backend, matching how neither the image bytes nor the doc-attach event are
+persisted server-side); `Message.tsx` renders it as a small card above the bubble
+(thumbnail for images via a `data:` URL, filename+extension label for docs).
+**User caught a follow-up bug live**: my first pass only fixed the message-card
+duplication (showing the doc card once, not every turn) but left the doc chip
+lingering in the composer after send — the user pointed out "but its still attached
+here" from a screenshot, and clarified the doc's content itself should keep living on
+via RAG regardless of whether the composer chip persists. Fixed: both attachment
+kinds now clear from the composer immediately after send (`ChatPage.tsx`'s
+`handleSend` captures then clears `attachedImage`/`attachedDoc` the same way);
+retrieval for follow-up questions about the doc is unaffected since it happens via
+the existing `doc_search` RAG tool (indexed at upload time), not via `doc_id` being
+resent — confirmed `ChatRequest.doc_id` is already server-side-unused since Phase
+A/A.4. Live-verified via Chrome (drove the hidden file input directly with a
+synthetic `File`/`DataTransfer`, since the browser tool can't drive a native OS file
+picker): sent a doc-attached message → card shown once, composer chip gone; sent a
+follow-up with no new attachment → no card; sent an image-attached message → thumbnail
+card shown, composer chip gone. `tsc` clean, 37 frontend tests green (unchanged — no
+new automated coverage added for this live-session-only display field).
+
+### [2026-07-17] — imageLab: "Latest" generation preview reflects real history
+(user-requested, not a numbered step)
+
+The composer's "Latest:" preview (`ImageGenerator.tsx`) was purely local
+watch-state — populated only by whatever this component itself submitted and polled
+to completion this session. Two real bugs: (1) it showed nothing at all until you
+generated something, even if the model already had a long completed history; (2) if
+the job it was showing got deleted via `GenerationsPanel`, it kept displaying that
+now-gone image forever, with no way to know. Fixed by having `ImageLabPage` pass each
+model's own jobs slice (already fetched for `GenerationsPanel`, filtered per model
+since both `ImageGenerator` instances stay mounted simultaneously) into
+`ImageGenerator` as a new `jobs` prop; two new effects derive "Latest" from the most
+recently completed job whenever nothing is locally shown, and clear the currently-
+shown result the instant its `job_id` no longer appears in that list. Live-verified
+via Chrome: page load with zero local activity immediately showed the true last
+completed job ("apple latest phone"); deleting it via the Generations panel
+instantly flipped the preview to the next real one ("apple") with no stale/deleted
+image left showing. `tsc` clean, 580 backend tests unaffected (frontend-only change).
+
 ### [2026-07-17] — imageLab G1 (Generations tab: delete/edit/reorder) — DONE, live-verified
 
 Full implementation was found already code-complete but uncommitted at the start of this

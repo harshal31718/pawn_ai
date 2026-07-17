@@ -2,6 +2,24 @@
 
 Last updated: 2026-07-17
 
+**Chat: attached file/image shown as a card on the sent message — DONE, live-verified
+(2026-07-17).** New `Message.attachment` field (`types.ts`, live-session only, not
+persisted server-side). `ChatPage.tsx`'s `handleSend` captures then clears
+`attachedImage`/`attachedDoc` right away (both attachment kinds are one-shot in the
+composer now — a user correction mid-session: the first pass left the doc chip
+lingering after send since the old design resent `doc_id` on every turn; doc
+retrieval for follow-ups is unaffected since it goes through the existing
+`doc_search` RAG tool, not `doc_id`, which has been server-side-unused since Phase
+A/A.4). `Message.tsx` renders the card above the sent bubble — thumbnail for images,
+filename+extension for docs. See `dev_log.md`'s 2026-07-17 entry.
+
+**imageLab: "Latest" preview reflects real history — DONE, live-verified
+(2026-07-17).** `ImageGenerator.tsx`'s "Latest:" preview no longer only reflects this
+component's own submit-and-watch state — `ImageLabPage.tsx` now passes each model's
+jobs slice down as a `jobs` prop, and two new effects derive "Latest" from the most
+recently completed job on load/model-switch, and clear the shown result the instant
+its job is deleted from the Generations list. See `dev_log.md`'s 2026-07-17 entry.
+
 **imageLab G1 — Generations tab: delete/edit/reorder queue — DONE, live-verified
 (2026-07-17).** Delete (queued/done/error rows, never running), reorder the queue
 (up/down arrows, single status-priority-sorted table), edit a queued job
