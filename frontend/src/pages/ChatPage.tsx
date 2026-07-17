@@ -239,14 +239,21 @@ export default function ChatPage() {
   async function handleSend(content: string) {
     if ((activeConvId && streamingConvIds.has(activeConvId)) || isUploading) return
 
-    // F-11: an attached image is one-turn-only -- captured and cleared here
-    // (not on conv switch like the doc attachment, which lingers all
-    // conversation since doc_id is otherwise inert) so it's never silently
-    // resent with a later, unrelated message.
+    // Both attachment kinds are one-turn-only in the composer: captured and
+    // cleared here so neither is silently resent with a later, unrelated
+    // message. A doc's content keeps living on for the rest of the
+    // conversation via the doc_search RAG tool (indexed at upload time,
+    // scope-based retrieval, not dependent on doc_id being resent -- see
+    // routes/chat.py's ChatRequest.doc_id, unused server-side since A.4) --
+    // only the composer chip and the one-shot message card are per-message.
     const imageToSend = attachedImage
     if (imageToSend) {
       URL.revokeObjectURL(imageToSend.previewUrl)
       setAttachedImage(null)
+    }
+    const docToSend = attachedDoc
+    if (docToSend) {
+      setAttachedDoc(null)
     }
 
     const convId = activeConvId ?? createConversation()
@@ -257,7 +264,15 @@ export default function ChatPage() {
       navigate(`/chat/${convId}`, { replace: true })
     }
 
-    const userMsg: Message = { id: mid(), role: 'user', content }
+    // Attachment card shown above the sent bubble -- data: URL for images
+    // (survives the revoke above); the doc card just needs the filename.
+    const attachment: Message['attachment'] = imageToSend
+      ? { kind: 'image', name: imageToSend.name, previewUrl: `data:${imageToSend.mime};base64,${imageToSend.b64}` }
+      : docToSend
+        ? { kind: 'doc', name: docToSend.name }
+        : undefined
+
+    const userMsg: Message = { id: mid(), role: 'user', content, attachment }
     const assistantId = mid()
 
     const controller = new AbortController()
@@ -476,7 +491,7 @@ export default function ChatPage() {
         },
       },
       defaultModel,
-      attachedDoc?.id || undefined,
+      docToSend?.id || undefined,
       convId,
       controller.signal,
       imageToSend ? { b64: imageToSend.b64, mime: imageToSend.mime } : undefined,

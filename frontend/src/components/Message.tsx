@@ -219,6 +219,26 @@ export default function MessageBubble({ message, isStreaming }: Props) {
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div className={`flex flex-col w-fit ${isUser ? 'max-w-[70%] sm:max-w-[50%] ml-auto' : 'max-w-[85%] md:max-w-[75%] mr-auto'}`}>
+        {isUser && message.attachment && (
+          <div className="mb-1.5 ml-auto">
+            {message.attachment.kind === 'image' && message.attachment.previewUrl ? (
+              <img
+                src={message.attachment.previewUrl}
+                alt={message.attachment.name}
+                className="w-20 h-20 rounded-2xl object-cover border border-theme-border/40"
+              />
+            ) : (
+              <div className="w-28 h-20 rounded-2xl bg-theme-surface border border-theme-border/40 flex flex-col justify-between px-2.5 py-2">
+                <span className="text-[10px] font-semibold text-theme-text-muted uppercase tracking-wide">
+                  {(message.attachment.name.split('.').pop() || 'file').toUpperCase()}
+                </span>
+                <span className="text-[11px] font-medium text-theme-text truncate" title={message.attachment.name}>
+                  {message.attachment.name.replace(/\.[^./]+$/, '')}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
         <div
           ref={contentRef}
           className={`rounded-2xl px-4 py-2 text-sm leading-relaxed relative break-words ${

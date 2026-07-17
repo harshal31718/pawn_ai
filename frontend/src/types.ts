@@ -63,6 +63,20 @@ export type Segment =
   | { type: 'text'; content: string }
   | { type: 'tool'; entry: TraceEntry }
 
+/** What a user message was sent with -- shown as a small card above the
+ *  bubble text, matching the composer's own attachment chip. Live-session
+ *  only (like `segments` below): never sent to or read back from the
+ *  backend, since neither the image bytes nor the doc attach event are
+ *  persisted server-side -- a reload loses this card, same as `segments`. */
+export interface MessageAttachment {
+  kind: 'image' | 'doc'
+  name: string
+  /** data: URL, image attachments only -- built from the same b64/mime
+   *  already held for the one-turn vision call, not a blob URL (which gets
+   *  revoked right after send). */
+  previewUrl?: string
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'notice'
@@ -71,6 +85,7 @@ export interface Message {
   segments?: Segment[]
   citations?: Citation[]
   viaProvider?: string
+  attachment?: MessageAttachment
 }
 
 export interface ChatState {
