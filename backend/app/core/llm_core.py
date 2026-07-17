@@ -55,7 +55,7 @@ async def chat_complete(
     messages: list[dict],
     headers: dict[str, str],
     tools: list[dict] | None = None,
-    tool_choice: str = "auto",
+    tool_choice: str | dict = "auto",
 ) -> dict:
     """Non-streaming completion. Returns the full first choice's message dict
     ({"role", "content", "tool_calls"} — shape passed through as-is from the
@@ -119,7 +119,7 @@ async def stream_chat_with_tools(
     messages: list[dict],
     headers: dict[str, str],
     tools: list[dict] | None = None,
-    tool_choice: str = "auto",
+    tool_choice: str | dict = "auto",
 ) -> AsyncGenerator[dict, None]:
     """Streaming completion WITH tool-calling support in a single request
     (stream=True + tools=[...]) -- lets one call both stream the answer live

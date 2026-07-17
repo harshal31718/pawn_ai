@@ -6,6 +6,71 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — fixes: FLUX warmup false-dead-session + chat "Create Image" mode not actually generating
+
+Two real, user-reported bugs found and fixed same session, both live-verified.
+
+**1. FLUX warm sessions falsely declared dead mid-warmup ("session ended before
+this job ran").** Root cause: `image_session.get_session_status()`'s dead-session
+detection (heartbeat-stale / no-heartbeat-yet / hard-wall-clock thresholds) used
+flat global constants (90s/180s/900s) tuned around SDXL's fast cold start. FLUX's
+real cold start (heavier deps incl. sentencepiece/protobuf, a ~34GB dataset
+mount, and per the session notebook's own comment "the slow ~10 min" to shard a
+24GB bf16 model across 2xT4) can legitimately outrun all three -- confirmed live
+against a real Kaggle run still on "Installing FLUX dependencies..." at 450s.
+PAWN was declaring that genuinely-alive kernel dead and erroring out every job
+queued against it. Fixed by making all three thresholds model-scoped: new
+`ImageModel.startup_heartbeat_stale_seconds` / `startup_no_heartbeat_timeout_
+seconds` / `startup_timeout_seconds` fields (`image_models.py`), defaulting to
+the existing global constants (SDXL unaffected, proven unchanged by 3 existing
+tests retargeted from `model="flux"` to `model="sdxl"` since flux's own values
+are now deliberately larger). FLUX's row overrides to 300s/600s/1500s.
+`image_session.get_session_status()` now reads `get_image_model(model).startup_
+*` instead of the flat constants. 7 new tests (2 in `test_image_models.py`
+proving the override relationship, 5 in `test_image_session.py` proving FLUX
+survives past the old SDXL-tuned windows but still eventually catches a
+genuinely-dead session). 594 backend tests green (up from 587). **Live-verified**
+end-to-end against real Kaggle: started a fresh FLUX session, watched it warm
+past the old 180s/900s windows without erroring, reach Running, and generate
+the queued image; SDXL run in parallel as an unaffected control, also
+generated successfully.
+
+**2. Chat's "Create Image" mode didn't reliably generate images (and "Fast"
+mode couldn't generate one at all, regardless of wording).** Two related gaps
+in `agent/graph.py`: (a) `mode_hint == "image"` only made `generate_image`
+*available* to the model (`tool_choice="auto"`) -- the model still had full
+discretion to just answer in text instead, so selecting Create Image was not
+actually a guarantee. Fixed: `execute_node` now forces `tool_choice=
+{"type": "function", "function": {"name": "generate_image"}}` on that turn's
+first loop iteration only (reverts to "auto" for the follow-up call that
+composes the closing reply), with a graceful short-circuit ("Kaggle account
+needs connecting") if the tool isn't even bound (no Kaggle creds) rather than
+forcing a nonexistent tool. (b) `mode_hint == "fast"` (the default mode)
+unconditionally forced `needs_agent=False` -> `direct_answer_node`, which has
+NO tools bound at all -- meaning typing "generate an image of X" while on the
+default Fast mode silently produced a text-only reply with zero chance of ever
+generating anything, regardless of wording. Fixed: Fast mode now reuses the
+exact same `_IMAGE_GEN_KEYWORDS` + `has_kaggle_creds` heuristic
+`router_classify` already runs for the no-mode-hint case, routing into the
+agent loop (still "auto" tool_choice, not forced -- Fast mode's "decide, don't
+force" semantics) only when the wording clearly asks for an image; every other
+Fast-mode message is unaffected (zero-overhead direct answer as before).
+`normalize.py`/`llm_core.py`'s `tool_choice` type hints widened `str` ->
+`str | dict` to reflect the wire format actually always supported (OpenAI-
+compatible forced-function-choice). 7 new tests in `test_agent.py` (5
+`classify_node` cases covering pro/image/fast+wording+creds/fast+wording+
+no-creds/fast+no-wording; 2 `execute_node` cases proving the forced
+tool_choice fires on iteration 0 only, and the no-creds short-circuit never
+calls the model at all). **Live-verified** via Chrome: Create Image mode with
+deliberately vague wording ("a cat wearing sunglasses on a beach", no
+"generate"/"draw" verb) generated an image; Fast mode with explicit wording
+("generate an image of a dog") now also generates one; Fast mode with an
+ordinary question generated a plain text reply with no image attempt, per
+the user's own confirmation ("all three generated images, fast, pro and
+image").
+
+Both fixes ready to promote -- see the next dev_log entry for the release.
+
 ### [2026-07-17] — Deployed: 48-commit release live on prod (`pawnai.duckdns.org`)
 
 User gave the explicit go-ahead (in 2 steps: "push to dev/origin" first, then

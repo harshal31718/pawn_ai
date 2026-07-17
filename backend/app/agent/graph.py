@@ -37,7 +37,13 @@ from app.agent.tools.execute import run_tool
 from app.agent.tools.registry import get_tools
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS, VERIFY_MAX_REVISIONS
 from app.core import normalize
-from app.core.router import classify as router_classify, resolve_final_model
+from app.core.router import (
+    _IMAGE_GEN_KEYWORDS,
+    _matches_any_keyword,
+    _total_user_text,
+    classify as router_classify,
+    resolve_final_model,
+)
 from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 from app.exceptions import NoEndpointError, ProviderError
@@ -133,18 +139,35 @@ async def classify_node(
         return {"difficulty": "light", "needs_agent": False}
 
     # Composer's mode picker: an explicit user choice always wins over the
-    # heuristic/LLM router below. "fast" forces the zero-overhead direct-
-    # answer path; "pro" forces the full plan->execute agent loop; "image"
-    # forces the agent loop with difficulty='light' so plan_node skips
-    # straight to a single tool-calling turn (generate_image is bound there
-    # whenever the user has Kaggle creds, same as the heuristic path).
+    # heuristic/LLM router below. "pro" forces the full plan->execute agent
+    # loop; "image" forces the agent loop with difficulty='light' so
+    # plan_node skips straight to a single tool-calling turn, and
+    # execute_node additionally FORCES that turn's tool_choice onto
+    # generate_image specifically (not just "available, model's choice") --
+    # see execute_node. "fast" forces the zero-overhead direct-answer path
+    # for everything EXCEPT an explicit image-generation request: direct_
+    # answer_node has no tools bound at all, so without this override,
+    # "generate a picture of X" while on Fast mode (the default) silently
+    # produced a text-only reply with zero chance of ever calling
+    # generate_image -- found live 2026-07-17. Reuses the exact same
+    # keyword+creds check router_classify's own heuristic tier already runs
+    # for the no-mode-hint case (_IMAGE_GEN_KEYWORDS), so "Fast" mode's
+    # image-request handling matches what would happen with no hint at all,
+    # not a separate rule.
     mode_hint = state.get("mode_hint")
-    if mode_hint == "fast":
-        return {"difficulty": "light", "needs_agent": False}
     if mode_hint == "pro":
         return {"difficulty": "heavy", "needs_agent": True}
     if mode_hint == "image":
         return {"difficulty": "light", "needs_agent": True}
+    if mode_hint == "fast":
+        user_id = state.get("user_id")
+        has_kaggle_creds = False
+        if user_id:
+            from app.core import key_store
+            has_kaggle_creds = key_store.has_kaggle_creds(user_id)
+        if has_kaggle_creds and _matches_any_keyword(_total_user_text(state["messages"]), _IMAGE_GEN_KEYWORDS):
+            return {"difficulty": "light", "needs_agent": True}
+        return {"difficulty": "light", "needs_agent": False}
 
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
@@ -432,6 +455,41 @@ async def execute_node(
     tool_specs = [to_oai_tool(t) for t in tools] + delegate_tool_specs()
     tools_by_name = {t.name: t for t in tools}
 
+    # Create Image mode (mode_hint == "image"): classify_node already forced
+    # needs_agent=True, difficulty='light' so this turn IS a tool-calling
+    # turn -- but "available to call" under the default tool_choice="auto"
+    # still leaves the model free to just answer in text instead, which is
+    # exactly the live bug this fixes ("I selected Create Image and it still
+    # didn't generate anything"). Force tool_choice onto generate_image
+    # specifically for this turn's FIRST loop iteration only (below) --
+    # after that call resolves, the loop's next iteration reverts to "auto"
+    # so the model can compose its normal closing reply referencing the
+    # queued job, same as the heuristic/Pro-mode path already does via
+    # _IMAGE_GEN_SYNTHESIS_NUDGE.
+    mode_hint = state.get("mode_hint")
+    if mode_hint == "image" and _IMAGE_GEN_TOOL_NAME not in tools_by_name:
+        # Forcing a tool that isn't even bound would break the wire call
+        # outright (and silently produce nothing useful) -- Kaggle creds
+        # aren't configured, so say so plainly instead of pretending to try.
+        msg = (
+            "Create Image mode needs a Kaggle account connected first -- add "
+            "your Kaggle username and API token in Settings, then try again."
+        )
+        await adispatch_custom_event("token", {"delta": msg})
+        working_messages = list(state["messages"]) + [{"role": "assistant", "content": msg}]
+        return {
+            "messages": working_messages,
+            "tool_log": list(state.get("tool_log", [])),
+            "citations": list(state.get("citations", [])),
+            "tokens_used": state.get("tokens_used", 0),
+            "final_answer": msg,
+            "verify_draft": None,
+        }
+    force_image_tool_choice = (
+        {"type": "function", "function": {"name": _IMAGE_GEN_TOOL_NAME}}
+        if mode_hint == "image" else None
+    )
+
     try:
         model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True)
     except NoEndpointError:
@@ -499,6 +557,7 @@ async def execute_node(
         override_model_id: Optional[str] = None,
         override_on_model_switch=None,
         emit_tokens: bool = True,
+        tool_choice: str | dict = "auto",
     ):
         """Runs one streaming call, forwarding content live as SSE `token`
         events and accumulating tokens_used from real usage when the provider
@@ -514,7 +573,11 @@ async def execute_node(
         dispatched `token` events, so an un-dispatched draft is truly
         invisible, not just visually hidden). Also does NOT set
         content_reached_user_this_call, since nothing actually reached the
-        user -- a failure mid-buffered-call is safe to fail over normally."""
+        user -- a failure mid-buffered-call is safe to fail over normally.
+        `tool_choice`: passed straight through to the OAI-compatible wire
+        call -- "auto" (default) leaves the model free to choose; a forced-
+        function dict (see execute_node's Create Image handling) guarantees
+        that specific tool gets called this turn, not just offered."""
         nonlocal tokens_used, full_response, content_reached_user_this_call
         content_reached_user_this_call = False
         content = ""
@@ -522,6 +585,7 @@ async def execute_node(
         async for event in normalize.chat_stream_with_tools(
             override_model_id or model_id, working_messages, resolver, rate_limiter, user_id=user_id,
             tools=tool_specs if use_tools else None,
+            tool_choice=tool_choice if use_tools else "auto",
             on_provider_switch=on_switch,
             on_model_switch=override_on_model_switch or on_model_switch,
         ):
@@ -561,13 +625,21 @@ async def execute_node(
     budget_exhausted = False
     content = ""  # F-7: last loop iteration's own draft, used as a fallback
     # if the mandatory closing-synthesis call below fails outright.
-    for _ in range(AGENT_MAX_ITERATIONS):
+    for iteration in range(AGENT_MAX_ITERATIONS):
         if tokens_used >= AGENT_MAX_TOKENS:
             budget_exhausted = True
             break
 
+        # Forced tool_choice only applies to this turn's very FIRST call --
+        # once the forced generate_image call resolves (its result appended
+        # to working_messages below), later iterations revert to "auto" so
+        # the model can compose its normal closing reply instead of being
+        # forced to call the tool again every iteration.
+        iter_tool_choice = force_image_tool_choice if (force_image_tool_choice and iteration == 0) else "auto"
         try:
-            content, tool_calls = await stream_iteration(use_tools=True, emit_tokens=not defer_loop_content)
+            content, tool_calls = await stream_iteration(
+                use_tools=True, emit_tokens=not defer_loop_content, tool_choice=iter_tool_choice,
+            )
         except (ProviderError, NoEndpointError) as e:
             if content_reached_user_this_call:
                 raise  # a token already reached the user this call -- no fallback, surface directly

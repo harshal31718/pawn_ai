@@ -116,3 +116,32 @@ def test_merge_negative_prompt_skipped_under_non_photoreal_style_presets():
 def test_merge_negative_prompt_applies_under_photoreal_style_presets():
     for preset in (None, "photorealistic", "cinematic"):
         assert merge_negative_prompt("sdxl", None, preset) == IMAGE_MODELS["sdxl"].default_negative
+
+
+def test_sdxl_keeps_default_warmup_dead_session_thresholds():
+    """SDXL's cold start reliably finishes well inside the global defaults
+    (image_session.py's dead-session detection) -- must NOT be overridden."""
+    from app.constants import (
+        IMAGE_SESSION_HEARTBEAT_STALE_SECONDS,
+        IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS,
+        IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS,
+    )
+    sdxl = IMAGE_MODELS["sdxl"]
+    assert sdxl.startup_heartbeat_stale_seconds == IMAGE_SESSION_HEARTBEAT_STALE_SECONDS
+    assert sdxl.startup_no_heartbeat_timeout_seconds == IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS
+    assert sdxl.startup_timeout_seconds == IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS
+
+
+def test_flux_overrides_warmup_dead_session_thresholds_to_be_more_generous():
+    """The bug this fixes: FLUX's real cold start (dataset mount, deps
+    install, ~10min sharded model load) can legitimately outrun the
+    SDXL-tuned global defaults -- these must be strictly larger."""
+    from app.constants import (
+        IMAGE_SESSION_HEARTBEAT_STALE_SECONDS,
+        IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS,
+        IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS,
+    )
+    flux = IMAGE_MODELS["flux"]
+    assert flux.startup_heartbeat_stale_seconds > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS
+    assert flux.startup_no_heartbeat_timeout_seconds > IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS
+    assert flux.startup_timeout_seconds > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS

@@ -24,6 +24,7 @@ from app.agent.graph import (
     route_after_verify,
     verify_node,
 )
+from app.agent.tools.generate_image import GENERATE_IMAGE_TOOL
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, VERIFY_MAX_REVISIONS
 from app.exceptions import NoEndpointError, ProviderError
 
@@ -106,6 +107,67 @@ async def test_classify_node_image_attached_skips_router_entirely():
     plain-string content, which a multimodal turn won't have."""
     state = _state(has_image=True, image_b64="Zm9v", image_mime="image/png")
     with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
+        res = await classify_node(state)
+    assert res == {"difficulty": "light", "needs_agent": False}
+    mock_router.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_classify_node_mode_hint_pro_forces_heavy_agent():
+    state = _state(mode_hint="pro")
+    with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
+        res = await classify_node(state)
+    assert res == {"difficulty": "heavy", "needs_agent": True}
+    mock_router.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_classify_node_mode_hint_image_forces_light_agentic():
+    """Create Image mode always routes into the agent loop (light) --
+    execute_node then forces the actual generate_image tool_choice."""
+    state = _state(mode_hint="image", messages=[{"role": "user", "content": "hi"}])
+    with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
+        res = await classify_node(state)
+    assert res == {"difficulty": "light", "needs_agent": True}
+    mock_router.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_classify_node_mode_hint_fast_with_image_wording_and_kaggle_creds_forces_agent():
+    """Live bug fix (2026-07-17): 'Fast' mode used to unconditionally force
+    needs_agent=False, so direct_answer_node (zero tools bound) silently
+    swallowed an explicit image-generation request typed while on Fast mode
+    -- the default mode, so this was the common case. Must still route into
+    the agent loop when the wording clearly asks for an image AND the user
+    can actually use generate_image."""
+    state = _state(mode_hint="fast", messages=[{"role": "user", "content": "generate an image of a cat"}])
+    with patch("app.core.key_store.has_kaggle_creds", return_value=True), \
+         patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
+        res = await classify_node(state)
+    assert res == {"difficulty": "light", "needs_agent": True}
+    mock_router.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_classify_node_mode_hint_fast_with_image_wording_but_no_kaggle_creds_stays_direct():
+    """Same wording, but the user has no Kaggle creds -- generate_image would
+    never be bound anyway, so forcing the agent loop would just be overhead
+    for a turn that can't do anything different from the fast path."""
+    state = _state(mode_hint="fast", messages=[{"role": "user", "content": "generate an image of a cat"}])
+    with patch("app.core.key_store.has_kaggle_creds", return_value=False), \
+         patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
+        res = await classify_node(state)
+    assert res == {"difficulty": "light", "needs_agent": False}
+    mock_router.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_classify_node_mode_hint_fast_without_image_wording_stays_direct():
+    """Fast mode's zero-overhead behavior is otherwise unchanged -- ordinary
+    messages still skip the agent loop entirely."""
+    state = _state(mode_hint="fast", messages=[{"role": "user", "content": "what's the capital of France?"}])
+    with patch("app.core.key_store.has_kaggle_creds", return_value=True), \
+         patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
         res = await classify_node(state)
     assert res == {"difficulty": "light", "needs_agent": False}
     mock_router.assert_not_called()
@@ -892,6 +954,60 @@ async def test_execute_node_heavy_generate_image_call_gets_synthesis_nudge():
         m.get("role") == "system" and "Do not invent an image URL" in m.get("content", "")
         for m in closing_call_messages
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_node_mode_hint_image_forces_tool_choice_on_first_call_only():
+    """Live bug fix (2026-07-17): Create Image mode used to only make
+    generate_image AVAILABLE (tool_choice='auto'), so the model could still
+    just answer in text and never generate anything. The first loop call
+    must be forced onto generate_image specifically; the follow-up call
+    (composing the reply after the tool result) must NOT be forced, so the
+    model is free to write a normal closing sentence."""
+    state = _state(mode_hint="image", difficulty="light", needs_agent=True,
+                    messages=[{"role": "user", "content": "a cat wearing a hat"}])
+    captured_tool_choices = []
+
+    async def fake(*args, **kwargs):
+        captured_tool_choices.append(kwargs.get("tool_choice"))
+        if len(captured_tool_choices) == 1:
+            yield {
+                "type": "done",
+                "tool_calls": [_tool_call("call_1", "generate_image", '{"prompt": "a cat wearing a hat"}')],
+                "finish_reason": "tool_calls",
+                "usage": None,
+            }
+        else:
+            yield {"type": "content", "delta": "Your image is generating."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.agent.graph.get_tools", return_value=[GENERATE_IMAGE_TOOL]), \
+         patch("app.core.normalize.chat_stream_with_tools", side_effect=fake), \
+         patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+        res = await execute_node(state)
+
+    assert res["tool_log"][0]["name"] == "generate_image"
+    assert captured_tool_choices[0] == {"type": "function", "function": {"name": "generate_image"}}
+    assert captured_tool_choices[1] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_execute_node_mode_hint_image_without_kaggle_creds_short_circuits():
+    """Forcing a tool that isn't even bound (no Kaggle creds configured)
+    would break the wire call outright -- must short-circuit with a clear,
+    actionable message instead of ever calling the model."""
+    state = _state(mode_hint="image", difficulty="light", needs_agent=True,
+                    messages=[{"role": "user", "content": "a cat wearing a hat"}])
+
+    with patch("app.agent.graph.get_tools", return_value=[]), \
+         patch("app.core.normalize.chat_stream_with_tools", new=AsyncMock()) as mock_stream, \
+         patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+        res = await execute_node(state)
+
+    mock_stream.assert_not_called()
+    assert res["tool_log"] == []
+    assert "Kaggle" in res["final_answer"]
+    assert res["messages"][-1] == {"role": "assistant", "content": res["final_answer"]}
 
 
 def test_used_image_gen_tool_true_when_present():

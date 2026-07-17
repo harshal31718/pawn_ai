@@ -2,6 +2,32 @@
 
 Last updated: 2026-07-17
 
+**fixes: FLUX warmup false-dead-session + chat "Create Image" mode — DONE,
+live-verified (2026-07-17), about to be promoted/deployed.** (1) FLUX warm
+sessions were being falsely declared dead mid-warmup ("session ended before
+this job ran") because the dead-session-detection thresholds in
+`image_session.get_session_status()` were flat globals tuned for SDXL's fast
+cold start; FLUX's real cold start (heavier deps, ~34GB dataset mount, ~10min
+sharded model load) legitimately outruns them. Fixed with new per-model
+`ImageModel.startup_heartbeat_stale_seconds`/`startup_no_heartbeat_timeout_
+seconds`/`startup_timeout_seconds` fields (`image_models.py`) — SDXL keeps the
+unchanged defaults (90s/180s/900s), FLUX overrides to 300s/600s/1500s. (2)
+Chat's "Create Image" mode only made `generate_image` *available*
+(`tool_choice="auto"`), not guaranteed — `execute_node` now forces
+`tool_choice` onto `generate_image` specifically on that turn's first
+iteration (`agent/graph.py`), with a graceful short-circuit if Kaggle isn't
+connected. Separately, "Fast" mode (the default) unconditionally skipped the
+agent loop entirely regardless of wording, so an explicit image request typed
+on Fast mode never had a chance to generate — fixed by reusing
+`router_classify`'s own `_IMAGE_GEN_KEYWORDS`+`has_kaggle_creds` heuristic for
+Fast mode specifically. 594 backend tests green (up from 587, 7 new). Both
+fixes live-verified: a real Kaggle FLUX session survived past the old
+180s/900s windows and generated successfully (SDXL unaffected control also
+verified); chat generated images correctly under all three modes (Fast with
+explicit wording, Pro, Create Image with vague wording), and Fast mode with an
+ordinary question stayed a plain text reply (no false-positive image
+attempts). See `dev_log.md`'s 2026-07-17 "fixes:" entry.
+
 **DEPLOYED — 48-commit release now LIVE on prod (`pawnai.duckdns.org`),
 2026-07-17.** `main` is now at `6f2f75f` (was `f7263f5`), matching `dev` at the
 time of promotion. Ships: the full chat feature batch (F-1–F-11), imageLab Q1

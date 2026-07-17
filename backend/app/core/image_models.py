@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from app.constants import (
+    IMAGE_SESSION_HEARTBEAT_STALE_SECONDS,
+    IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS,
+    IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS,
     KAGGLE_RUN_TIMEOUT_SECONDS,
     KAGGLE_TEMPLATES_DIR,
 )
@@ -116,6 +119,22 @@ class ImageModel:
     default_negative: Optional[str] = None
     # Q3.1: target shape for the vision-grounded prompt enhancer's rewrite.
     prompt_schema: Optional[PromptSchema] = None
+    # --- Warmup dead-session detection thresholds (get_session_status) -------
+    # These default to the flat global constants (SDXL's real behavior: reaches
+    # the serve loop, and its first heartbeat, comfortably inside all three).
+    # A model with a much heavier cold start needs its own, more generous
+    # values -- see the FLUX row below for why. Kept model-scoped (not just
+    # bumping the global constants) so tightening the defaults for a future
+    # lighter model never has to fight FLUX's requirements, and vice versa.
+    #
+    # Session still in starting/installing/loading_model, heartbeat present but
+    # stale past this long -> declared dead ("stopped sending heartbeats").
+    startup_heartbeat_stale_seconds: int = IMAGE_SESSION_HEARTBEAT_STALE_SECONDS
+    # Same phase, heartbeat never landed at all, Kaggle confirms 'running',
+    # session older than this -> declared dead ("never reached PAWN's database").
+    startup_no_heartbeat_timeout_seconds: int = IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS
+    # Same phase, hard wall-clock backstop regardless of the above.
+    startup_timeout_seconds: int = IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS
 
 
 IMAGE_MODELS: dict[str, ImageModel] = {
@@ -179,6 +198,30 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         session_slug="pawn-flux-session",
         session_gpu=True,
         resolution_buckets=_SDXL_NATIVE_BUCKETS,
+        # Bug found live 2026-07-17: FLUX's warm-session notebook has a
+        # background supervisor thread heartbeating from the moment cell 0
+        # finishes (well before the deps-install cell even starts), so in
+        # principle a heartbeat should land within seconds regardless of
+        # model weight. In practice FLUX's cold start is dramatically heavier
+        # than SDXL's -- a ~34GB dataset mount, a heavier dependency set
+        # (+sentencepiece, protobuf), and per the session notebook's own
+        # comment, sharding a 24GB bf16 model across 2xT4 is "the slow ~10
+        # min" -- and large blocking torch/safetensors/accelerate calls
+        # during that load can hold the GIL long enough to starve the
+        # heartbeat thread well past the SDXL-tuned global defaults (90s
+        # stale / 180s never-arrived / 900s hard cap). That's what was
+        # actually happening: PAWN was declaring a genuinely-alive, still-
+        # installing/loading FLUX kernel dead and erroring out every job
+        # queued against it ("session ended before this job ran"), confirmed
+        # live against a real Kaggle run still on "Installing FLUX
+        # dependencies..." at 450s. SDXL's cold start reliably finishes well
+        # inside the global defaults, so it keeps them unchanged. These
+        # values are deliberately generous, not tightly measured -- the
+        # true backstop for a REALLY dead kernel is still bounded, just much
+        # larger than SDXL needs.
+        startup_heartbeat_stale_seconds=300,
+        startup_no_heartbeat_timeout_seconds=600,
+        startup_timeout_seconds=1500,
         prompt_schema=PromptSchema(
             format="natural_language",
             max_length=100,
