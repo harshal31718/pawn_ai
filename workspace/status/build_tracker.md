@@ -281,12 +281,20 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   vision model (`llama-4-scout`) is already registered. See this plan file's §2/§5 for
   the resolution detail. Implementation is tracked under imageLab Q3.1 above (pass 1
   done 2026-07-16, pass 2 not started) rather than duplicated here.
-- `[ ]` **Generations tab management (G1)** — `workspace/plan/imageLab/phase_G1_generations_management.md`
-  (registered 2026-07-15, user-requested feature). Delete (queued/done/error; never running),
-  edit a queued prompt, reorder the queue — needs a new `queue_pos` column + backend
-  routes + notebook dequeue-order change (see plan §4/§5). **3 open questions for the user
-  before building** (plan §7): queue/history panel split, arrows-vs-drag-and-drop for
-  reorder, prompt-only vs full-params edit.
+- `[~]` **Generations tab management (G1)** — `workspace/plan/imageLab/phase_G1_generations_management.md`
+  (registered 2026-07-15, user-requested feature; **design finalized + all 5 open questions
+  resolved 2026-07-17, build starting**). Delete (queued/done/error; never running), reorder
+  the queue (up/down arrows, single table with a status-priority sort — no queue/history
+  split), edit a queued job (delete-and-reload into the composer with full params, not
+  inline text edit — no new `PATCH` route needed). Needs a new `queue_pos` column + 2 new
+  routes (`DELETE /generate/job/{id}`, `POST /generate/jobs/reorder`) + notebook
+  dequeue-order change + broadening the existing `original_prompt` column (Q3.1 pass 2) to
+  also cover suffix-only (non-enhanced) jobs (see plan §3/§4/§5 for the finalized design).
+  - `[ ]` G1.1 — backend: migration, `delete_job`/`reorder_queue`, 2 new routes,
+    `original_prompt` broadening, notebook one-liner. Not started.
+  - `[ ]` G1.2 — frontend: action-icon row (copy/edit/delete per status), up/down arrows,
+    settings popover, input-image tag, `triggerEdit` (shares `AdvancedParams` prefill with
+    `triggerRefine`), sort-comparator change. Not started.
 
 *(Superseded/archived this date: `plan_open_issues_2026-07-14.md` →
 `implemented_phases/plan_open_issues_2026-07-14_resolved.md`;
