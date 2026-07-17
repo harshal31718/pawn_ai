@@ -11,6 +11,28 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
+## Deployment — `dev` → `main` release, prep done, awaiting go-ahead (2026-07-17)
+
+`[~]` **Release: 48-commit batch (chat F-1–F-11, imageLab Q1/Q3/G1, today's 2
+polish fixes) → prod (`pawnai.duckdns.org`)** —
+`workspace/plan/deployment.md` (this release's plan; root `deployment.md` is the
+general reusable runbook, unchanged). **Full pre-flight gate already run and green**
+this session: 580 backend tests, `tsc` clean, 37 frontend tests, production
+`npm run build` clean, prod backend Docker image builds clean, working tree clean,
+no new secrets needed, no stray TODO/FIXME markers, `scripts/promote-to-main.sh`
+verified intact. Two manual, additive (`add column if not exists`) SQL migrations
+identified and queued for after the code deploy: `2026-07_Q31_enhance_prompts.sql`,
+`2026-07_G1_image_jobs_queue_pos.sql` — no destructive migration this time (unlike
+the 2026-07-14 promotion's `memory_chunks` wipe). **Per the user's explicit
+instruction: waiting for their go-ahead before pushing `dev`→`origin/dev` or
+touching `origin/main`/the VM** — this step registers the prep, not the execution.
+Also confirmed live in a real, unrelated compose-file question this session: the
+docker-compose 3-file layout (`docker-compose.yml` dev / `docker-compose.prod.yml`
+prod / gitignored `docker-compose.override.yml`) is intentional, not redundant —
+user agreed to keep as-is, no merge.
+
+---
+
 ## Registered plans awaiting build (2026-07-15, re-ordered 2026-07-16) — planning only, no steps started
 
 **Cross-plan order: chat → imageLab.** videoLab is deferred — no plans to implement it

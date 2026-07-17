@@ -6,6 +6,41 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — Deployment prep: pre-flight gate + release plan drafted, execution held
+
+User asked to move toward deploying the current 48-commit `dev`→`main` gap (last
+promoted 2026-07-14). Ran the full pre-deploy gate: `docker compose exec backend
+pytest -n auto -q` (580 passed), `docker compose exec frontend npx tsc --noEmit`
+(clean), `npx vitest run` (37 passed), `npm run build` (clean production build),
+and — new this round — `docker compose -f docker-compose.prod.yml build backend`
+to catch prod-specific Dockerfile breakage before it ever reaches the VM (it
+builds clean). Confirmed no new server-side secrets are needed (diffed
+`config.py`/`constants.py`), confirmed only `.example`/`.gitkeep` files are
+tracked under `secrets/`, confirmed the registry data files
+(`image_presets.json`, refreshed `endpoints.json`/`models.json`) ship via the
+existing bind mount with no extra step, confirmed `scripts/promote-to-main.sh`
+hasn't regressed, and grepped the diff for stray TODO/FIXME markers (none).
+Found 2 pending manual SQL migrations that piled up since the last promotion
+(`2026-07_Q31_enhance_prompts.sql`, `2026-07_G1_image_jobs_queue_pos.sql`) — both
+additive/non-destructive, unlike last time's `memory_chunks` wipe. Drafted a
+fresh release plan at `workspace/plan/deployment.md` (the prior one-time
+promotion plan is archived at
+`implemented_phases/plan_deployment_dev_to_main_promotion.md`) scoped to this
+batch, reusing root `deployment.md`'s general runbook (this is a routine release
+to an already-live VM, not a first deploy).
+
+**Also this session**: user asked whether the 3 docker-compose files could be
+merged. Investigated — `docker-compose.override.yml` is gitignored (not
+actually a maintained repo file, just a personal-machine override, standard
+Compose convention), leaving really only 2 tracked files (dev, prod) that
+genuinely need different shapes (hot-reload vs not, frontend-as-a-service vs
+static Nginx build, resource caps sized per-host). Recommended against merging;
+user agreed to keep as-is.
+
+**Per the user's explicit instruction, execution (pushing `dev`→`origin/dev`,
+promoting to `main`, deploying to the VM) is held until they say go** — this
+entry records only the prep.
+
 ### [2026-07-17] — Chat: attached file/image shown as a card on the sent message
 (user-requested, not a numbered step)
 
