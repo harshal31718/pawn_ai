@@ -709,7 +709,9 @@ def test_get_session_status_warmup_no_heartbeat_falls_back_to_timeout():
     detected via the wall-clock startup timeout, not heartbeat staleness --
     the age here (20min) is past the probe-eligible window too, so the probe
     is mocked returning None (no info, e.g. no Kaggle creds) to prove the
-    900s backstop still fires on its own when the probe can't help."""
+    900s backstop still fires on its own when the probe can't help.
+    Uses sdxl -- flux's own backstop is deliberately larger (see the
+    FLUX-specific tests below), this proves the un-overridden default."""
     now = datetime.now(timezone.utc)
     row = {
         "id": "s1",
@@ -722,7 +724,7 @@ def test_get_session_status_warmup_no_heartbeat_falls_back_to_timeout():
     db = _FakeDB(rows={"image_sessions": [row]})
     p1, p2, p3, p4 = _patch_db(db)
     with p1, p2, p3, p4, patch("app.core.image_session.key_store.get_kaggle", return_value=None):
-        out = image_session.get_session_status("user-1", "flux")
+        out = image_session.get_session_status("user-1", "sdxl")
     assert out["status"] == "error"
     assert out["error"] and "starting up" in out["error"]
 
@@ -828,7 +830,9 @@ def test_get_session_status_probe_running_recent_stays_warming():
 
 def test_get_session_status_probe_running_no_heartbeat_past_180s_flips_with_rendezvous_message():
     """Kaggle says running, but PAWN has never heard from it -- the kernel is
-    alive but can't reach PostgREST at all (tunnel down, RLS mismatch)."""
+    alive but can't reach PostgREST at all (tunnel down, RLS mismatch).
+    Uses sdxl -- flux's own window is deliberately larger (see the
+    FLUX-specific tests below), this proves the un-overridden default."""
     now = datetime.now(timezone.utc)
     row = _row_no_heartbeat(now, 200)  # past the 180s rendezvous-broken window
     db = _FakeDB(rows={"image_sessions": [row]})
@@ -836,7 +840,7 @@ def test_get_session_status_probe_running_no_heartbeat_past_180s_flips_with_rend
     with p1, p2, p3, p4, \
          patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
          patch("app.core.image_session.kaggle.kernel_status", return_value="running"):
-        out = image_session.get_session_status("user-1", "flux")
+        out = image_session.get_session_status("user-1", "sdxl")
     assert out["status"] == "error"
     assert out["error"] and "never reached PAWN's database" in out["error"]
 
@@ -874,7 +878,9 @@ def test_get_session_status_probe_throttled_within_window():
 def test_get_session_status_probe_early_check_on_half_stale_heartbeat():
     """A heartbeat that's gone stale past half the 90s window (but not the
     full window yet) triggers an early probe check rather than waiting out
-    the remaining time when Kaggle can already confirm the kernel is over."""
+    the remaining time when Kaggle can already confirm the kernel is over.
+    Uses sdxl -- flux's own window is deliberately larger (see the
+    FLUX-specific tests below), this proves the un-overridden default."""
     now = datetime.now(timezone.utc)
     row = {
         "id": "s1",
@@ -889,9 +895,114 @@ def test_get_session_status_probe_early_check_on_half_stale_heartbeat():
     with p1, p2, p3, p4, \
          patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
          patch("app.core.image_session.kaggle.kernel_status", return_value="error"):
-        out = image_session.get_session_status("user-1", "flux")
+        out = image_session.get_session_status("user-1", "sdxl")
     assert out["status"] == "error"
     assert out["error"] and "no longer running" in out["error"]
+
+
+# --- Regression tests: FLUX's model-scoped, more generous dead-session
+# thresholds (image_models.py's ImageModel.startup_* fields) -- found live
+# 2026-07-17: a genuinely-alive FLUX kernel still on "Installing FLUX
+# dependencies..." at 450s was declared dead at the old flat 180s window and
+# every queued job errored out with "session ended before this job ran".
+# SDXL keeps the tight defaults (proven by the sdxl-scoped tests above,
+# unchanged); these prove FLUX's wider windows (600s/300s/1500s) actually
+# suppress the false positive while still catching a REALLY dead session.
+
+def test_get_session_status_flux_no_heartbeat_past_old_180s_window_stays_alive():
+    """The exact live incident: FLUX past the old (SDXL-tuned) 180s window,
+    Kaggle confirms 'running' -- must NOT be declared dead, since FLUX's own
+    window is 600s."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 200)  # past the old 180s window, well under flux's 600s
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="running"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "loading_model"
+    assert not any(kind == "execute" for kind, _, _ in db.calls)
+
+
+def test_get_session_status_flux_no_heartbeat_past_600s_window_still_flips():
+    """FLUX's wider window is generous, not infinite -- past 600s with Kaggle
+    still reporting 'running' and zero heartbeat ever, it's genuinely stuck."""
+    now = datetime.now(timezone.utc)
+    row = _row_no_heartbeat(now, 650)  # past flux's own 600s window
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="running"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "never reached PAWN's database" in out["error"]
+
+
+def test_get_session_status_flux_hard_backstop_past_1500s_with_no_probe_info():
+    """FLUX's hard wall-clock backstop (1500s) fires when the probe has no
+    usable information (no creds here) -- mirrors the sdxl 900s-backstop test
+    above, scaled to flux's own generous value."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "starting",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": None,
+        "created_at": _iso(now - timedelta(seconds=1600)),  # past flux's 1500s backstop
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, patch("app.core.image_session.key_store.get_kaggle", return_value=None):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "starting up" in out["error"]
+
+
+def test_get_session_status_flux_heartbeat_stale_past_old_90s_window_stays_alive():
+    """A FLUX heartbeat that's gone stale past the old (SDXL-tuned) 90s window
+    -- and even past its own 150s half-window probe trigger, with the probe
+    reporting the kernel is still genuinely 'running' (not terminal) -- must
+    not be declared dead, since flux's own stale window is 300s."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "loading_model",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now - timedelta(seconds=200)),  # past old 90s, under flux's 300s
+        "created_at": _iso(now - timedelta(minutes=5)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4, \
+         patch("app.core.image_session.key_store.get_kaggle", return_value=_KAGGLE_CFG), \
+         patch("app.core.image_session.kaggle.kernel_status", return_value="running"):
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "loading_model"
+
+
+def test_get_session_status_flux_heartbeat_stale_past_300s_window_still_flips():
+    """Past flux's own 300s stale-heartbeat window, a heartbeat that was
+    landing but has now genuinely stopped is still caught (a real crash mid-
+    load, not just a slow one)."""
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "s1",
+        "status": "loading_model",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now - timedelta(seconds=350)),  # past flux's 300s window
+        "created_at": _iso(now - timedelta(minutes=8)),
+        "images_done": 0,
+    }
+    db = _FakeDB(rows={"image_sessions": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_session_status("user-1", "flux")
+    assert out["status"] == "error"
+    assert out["error"] and "stopped sending heartbeats" in out["error"]
 
 
 def test_get_session_status_includes_created_at():

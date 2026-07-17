@@ -43,9 +43,7 @@ from app.constants import (
     IMAGE_SESSION_HEARTBEAT_STALE_SECONDS,
     IMAGE_SESSION_KAGGLE_PROBE_INTERVAL_SECONDS,
     IMAGE_SESSION_MAX_DURATION_MINUTES,
-    IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS,
     IMAGE_SESSION_STARTUP_PROBE_AFTER_SECONDS,
-    IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS,
     KAGGLE_SESSION_POLL_INTERVAL_SECONDS,
 )
 from app.core import generate, kaggle, key_store
@@ -345,17 +343,26 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
         # signal than the wall-clock startup timeout alone -- that timeout is
         # now only the backstop for when the probe itself has no information
         # (no Kaggle creds configured, or the Kaggle API is unreachable).
+        #
+        # All three thresholds below are MODEL-SCOPED (get_image_model), not
+        # flat constants -- a heavy model's cold start (dataset mount, deps
+        # install, huge blocking tensor-load calls that can hold the GIL) can
+        # legitimately outrun the SDXL-tuned defaults. See FLUX's ImageModel
+        # row (image_models.py) for the live incident this fixed: PAWN was
+        # declaring a genuinely-alive, still-loading FLUX kernel dead and
+        # erroring out every queued job.
+        spec = get_image_model(model)
         hb = _parse_ts(s.get("heartbeat_at"))
         created = _parse_ts(s.get("created_at"))
         dead_reason = None
         if hb is not None:
             staleness = (_now() - hb).total_seconds()
-            if staleness > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS:
+            if staleness > spec.startup_heartbeat_stale_seconds:
                 dead_reason = (
                     "Session died during startup -- the Kaggle kernel stopped "
                     "sending heartbeats (crash, resource limit, or killed)."
                 )
-            elif staleness > IMAGE_SESSION_HEARTBEAT_STALE_SECONDS / 2:
+            elif staleness > spec.startup_heartbeat_stale_seconds / 2:
                 # Heartbeat going stale but not stale enough yet to be sure --
                 # worth an early independent check rather than waiting out the
                 # full window when Kaggle can already tell us it's over.
@@ -376,14 +383,14 @@ def get_session_status(user_id: str, model: str = DEFAULT_IMAGE_MODEL) -> dict:
                         f"'{probe}') -- it exited or failed before the session "
                         "came up. Check the kernel log on kaggle.com/code."
                     )
-                elif probe == "running" and age > IMAGE_SESSION_RUNNING_NO_HEARTBEAT_TIMEOUT_SECONDS:
+                elif probe == "running" and age > spec.startup_no_heartbeat_timeout_seconds:
                     dead_reason = (
                         "The Kaggle kernel is running, but it has never reached "
                         "PAWN's database -- the PostgREST connection may be down "
                         "or misconfigured (tunnel, RLS token). Check the kernel "
                         "log on kaggle.com/code for '[pawn]' error lines."
                     )
-                elif probe != "queued" and age > IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS:
+                elif probe != "queued" and age > spec.startup_timeout_seconds:
                     dead_reason = (
                         "Session never finished starting up in time -- the Kaggle kernel "
                         "may have failed to install dependencies or load the model."

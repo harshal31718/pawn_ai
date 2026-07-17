@@ -17,7 +17,7 @@ Public API:
         rate_limiter: EndpointRateLimiter,
         user_id: str | None = None,
         tools: list | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict = "auto",
         on_provider_switch: Callable[[str, str], None] | None = None,
         on_model_switch: Callable[[str, str], None] | None = None,
     ) -> dict:
@@ -28,7 +28,7 @@ Public API:
         resolver: Resolver,
         rate_limiter: EndpointRateLimiter,
         tools: list | None = None,
-        tool_choice: str = "auto",
+        tool_choice: str | dict = "auto",
         on_provider_switch: Callable[[str, str], None] | None = None,
         user_id: str | None = None,
         on_model_switch: Callable[[str, str], None] | None = None,
@@ -193,7 +193,7 @@ async def _stream_one_model_with_tools(
     on_provider_switch: Callable[[str, str], None] | None,
     user_id: str | None,
     tools: list | None,
-    tool_choice: str,
+    tool_choice: str | dict,
 ) -> AsyncGenerator[dict, None]:
     """Streaming-with-tools sibling of _stream_one_model: same endpoint-level
     failover across ONE model's keyed endpoints, same "no retry once a token
@@ -254,7 +254,7 @@ async def chat_stream_with_tools(
     resolver: Resolver,
     rate_limiter: EndpointRateLimiter,
     tools: list | None = None,
-    tool_choice: str = "auto",
+    tool_choice: str | dict = "auto",
     on_provider_switch: Callable[[str, str], None] | None = None,
     user_id: str | None = None,
     on_model_switch: Callable[[str, str], None] | None = None,
@@ -315,7 +315,7 @@ async def _complete_one_model(
     rate_limiter: EndpointRateLimiter,
     user_id: str | None,
     tools: list | None,
-    tool_choice: str,
+    tool_choice: str | dict,
     on_provider_switch: Callable[[str, str], None] | None = None,
 ) -> dict:
     """Complete against ONE model, failing over across that model's keyed endpoints
@@ -391,7 +391,7 @@ async def chat_complete(
     rate_limiter: EndpointRateLimiter,
     user_id: str | None = None,
     tools: list | None = None,
-    tool_choice: str = "auto",
+    tool_choice: str | dict = "auto",
     on_provider_switch: Callable[[str, str], None] | None = None,
     on_model_switch: Callable[[str, str], None] | None = None,
 ) -> dict:
