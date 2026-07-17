@@ -1,8 +1,11 @@
 import { useState } from 'react'
-import { useParams, useOutletContext, useNavigate, Link } from 'react-router-dom'
-import { ChatBubbleIcon, ChevronRightIcon, FolderIcon } from '../components/icons'
+import { useParams, useOutletContext, useNavigate } from 'react-router-dom'
+import { ChatBubbleIcon, FolderIcon } from '../components/icons'
+import ConfirmDialog from '../components/ConfirmDialog'
+import EditProjectDetailsModal from '../components/EditProjectDetailsModal'
 import KebabMenu from '../components/KebabMenu'
 import MessageInput from '../components/MessageInput'
+import type { Mode } from '../components/ModePicker'
 import { clearMemory, rebuildMemory } from '../api/client'
 import { useAppContext } from '../contexts/AppContext'
 import type { LayoutContext } from './Layout'
@@ -19,13 +22,20 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const { store } = useOutletContext<LayoutContext>()
-  const { projects, conversations, createConversation, renameProject } = store
-  const { displayName, availableModels } = useAppContext()
+  const { projects, conversations, createProjectChat, renameProject, updateProjectDescription, deleteProject } = store
+  const { displayName } = useAppContext()
 
   const [draft, setDraft] = useState('')
-  const [selectedProvider, setSelectedProvider] = useState(availableModels[0]?.model_id || 'gemini-2.5-flash')
+  const [mode, setMode] = useState<Mode>('fast')
   const [isEditingName, setIsEditingName] = useState(false)
   const [nameValue, setNameValue] = useState('')
+  const [isEditingDetails, setIsEditingDetails] = useState(false)
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false)
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false)
+  // The chat must actually be assigned to this project (awaited, not raced in
+  // the background) before its window opens — see createProjectChat's doc
+  // comment for the live-reproduced bug this replaced.
+  const [isStartingChat, setIsStartingChat] = useState(false)
 
   const project = projects.find((p) => p.id === projectId)
   const chats = conversations
@@ -49,33 +59,71 @@ export default function ProjectPage() {
     setIsEditingName(false)
   }
 
-  function handleSend(content: string) {
-    if (!content.trim()) return
-    const newId = createConversation(projectId)
-    navigate(`/project/${projectId}/chat/${newId}`, { state: { pendingMessage: content } })
+  function saveDetails(name: string, description: string) {
+    if (!projectId) return
+    if (name && name !== project?.name) renameProject(projectId, name)
+    if (description !== (project?.description ?? '')) updateProjectDescription(projectId, description)
+    setIsEditingDetails(false)
   }
 
-  function handleUpload(file: File) {
-    const newId = createConversation(projectId)
-    navigate(`/project/${projectId}/chat/${newId}`, {
-      state: { pendingMessage: draft.trim() || undefined, pendingUploadFile: file },
-    })
+  async function handleSend(content: string) {
+    if (!content.trim() || isStartingChat || !projectId) return
+    setIsStartingChat(true)
+    try {
+      const newId = await createProjectChat(projectId)
+      navigate(`/project/${projectId}/chat/${newId}`, { state: { pendingMessage: content } })
+    } catch (err: any) {
+      alert(`Failed to start a chat in this project: ${err.message}`)
+      setIsStartingChat(false)
+    }
+  }
+
+  async function handleUpload(file: File) {
+    if (isStartingChat || !projectId) return
+    setIsStartingChat(true)
+    try {
+      const newId = await createProjectChat(projectId)
+      navigate(`/project/${projectId}/chat/${newId}`, {
+        state: { pendingMessage: draft.trim() || undefined, pendingUploadFile: file },
+      })
+    } catch (err: any) {
+      alert(`Failed to start a chat in this project: ${err.message}`)
+      setIsStartingChat(false)
+    }
+  }
+
+  function confirmDelete() {
+    if (!projectId) return
+    deleteProject(projectId)
+    setIsConfirmingDelete(false)
+    navigate('/projects')
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto">
-      <div className="w-full max-w-2xl mx-auto px-6 pt-16 pb-12">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-1 text-xs text-theme-text-muted mb-3 select-none">
-          <Link to="/chat" className="hover:text-theme-text transition-colors">
-            Chats
-          </Link>
-          <ChevronRightIcon className="w-3 h-3" />
-          <span className="text-theme-text font-medium truncate max-w-[220px]">{project?.name ?? 'Project'}</span>
+    <div className="relative flex-1 flex flex-col h-full overflow-y-auto">
+      {/* Floating Top Header — same pill pattern as ChatPage/SettingsPage,
+          replacing the old plain in-flow breadcrumb line (F-10 follow-up). */}
+      <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center w-full">
+        <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">
+          <button
+            type="button"
+            onClick={() => navigate('/projects')}
+            className="rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
+            title="All projects"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+          <h1 className="text-xs font-semibold text-theme-text select-none truncate max-w-[150px] md:max-w-xs">
+            {project?.name ?? 'Project'}
+          </h1>
         </div>
+      </header>
 
+      <div className="w-full max-w-2xl mx-auto px-6 pt-16 pb-12">
         {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-1">
           <FolderIcon className="w-6 h-6 text-theme-text-muted shrink-0" />
           {isEditingName ? (
             <input
@@ -100,7 +148,7 @@ export default function ProjectPage() {
           <KebabMenu
             title="Project options"
             items={[
-              { label: 'Rename', onClick: startRename },
+              { label: 'Edit details', onClick: () => setIsEditingDetails(true) },
               {
                 label: 'Memory',
                 submenu: [
@@ -108,9 +156,27 @@ export default function ProjectPage() {
                   { label: 'Rebuild memory index', onClick: () => rebuildMemory('project', projectId).catch((err) => alert(`Failed to rebuild memory: ${err.message}`)) },
                 ],
               },
+              { label: 'Delete project', danger: true, onClick: () => setIsConfirmingDelete(true) },
             ]}
           />
         </div>
+
+        {/* Description (F-10) */}
+        {project?.description && (
+          <div className="mb-6 text-sm text-theme-text-muted leading-relaxed max-w-xl">
+            <p className={descriptionExpanded ? '' : 'line-clamp-2'}>{project.description}</p>
+            {project.description.length > 140 && (
+              <button
+                type="button"
+                onClick={() => setDescriptionExpanded((v) => !v)}
+                className="text-xs underline text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer mt-0.5"
+              >
+                {descriptionExpanded ? 'Show less' : 'Show more'}
+              </button>
+            )}
+          </div>
+        )}
+        {!project?.description && <div className="mb-6" />}
 
         {/* Composer — same component ChatPage uses, creates+navigates on first send/upload */}
         <div className="mb-8">
@@ -119,9 +185,9 @@ export default function ProjectPage() {
             onChange={setDraft}
             onSend={handleSend}
             onUpload={handleUpload}
-            selectedProvider={selectedProvider}
-            onChangeProvider={setSelectedProvider}
-            models={availableModels}
+            disabled={isStartingChat}
+            mode={mode}
+            onChangeMode={setMode}
           />
         </div>
 
@@ -155,6 +221,30 @@ export default function ProjectPage() {
           </div>
         )}
       </div>
+
+      <EditProjectDetailsModal
+        open={isEditingDetails}
+        initialName={project?.name ?? ''}
+        initialDescription={project?.description ?? ''}
+        onSave={saveDetails}
+        onCancel={() => setIsEditingDetails(false)}
+      />
+
+      <ConfirmDialog
+        open={isConfirmingDelete}
+        title="Delete project?"
+        message={
+          <>
+            This deletes <strong>{project?.name ?? 'this project'}</strong>
+            {chats.length > 0 ? ` and all ${chats.length} chat${chats.length === 1 ? '' : 's'} inside it` : ''}.
+            This cannot be undone.
+          </>
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={confirmDelete}
+        onCancel={() => setIsConfirmingDelete(false)}
+      />
     </div>
   )
 }

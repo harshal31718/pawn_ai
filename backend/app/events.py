@@ -65,3 +65,15 @@ def citation_event(url: str, title: str) -> str:
     present in the final answer). One per distinct URL — emitted by the
     execute loop (A.6)."""
     return f"data: {json.dumps({'type': 'citation', 'url': url, 'title': title})}\n\n"
+
+
+def tool_result_event(name: str, observation: str, agent: str = "main") -> str:
+    """F-11 follow-up: a tool call's real result, live -- `step_event` only
+    ever carries the call's *args* (emitted before the call runs); until this
+    event, `observation` was never sent over SSE at all, only attached to the
+    persisted message after the whole turn finishes. That meant anything
+    keyed off a tool's observation (e.g. ImageJobChip's job id) could never
+    appear during a live stream, only after a later reload. Emitted right
+    after the tool call resolves, same `agent` tag as its `step` event so the
+    client can match them up."""
+    return f"data: {json.dumps({'type': 'tool_result', 'name': name, 'observation': observation, 'agent': agent})}\n\n"

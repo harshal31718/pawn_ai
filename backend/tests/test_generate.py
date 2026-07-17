@@ -3,7 +3,7 @@
 The Kaggle client is mocked — no real Kaggle calls (testing rule).
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -33,13 +33,17 @@ def test_generate_image_returns_job_id(client):
     with patch(
         "app.routes.generate.image_session.create_cold_job", return_value=("job-1", True)
     ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
-        resp = client.post("/generate", json={"modality": "image", "prompt": "a futuristic city"})
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a futuristic city", "enhance_prompt": "off"},
+        )
     assert resp.status_code == 200
     assert resp.json() == {"job_id": "job-1", "status": "queued"}
     # Model defaults to sdxl when omitted; empty params object forwarded.
     args = mk.call_args.args
     assert args[:3] == ("test-user-id", "sdxl", "a futuristic city")
     assert args[3].model_dump(exclude_none=True) == {}
+    assert args[4:] == (None, None)  # enhance_prompt: off -> no original/enhanced prompt stored
 
 
 def test_generate_image_passes_model_through(client):
@@ -47,7 +51,8 @@ def test_generate_image_passes_model_through(client):
         "app.routes.generate.image_session.create_cold_job", return_value=("job-2", True)
     ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
         resp = client.post(
-            "/generate", json={"modality": "image", "prompt": "a city", "model": "flux"}
+            "/generate",
+            json={"modality": "image", "prompt": "a city", "model": "flux", "enhance_prompt": "off"},
         )
     assert resp.status_code == 200
     assert resp.json()["job_id"] == "job-2"
@@ -409,6 +414,7 @@ def test_generate_image_stores_params(client):
                 "modality": "image",
                 "prompt": "a city",
                 "params": {"num_inference_steps": 10, "guidance_scale": 5.0},
+                "enhance_prompt": "off",
             },
         )
     assert resp.status_code == 200
@@ -424,11 +430,86 @@ def test_generate_image_style_suffix_applied(client):
     ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
         client.post(
             "/generate",
-            json={"modality": "image", "prompt": "a city", "params": {"style_preset": "cinematic"}},
+            json={
+                "modality": "image", "prompt": "a city",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "off",
+            },
         )
     stored_prompt = mk.call_args.args[2]
     assert stored_prompt.startswith("a city")
     assert "cinematic shot" in stored_prompt
+
+
+def test_generate_image_style_suffix_alone_sets_original_prompt(client):
+    """G1: original_prompt must capture the pre-suffix raw text even when the
+    enhancer never ran (enhance_prompt=off) -- broadens Q3.1 pass 2's
+    enhancement-only original_prompt so the Generations panel can always show
+    what the user actually typed, not the suffix-baked-in model prompt."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-style-orig", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={
+                "modality": "image", "prompt": "a city",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "off",
+            },
+        )
+    stored_prompt = mk.call_args.args[2]
+    original_prompt, enhanced_prompt = mk.call_args.args[4], mk.call_args.args[5]
+    assert stored_prompt.startswith("a city") and "cinematic shot" in stored_prompt
+    assert original_prompt == "a city"
+    assert enhanced_prompt is None
+
+
+def test_generate_image_no_suffix_no_enhancement_leaves_original_prompt_none(client):
+    """Nothing changed the prompt -> original_prompt stays None (no duplicate
+    of `prompt` stored for the common plain-generation case)."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-plain", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a city", "enhance_prompt": "off"},
+        )
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
+    assert stored_prompt == "a city"
+    assert original_prompt is None
+
+
+def test_generate_image_style_suffix_uses_flux_variant_for_flux_model(client):
+    """Q3.3b: per-model suffix variants -- FLUX gets its natural-language
+    phrasing, not SDXL's keyword-scaffold suffix, for the same style preset."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-5", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={
+                "modality": "image", "prompt": "a city", "model": "flux",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "off",
+            },
+        )
+    stored_prompt = mk.call_args.args[2]
+    assert "cinematic shot, anamorphic lens" not in stored_prompt  # SDXL's variant
+    assert "cinematic film still" in stored_prompt  # FLUX's variant
+
+
+def test_generate_image_subject_type_suffix_applied(client):
+    """Q3.3b: subject-type suffix is appended after the style suffix."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-6", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={
+                "modality": "image", "prompt": "a mountain range",
+                "params": {"subject_type": "nature"}, "enhance_prompt": "off",
+            },
+        )
+    stored_prompt = mk.call_args.args[2]
+    assert stored_prompt.startswith("a mountain range")
+    assert "landscape" in stored_prompt
 
 
 def test_generate_image_init_image_b64_stored(client):
@@ -439,7 +520,10 @@ def test_generate_image_init_image_b64_stored(client):
     ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
         resp = client.post(
             "/generate",
-            json={"modality": "image", "prompt": "a city", "init_image_b64": fake_b64},
+            json={
+                "modality": "image", "prompt": "a city",
+                "init_image_b64": fake_b64, "enhance_prompt": "off",
+            },
         )
     assert resp.status_code == 200
     params_arg = mk.call_args.args[3]
@@ -458,7 +542,10 @@ def test_generate_image_init_job_id_resolves(client):
     ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
         resp = client.post(
             "/generate",
-            json={"modality": "image", "prompt": "change the sky", "init_job_id": "old-job"},
+            json={
+                "modality": "image", "prompt": "change the sky",
+                "init_job_id": "old-job", "enhance_prompt": "off",
+            },
         )
     assert resp.status_code == 200
     params_arg = mk.call_args.args[3]
@@ -474,8 +561,289 @@ def test_generate_image_init_job_id_not_found_proceeds(client):
     ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
         resp = client.post(
             "/generate",
-            json={"modality": "image", "prompt": "a city", "init_job_id": "missing-job"},
+            json={
+                "modality": "image", "prompt": "a city",
+                "init_job_id": "missing-job", "enhance_prompt": "off",
+            },
         )
     assert resp.status_code == 200
     params_arg = mk.call_args.args[3]
     assert params_arg.init_image_b64 is None
+
+
+# --- Q3.1 pass 2: vision-grounded prompt enhancer wiring (cold /generate) ---
+
+
+def test_generate_image_enhance_off_never_calls_enhancer(client):
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-8", True)
+    ), patch("app.routes.generate.image_session.run_cold_job"), patch(
+        "app.core.vision_enhance.enhance_with_vision", new=AsyncMock()
+    ) as enh:
+        client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a cat", "enhance_prompt": "off"},
+        )
+    enh.assert_not_called()
+
+
+def test_generate_image_enhance_auto_short_prompt_triggers_enhancer(client):
+    """Auto gate: a short/vague prompt is below ENHANCE_SKIP_WORD_THRESHOLD and
+    has no scaffold vocabulary -- needs_enhancement() says yes."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-9", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"), patch(
+        "app.core.vision_enhance.enhance_with_vision",
+        new=AsyncMock(return_value={
+            "prompt": "a fluffy orange cat, 85mm lens, golden hour lighting",
+            "negative": "blurry, low quality",
+            "used_model": "llama-4-scout",
+            "degraded": False,
+        }),
+    ) as enh:
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a cat", "enhance_prompt": "auto"},
+        )
+    assert resp.status_code == 200
+    enh.assert_called_once()
+    args = mk.call_args.args
+    assert args[2] == "a fluffy orange cat, 85mm lens, golden hour lighting"  # prompt used for generation
+    assert args[4] == "a cat"  # original_prompt
+    assert args[5] == "a fluffy orange cat, 85mm lens, golden hour lighting"  # enhanced_prompt
+    params_arg = args[3]
+    assert params_arg.negative_prompt == "blurry, low quality"
+
+
+def test_generate_image_enhance_auto_long_scaffolded_prompt_skips_enhancer(client):
+    """Auto gate: an already-detailed, scaffolded prompt is used as-is -- zero
+    LLM latency for the common "user already wrote a good prompt" case."""
+    scaffolded = (
+        "portrait of a woman, shot on 85mm lens, golden hour lighting, "
+        "shallow depth of field, bokeh background, film grain, detailed skin "
+        "texture, warm color grading, centered composition"
+    )
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-10", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"), patch(
+        "app.core.vision_enhance.enhance_with_vision", new=AsyncMock()
+    ) as enh:
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": scaffolded, "enhance_prompt": "auto"},
+        )
+    assert resp.status_code == 200
+    enh.assert_not_called()
+    args = mk.call_args.args
+    assert args[2] == scaffolded
+    assert args[4:] == (None, None)
+
+
+def test_generate_image_enhance_always_forces_call_even_on_long_scaffolded_prompt(client):
+    """Always overrides the Auto gate -- the user explicitly asked for the LLM
+    pass every time."""
+    scaffolded = (
+        "portrait of a woman, shot on 85mm lens, golden hour lighting, "
+        "shallow depth of field, bokeh background, film grain, detailed skin "
+        "texture, warm color grading, centered composition"
+    )
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-11", True)
+    ), patch("app.routes.generate.image_session.run_cold_job"), patch(
+        "app.core.vision_enhance.enhance_with_vision",
+        new=AsyncMock(return_value={
+            "prompt": "rewritten prompt", "negative": None,
+            "used_model": "gemini-2.5-flash", "degraded": False,
+        }),
+    ) as enh:
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": scaffolded, "enhance_prompt": "always"},
+        )
+    assert resp.status_code == 200
+    enh.assert_called_once()
+
+
+def test_generate_image_enhance_degraded_falls_through_to_raw_prompt(client):
+    """enhance_with_vision never raises -- a degraded result (no vision model
+    available, or every attempt failed) must not block generation, and neither
+    prompt field is stored (nothing actually changed)."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-12", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"), patch(
+        "app.core.vision_enhance.enhance_with_vision",
+        new=AsyncMock(return_value={
+            "prompt": "a cat", "negative": None, "used_model": None, "degraded": True,
+        }),
+    ):
+        resp = client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a cat", "enhance_prompt": "auto"},
+        )
+    assert resp.status_code == 200
+    args = mk.call_args.args
+    assert args[2] == "a cat"
+    assert args[4:] == (None, None)
+
+
+def test_generate_image_enhance_composes_before_style_suffix(client):
+    """Enhancement runs on the raw prompt; style/subject suffixes are appended
+    after (Q3.3's existing composition, unchanged by this step)."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-13", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"), patch(
+        "app.core.vision_enhance.enhance_with_vision",
+        new=AsyncMock(return_value={
+            "prompt": "a fluffy cat, 85mm lens", "negative": None,
+            "used_model": "llama-4-scout", "degraded": False,
+        }),
+    ):
+        resp = client.post(
+            "/generate",
+            json={
+                "modality": "image", "prompt": "a cat",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "always",
+            },
+        )
+    assert resp.status_code == 200
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
+    assert stored_prompt.startswith("a fluffy cat, 85mm lens")
+    assert "cinematic shot" in stored_prompt
+    # G1: the enhancer's original_prompt (the true pre-enhancement raw text) must
+    # win over the suffix-composition fallback -- appending a style suffix on top
+    # of an already-enhanced prompt doesn't change what the user originally typed.
+    assert original_prompt == "a cat"
+
+
+# --- Q3.1 pass 2: vision-grounded prompt enhancer wiring (warm /session/job) ---
+
+
+def test_session_job_enhance_auto_short_prompt_triggers_enhancer(client):
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ), patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-enh-1"
+    ) as mk, patch(
+        "app.core.vision_enhance.enhance_with_vision",
+        new=AsyncMock(return_value={
+            "prompt": "a fluffy orange cat, 85mm lens, golden hour lighting",
+            "negative": "blurry, low quality",
+            "used_model": "llama-4-scout",
+            "degraded": False,
+        }),
+    ) as enh:
+        resp = client.post(
+            "/generate/session/job",
+            json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "auto"},
+        )
+    assert resp.status_code == 200
+    enh.assert_called_once()
+    args = mk.call_args.args
+    assert args[2] == "a fluffy orange cat, 85mm lens, golden hour lighting"
+    assert args[4] == "a cat"
+    assert args[5] == "a fluffy orange cat, 85mm lens, golden hour lighting"
+    params_arg = args[3]
+    assert params_arg.negative_prompt == "blurry, low quality"
+
+
+def test_session_job_enhance_off_skips_session_model_lookup_when_no_preset(client):
+    with patch(
+        "app.routes.generate.image_session.get_session_model"
+    ) as gm, patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-enh-2"
+    ):
+        client.post(
+            "/generate/session/job",
+            json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "off"},
+        )
+    gm.assert_not_called()
+
+
+def test_session_job_enhance_auto_needs_model_lookup_even_without_preset(client):
+    """Auto/Always enhancement needs the session's model to resolve the target
+    PromptSchema, even when no style/subject-type preset is set."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ) as gm, patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-enh-3"
+    ), patch(
+        "app.core.vision_enhance.enhance_with_vision", new=AsyncMock()
+    ):
+        client.post(
+            "/generate/session/job",
+            json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "auto"},
+        )
+    gm.assert_called_once_with("test-user-id", "s1")
+
+
+def test_session_job_style_suffix_alone_sets_original_prompt(client):
+    """G1: mirrors the cold-path test -- original_prompt captures the raw text
+    on the warm session path too when a suffix (not enhancement) is what
+    changed the stored prompt."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ), patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-enh-4"
+    ) as mk:
+        client.post(
+            "/generate/session/job",
+            json={
+                "session_id": "s1", "prompt": "a city",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "off",
+            },
+        )
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
+    assert stored_prompt.startswith("a city") and "cinematic shot" in stored_prompt
+    assert original_prompt == "a city"
+
+
+def test_session_job_enhance_composes_before_style_suffix(client):
+    """G1: mirrors the cold-path combined case (test_generate_image_enhance_
+    composes_before_style_suffix) on the warm session path -- when both the
+    enhancer AND a style suffix run, original_prompt must stay the enhancer's
+    true pre-enhancement raw text, not get clobbered by the suffix-only
+    fallback in _finalize_original_prompt."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ), patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-enh-5"
+    ) as mk, patch(
+        "app.core.vision_enhance.enhance_with_vision",
+        new=AsyncMock(return_value={
+            "prompt": "a fluffy cat, 85mm lens", "negative": None,
+            "used_model": "llama-4-scout", "degraded": False,
+        }),
+    ):
+        resp = client.post(
+            "/generate/session/job",
+            json={
+                "session_id": "s1", "prompt": "a cat",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "always",
+            },
+        )
+    assert resp.status_code == 200
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
+    assert stored_prompt.startswith("a fluffy cat, 85mm lens")
+    assert "cinematic shot" in stored_prompt
+    assert original_prompt == "a cat"
+
+
+def test_session_job_init_image_b64_defaults_strength(client):
+    """Regression: params.model_dump() always includes 'strength' as a key
+    (None when unset), so dict.setdefault('strength', 0.6) is a no-op --
+    must use an explicit is-None check, matching the cold /generate path."""
+    fake_b64 = "aGVsbG8="  # base64("hello")
+    with patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-strength-1"
+    ) as mk:
+        resp = client.post(
+            "/generate/session/job",
+            json={
+                "session_id": "s1", "prompt": "a city",
+                "init_image_b64": fake_b64, "enhance_prompt": "off",
+            },
+        )
+    assert resp.status_code == 200
+    params_arg = mk.call_args.args[3]
+    assert params_arg.init_image_b64 == fake_b64
+    assert params_arg.strength == 0.6

@@ -63,6 +63,20 @@ export type Segment =
   | { type: 'text'; content: string }
   | { type: 'tool'; entry: TraceEntry }
 
+/** What a user message was sent with -- shown as a small card above the
+ *  bubble text, matching the composer's own attachment chip. Live-session
+ *  only (like `segments` below): never sent to or read back from the
+ *  backend, since neither the image bytes nor the doc attach event are
+ *  persisted server-side -- a reload loses this card, same as `segments`. */
+export interface MessageAttachment {
+  kind: 'image' | 'doc'
+  name: string
+  /** data: URL, image attachments only -- built from the same b64/mime
+   *  already held for the one-turn vision call, not a blob URL (which gets
+   *  revoked right after send). */
+  previewUrl?: string
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'notice'
@@ -71,6 +85,7 @@ export interface Message {
   segments?: Segment[]
   citations?: Citation[]
   viaProvider?: string
+  attachment?: MessageAttachment
 }
 
 export interface ChatState {
@@ -83,6 +98,32 @@ export interface ChatState {
 import type { ConversationMeta, JobResult, Project } from './api/client'
 
 export type RefineHandler = (job: JobResult, imageSrc: string) => void
+
+// Q1.4: "Reuse seed" on a Generations row populates the composer's seed field.
+export type ReuseSeedHandler = (seed: number) => void
+
+// G1: Edit a queued job -- loads its prompt + params into the composer (no
+// source image, unlike Refine). The caller (GenerationsPanel) deletes the
+// source job itself before invoking this; this handle only does the prefill.
+export type EditHandler = (job: JobResult) => void
+
+// Image Lab's Advanced Params panel state — shared between the per-model
+// config classes (advancedParamsConfig.ts) and the AdvancedParams component.
+export interface ParamState<T> {
+  enabled: boolean
+  value: T
+}
+
+export interface AdvancedState {
+  aspectRatio: ParamState<string>
+  steps: ParamState<number>
+  guidanceScale: ParamState<number>
+  negativePrompt: ParamState<string>
+  stylePreset: ParamState<string>
+  strength: ParamState<number>
+  seed: ParamState<number>
+  subjectType: ParamState<string>
+}
 
 /** A conversation in the client cache. `_synced` is false until the backend has
  *  acknowledged the conversation exists; `_localUpdatedAt` is a client clock used
@@ -129,6 +170,7 @@ export type SyncOp =
   | { kind: 'delete'; convId: string }
   | { kind: 'createProject'; projectId: string; name: string }
   | { kind: 'renameProject'; projectId: string; name: string }
+  | { kind: 'updateProjectDescription'; projectId: string; description: string }
   | { kind: 'deleteProject'; projectId: string }
   | { kind: 'moveChat'; convId: string; projectId: string | null }
 
@@ -155,6 +197,10 @@ export const STYLE_PRESETS = [
   { key: 'anime',          label: 'Anime' },
   { key: 'oil_painting',   label: 'Oil Painting' },
   { key: 'sketch',         label: 'Sketch' },
+  { key: 'analog_film',    label: 'Analog Film' },
+  { key: 'studio_product', label: 'Studio Product' },
+  { key: 'golden_hour',    label: 'Golden Hour' },
+  { key: 'editorial',      label: 'Editorial' },
 ] as const
 
 /** label → key  (used by ImageLabPage to build the submit payload) */
@@ -164,4 +210,23 @@ export const STYLE_PRESET_KEY_MAP: Record<string, string> =
 /** key → label  (used by GenerationsPanel to display the style chip) */
 export const STYLE_PRESET_LABEL_MAP: Record<string, string> =
   Object.fromEntries(STYLE_PRESETS.map(({ key, label }) => [key, label]))
+
+// Q3.3b — orthogonal to style: what kind of subject is in frame. Composes
+// with any style preset (e.g. "Cinematic" + "Nature" both apply). A
+// "multi-person/group" entry was deliberately NOT added: SDXL's cross-
+// attention doesn't segment per-subject, so blended faces/limbs are a real,
+// only-partially-prompt-fixable risk — not worth shipping a preset for a
+// case the model handles poorly (per the user's explicit call, 2026-07-16).
+export const SUBJECT_TYPE_PRESETS = [
+  { key: 'portrait',     label: 'Portrait' },
+  { key: 'nature',       label: 'Nature / Landscape' },
+  { key: 'product',      label: 'Product / Object' },
+  { key: 'architecture', label: 'Architecture' },
+] as const
+
+export const SUBJECT_TYPE_KEY_MAP: Record<string, string> =
+  Object.fromEntries(SUBJECT_TYPE_PRESETS.map(({ key, label }) => [label, key]))
+
+export const SUBJECT_TYPE_LABEL_MAP: Record<string, string> =
+  Object.fromEntries(SUBJECT_TYPE_PRESETS.map(({ key, label }) => [key, label]))
 

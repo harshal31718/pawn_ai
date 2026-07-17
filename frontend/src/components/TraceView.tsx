@@ -30,6 +30,33 @@ const TOOL_PAST: Record<string, string> = {
 }
 const SUBAGENTS = new Set(['researcher', 'summarizer', 'coder'])
 
+// F-1: generate_image's observation is "Image generation started (job_id=<id>). ..."
+// (see backend/app/agent/tools/generate_image.py) -- extracted here rather than
+// adding a dedicated TraceEntry field, since every other tool's result already
+// flows through the same plain-string `observation`.
+const IMAGE_JOB_ID_RE = /job_id=([\w-]+)/
+
+function extractImageJobId(entry: TraceEntry): string | null {
+  if (entry.name !== 'generate_image' || !entry.observation) return null
+  const match = entry.observation.match(IMAGE_JOB_ID_RE)
+  return match ? match[1] : null
+}
+
+/** Pulls every generate_image job id out of a trace, in order, deduped --
+ *  used by Message.tsx to render the resulting image(s) in the main bubble
+ *  below the reply text, not buried inside the collapsible tool-call card
+ *  (user feedback: having to open "1 tool call" just to see the picture
+ *  defeats the point of it rendering inline at all). */
+export function findImageJobIds(entries: TraceEntry[]): string[] {
+  const ids: string[] = []
+  for (const entry of entries) {
+    if (entry.kind !== 'tool') continue
+    const id = extractImageJobId(entry)
+    if (id && !ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
 function bareName(name: string): string {
   return name.startsWith('delegate_') ? name.slice('delegate_'.length) : name
 }

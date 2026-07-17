@@ -159,6 +159,14 @@ def set_kaggle(user_id: str, config: dict) -> None:
     )
 
 
+def has_kaggle_creds(user_id: Optional[str]) -> bool:
+    """True if the user has both a Kaggle username and API token configured
+    (F-1's generate_image agent tool gates on this — same single-source-of-
+    truth pattern as has_search_key)."""
+    cfg = get_kaggle(user_id) if user_id else None
+    return bool(cfg and cfg.get("username") and cfg.get("api_token"))
+
+
 def get_kaggle(user_id: str) -> Optional[dict]:
     """Fetch and decrypt the user's Kaggle config dict, or None if absent."""
     try:

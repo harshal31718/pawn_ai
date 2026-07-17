@@ -5,7 +5,7 @@ build_agent_prompt, route_action) is deleted, not tested here. final_node no
 longer exists (Phase N merged it into execute_node's own streaming tool loop)
 -- there is no separate final_node test section."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,7 @@ from app.agent.graph import (
     DummyResolver,
     _estimate_tokens,
     _memory_hit_lines,
+    _used_image_gen_tool,
     _used_research_tools,
     classify_node,
     direct_answer_node,
@@ -24,7 +25,7 @@ from app.agent.graph import (
     verify_node,
 )
 from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, VERIFY_MAX_REVISIONS
-from app.exceptions import ProviderError
+from app.exceptions import NoEndpointError, ProviderError
 
 
 def _state(**overrides):
@@ -98,6 +99,18 @@ async def test_classify_node_heavy_message():
     assert res == {"difficulty": "heavy", "needs_agent": True}
 
 
+@pytest.mark.asyncio
+async def test_classify_node_image_attached_skips_router_entirely():
+    """F-11: an image-attached turn always forces light/direct-answer without
+    ever calling router_classify -- the router's text heuristics assume
+    plain-string content, which a multimodal turn won't have."""
+    state = _state(has_image=True, image_b64="Zm9v", image_mime="image/png")
+    with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
+        res = await classify_node(state)
+    assert res == {"difficulty": "light", "needs_agent": False}
+    mock_router.assert_not_called()
+
+
 def test_route_after_classify_light_goes_direct():
     assert route_after_classify({"needs_agent": False}) == "direct_answer"
 
@@ -129,6 +142,69 @@ async def test_direct_answer_streams_with_no_step_events():
     assert "step" not in dispatched  # zero agent overhead
     assert "token" in dispatched
     assert "final_provider" in dispatched
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_image_attached_uses_vision_capable_model_and_multimodal_content():
+    """F-11: an image-attached turn overrides the user's own model pick with
+    a vision-capable one (require_vision=True) and sends a multimodal
+    content list (text + image_url), built fresh rather than mutating
+    state["messages"] -- history stays plain-string."""
+    state = _state(
+        has_image=True,
+        image_b64="Zm9v",
+        image_mime="image/png",
+        messages=[
+            {"role": "user", "content": "earlier text turn"},
+            {"role": "assistant", "content": "earlier reply"},
+            {"role": "user", "content": "what's in this image?"},
+        ],
+    )
+    captured = {}
+
+    async def mock_stream(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        captured["model_id"] = kwargs.get("model_id")
+        yield "A cat."
+
+    resolver = MagicMock()
+    resolver.pick_model_by_capability.return_value = "gemini-2.5-flash"
+    resolver.pick.return_value = []
+
+    with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+        with patch("app.core.normalize.chat_stream", side_effect=mock_stream):
+            res = await direct_answer_node(state, resolver=resolver)
+
+    resolver.pick_model_by_capability.assert_called_once_with("balanced", user_id="u1", require_vision=True)
+    assert captured["model_id"] == "gemini-2.5-flash"
+    assert captured["messages"][:-1] == state["messages"][:-1]  # history untouched, plain strings
+    last = captured["messages"][-1]
+    assert last["role"] == "user"
+    assert last["content"] == [
+        {"type": "text", "text": "what's in this image?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,Zm9v"}},
+    ]
+    assert res["final_answer"] == "A cat."
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_image_attached_no_vision_model_falls_back_gracefully():
+    """No vision-capable model available (no matching key configured) must
+    not crash the turn -- dispatches a clear explanation as the answer."""
+    state = _state(has_image=True, image_b64="Zm9v", image_mime="image/png")
+    resolver = MagicMock()
+    resolver.pick_model_by_capability.side_effect = NoEndpointError("no vision model")
+
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+        res = await direct_answer_node(state, resolver=resolver)
+
+    assert "vision-capable model" in res["final_answer"]
+    assert any(name == "token" and "vision-capable model" in data["delta"] for name, data in dispatched)
 
 
 # ── plan_node ────────────────────────────────────────────────────────────────
@@ -263,6 +339,95 @@ async def test_execute_node_heavy_pure_text_stream_still_gets_closing_synthesis(
     token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
     assert token_deltas == ["Polished final answer."]  # the orchestrator's own text was never dispatched
     assert any(name == "step" and data.get("label") == "Composing final answer" for name, data in dispatched)
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_clean_stop_does_not_pass_trailing_assistant_message():
+    """F-7 fix: on a heavy turn's clean stop (no tool_calls at all), the
+    orchestrator's own discarded draft must NOT be appended as a trailing
+    `assistant`-role message before the mandatory closing-synthesis call --
+    several providers (Gemini's OAI-compat layer) reject or empty-out a
+    completions request whose final message is already assistant-authored,
+    which was the root cause of the half-generation/empty-reply bug. The
+    draft is still passed as context, just as a non-terminal `system` note."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    captured_messages = []
+
+    async def fake(*args, **kwargs):
+        captured_messages.append(list(args[1]))
+        if kwargs.get("tools"):
+            yield {"type": "content", "delta": "no tools needed"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+        else:
+            yield {"type": "content", "delta": "Polished final answer."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            res = await execute_node(state)
+
+    assert len(captured_messages) == 2
+    closing_call_messages = captured_messages[1]
+    assert closing_call_messages[-1]["role"] != "assistant"
+    assert "no tools needed" in closing_call_messages[-1]["content"]  # draft kept as context
+    assert res["final_answer"] == "Polished final answer."
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_closing_synthesis_failure_no_content_sent_falls_back_to_loop_draft():
+    """F-7 fix: if the closing-synthesis call fails outright before any
+    content reached the user, the turn must not end in a silent empty reply
+    -- it falls back to the tool loop's own last draft rather than raising
+    (mirrors the tool loop's own upstream-failure fallback)."""
+    state = _state(difficulty="heavy", needs_agent=True)
+
+    async def fake(*args, **kwargs):
+        if kwargs.get("tools"):
+            yield {"type": "content", "delta": "loop's own draft answer"}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+        else:
+            raise ProviderError(kind="upstream_error", message="all endpoints exhausted")
+
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)  # must NOT raise
+
+    assert res["final_answer"] == "loop's own draft answer"
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert token_deltas == ["loop's own draft answer"]
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_double_failure_with_no_content_anywhere_falls_back_to_apology():
+    """F-7 (code-reviewer WARN, closed): a heavy-but-non-research turn where
+    the tool loop never runs at all (budget already exhausted on entry, so
+    `content`/`last_loop_draft` stay "") AND the closing-synthesis call also
+    fails outright must still get a real reply -- not a silent empty one.
+    This turn never routes through verify_node (no research tools used), so
+    execute_node itself must be the one to dispatch the apology fallback."""
+    state = _state(difficulty="heavy", needs_agent=True, tokens_used=AGENT_MAX_TOKENS)
+
+    async def fake(*args, **kwargs):
+        raise ProviderError(kind="upstream_error", message="all endpoints exhausted")
+        yield  # pragma: no cover -- unreachable; makes this an async generator like the real call site expects
+
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)  # must NOT raise, must NOT end up with an empty reply
+
+    assert res["final_answer"]  # non-empty
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert len(token_deltas) == 1 and token_deltas[0]
 
 
 @pytest.mark.asyncio
@@ -653,6 +818,90 @@ async def test_execute_node_heavy_closing_call_degraded_emits_warning_step():
     )
 
 
+@pytest.mark.asyncio
+async def test_execute_node_dispatches_tool_result_with_real_observation():
+    """F-11 follow-up (live bug): `observation` was never sent over SSE at
+    all -- only ever attached to the persisted message after the whole turn
+    finished -- so anything keyed off it (ImageJobChip's job id) could never
+    appear during a live stream, only after a later reload. A `tool_result`
+    custom event must fire the moment the tool call itself resolves, with
+    its real observation and agent tag."""
+    state = _state(difficulty="light", needs_agent=True)
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake(*args, **kwargs):
+        if kwargs.get("tools"):
+            yield {
+                "type": "done",
+                "tool_calls": [_tool_call("call_1", "generate_image", '{"prompt": "a cat"}')],
+                "finish_reason": "tool_calls",
+                "usage": None,
+            }
+        else:
+            yield {"type": "content", "delta": "Your image is generating."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await execute_node(state)
+
+    real_observation = res["tool_log"][0]["observation"]
+    assert any(
+        name == "tool_result"
+        and data.get("name") == "generate_image"
+        and data.get("observation") == real_observation
+        and data.get("agent") == "main"
+        for name, data in dispatched
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_node_heavy_generate_image_call_gets_synthesis_nudge():
+    """F-11 live bug: the closing-synthesis pass has no tools and no
+    awareness of what generate_image actually returned -- a research-tier
+    model would sometimes fabricate a fake image link (e.g. a made-up
+    imgur.com URL) instead of just relaying that generation is in progress.
+    A system nudge must be appended to the closing call's own messages
+    whenever a generate_image call appears in this turn's tool_log."""
+    state = _state(difficulty="heavy", needs_agent=True)
+    captured_messages = []
+
+    async def fake(*args, **kwargs):
+        captured_messages.append(list(args[1]))
+        if kwargs.get("tools"):
+            yield {
+                "type": "done",
+                "tool_calls": [_tool_call("call_1", "generate_image", '{"prompt": "a cat"}')],
+                "finish_reason": "tool_calls",
+                "usage": None,
+            }
+        else:
+            yield {"type": "content", "delta": "Your image is generating."}
+            yield {"type": "done", "tool_calls": None, "finish_reason": "stop", "usage": None}
+
+    with patch("app.core.normalize.chat_stream_with_tools", side_effect=fake):
+        with patch("app.agent.graph.adispatch_custom_event", new=AsyncMock()):
+            res = await execute_node(state)
+
+    assert res["tool_log"][0]["name"] == "generate_image"
+    closing_call_messages = captured_messages[-1]
+    assert any(
+        m.get("role") == "system" and "Do not invent an image URL" in m.get("content", "")
+        for m in closing_call_messages
+    )
+
+
+def test_used_image_gen_tool_true_when_present():
+    assert _used_image_gen_tool([{"name": "generate_image"}]) is True
+
+
+def test_used_image_gen_tool_false_when_absent():
+    assert _used_image_gen_tool([{"name": "calculator"}]) is False
+
+
 # ── O.3: verify node + deep-research gating ─────────────────────────────────
 
 def test_used_research_tools_true_for_web_search():
@@ -819,6 +1068,54 @@ async def test_verify_node_upstream_failure_accepts_draft_gracefully():
 
     assert res["needs_revision"] is False
     assert ("token", {"delta": "Draft under a flaky provider."}) in dispatched
+
+
+@pytest.mark.asyncio
+async def test_verify_node_empty_draft_and_no_prior_content_falls_back_to_apology():
+    """F-7 defense-in-depth: an empty verify_draft with nothing else streamed
+    this turn (state["final_answer"] also empty) must never silently
+    dispatch zero token events -- that's the exact half-generation/
+    empty-reply bug. Falls back to a plain apology instead."""
+    state = _state(difficulty="heavy", verify_draft="", revision_count=0, final_answer="")
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake_complete(*args, **kwargs):
+        return {"content": "PASS", "usage": {"total_tokens": 20}}
+
+    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)
+
+    assert res["needs_revision"] is False
+    token_deltas = [data["delta"] for name, data in dispatched if name == "token"]
+    assert len(token_deltas) == 1
+    assert token_deltas[0]  # non-empty apology, not a silent no-op
+
+
+@pytest.mark.asyncio
+async def test_verify_node_empty_draft_but_prior_content_already_shown_stays_silent():
+    """The flip side: if state["final_answer"] already has content (streamed
+    live earlier this turn), an empty draft correctly means "nothing more to
+    add" -- must NOT re-dispatch final_answer (would duplicate it) or a
+    fallback apology (would append a spurious extra message)."""
+    state = _state(difficulty="heavy", verify_draft="", revision_count=0, final_answer="already shown live")
+    dispatched = []
+
+    async def fake_dispatch(name, data):
+        dispatched.append((name, data))
+
+    async def fake_complete(*args, **kwargs):
+        return {"content": "PASS", "usage": {"total_tokens": 20}}
+
+    with patch("app.core.normalize.chat_complete", side_effect=fake_complete):
+        with patch("app.agent.graph.adispatch_custom_event", side_effect=fake_dispatch):
+            res = await verify_node(state)
+
+    assert res["needs_revision"] is False
+    assert not any(name == "token" for name, data in dispatched)
 
 
 # ── _memory_hit_lines ────────────────────────────────────────────────────────

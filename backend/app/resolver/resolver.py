@@ -83,6 +83,16 @@ class Resolver:
             return True
         return False
 
+    def _has_groq_endpoint(self, model_id: str) -> bool:
+        """True if any of this model's *active* endpoints are on Groq (
+        endpoints_for() already filters to active) -- used by F-6's
+        Groq-priority ordering. Does not check rate-limit/cooldown/key
+        status; that's still handled by the existing _has_usable_endpoint
+        fallback check in pick_model_by_capability, so a Groq endpoint that's
+        active but currently rate-limited or keyless still correctly falls
+        through to the next model."""
+        return any(ep.provider == "groq" for ep in self._registry.endpoints_for(model_id))
+
     def pick_by_capability(self, level: str, visibility: str = "user", user_id: Optional[str] = None) -> List[Tuple[str, str, Dict[str, str], str, str]]:
         """
         Picks all available endpoints at a given capability level.
@@ -109,21 +119,44 @@ class Resolver:
         visibility: str = "user",
         user_id: Optional[str] = None,
         require_tools: bool = False,
+        require_vision: bool = False,
+        exclude_model_ids: Optional[set[str]] = None,
     ) -> str:
         """
         Selects the first canonical model_id matching the capability level that has
         available endpoints. When user_id is given, the model must have ≥1 endpoint
         whose provider the user has configured a key for. When require_tools is True,
         models with supports_tools=False are excluded (used for orchestrator/agent
-        picks that need native tool calling).
+        picks that need native tool calling). When require_vision is True, models with
+        supports_vision=False are excluded (used for the vision-grounded prompt
+        enhancer — see plan_vision_prompt_enhancement.md). exclude_model_ids skips
+        models already tried by the caller -- used by vision_enhance.py to step past
+        a Groq pick (preferred by the F-6 sort below when the user holds a Groq key)
+        onto the next vision-capable model (effectively Gemini) after Groq fails.
         """
         matching = (
             self._registry.internal_models(level)
             if visibility == "internal"
             else [m for m in self._registry.user_models() if m.capability_level == level]
         )
+        # F-6: if the user holds a Groq key, prefer models at this capability
+        # level that have a Groq endpoint (large rate limits, fast generation)
+        # -- stable sort so relative order is otherwise unchanged, and the
+        # existing per-model usable-endpoint check below still falls through
+        # to the next model if the prioritized one turns out rate-limited/
+        # cooled-down/keyless. ModelEntry itself carries no provider (a model
+        # can span several providers via its endpoints), so "has a Groq
+        # endpoint" is checked via the registry rather than a model attribute.
+        if user_id is not None:
+            from app.core import key_store
+            if key_store.get_key(user_id, "groq"):
+                matching = sorted(matching, key=lambda m: not self._has_groq_endpoint(m.id))
         for model in matching:
             if require_tools and not model.supports_tools:
+                continue
+            if require_vision and not model.supports_vision:
+                continue
+            if exclude_model_ids and model.id in exclude_model_ids:
                 continue
             if self._has_usable_endpoint(model.id, user_id):
                 return model.id

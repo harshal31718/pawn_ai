@@ -50,7 +50,12 @@ INITIAL_MODELS = [
     "capability_tags": ["reasoning", "math", "research", "coding"],
     "context_window": 65536,
     "active": True,
-    "supports_tools": True
+    # F-11: its active endpoint (HuggingFace's router passthrough for the raw
+    # model) doesn't reliably turn DeepSeek-R1's own tool-call tokens into a
+    # real structured tool_calls field -- found live leaking as visible text
+    # instead of triggering a tool. False until a working tool-calling
+    # endpoint for this model is verified (e.g. OpenRouter's, if reactivated).
+    "supports_tools": False
   },
   {
     "id": "gpt-oss-120b",

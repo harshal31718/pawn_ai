@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from app.core import image_session
+from app.core import image_models, image_session
 from app.main import app
 
 
@@ -287,6 +287,172 @@ def test_submit_session_job_inserts_queued_row():
     assert params[3] == "a red apple"
 
 
+def test_submit_session_job_snaps_old_sd15_resolution_to_native_bucket():
+    """Q1.1 server-side guard applies on the warm-session job path too."""
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "sdxl",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job(
+            "user-1", "s1", "a red apple",
+            image_session.ImageJobParams(width=576, height=1024),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert stored_params["width"] == 768
+    assert stored_params["height"] == 1344
+
+
+def test_submit_session_job_seed_round_trips_to_job_row():
+    """Q1.4: a fixed seed submitted via ImageJobParams must round-trip
+    unchanged into the persisted job row's params -- reproducible A/Bs depend
+    on the exact seed the user picked reaching the notebook (via the row),
+    not a snapped/derived value like width/height."""
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "sdxl",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job(
+            "user-1", "s1", "a red apple",
+            image_session.ImageJobParams(seed=123456789),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert stored_params["seed"] == 123456789
+
+
+def test_submit_session_job_applies_default_negative_for_sdxl():
+    """Q3.2: same default-negative merge as the cold path, applied on the
+    warm-session job path too -- this one DOES reach the real notebook (the
+    serve loop's cell-3 has always read job.params.negative_prompt, unlike
+    Q1.4's seed which needed new notebook code)."""
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "sdxl",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job("user-1", "s1", "a red apple")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert stored_params["negative_prompt"] == image_models.IMAGE_MODELS["sdxl"].default_negative
+
+
+def test_submit_session_job_flux_gets_no_default_negative():
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "flux",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job("user-1", "s1", "a red apple")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert "negative_prompt" not in stored_params
+
+
+def test_submit_session_job_subject_type_round_trips_to_job_row():
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1",
+        "user_id": "user-1",
+        "model": "sdxl",
+        "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)),
+        "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job(
+            "user-1", "s1", "a mountain at dawn",
+            image_session.ImageJobParams(subject_type="nature"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][4].obj
+    assert stored_params["subject_type"] == "nature"
+
+
+def test_submit_session_job_stores_original_and_enhanced_prompt():
+    """Q3.1 pass 2: same original_prompt/enhanced_prompt persistence as the
+    cold path, for the warm-session job path."""
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1", "user_id": "user-1", "model": "sdxl", "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)), "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job(
+            "user-1", "s1", "a fluffy cat, 85mm lens",
+            original_prompt="a cat", enhanced_prompt="a fluffy cat, 85mm lens",
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[5] == "a cat"
+    assert params[6] == "a fluffy cat, 85mm lens"
+
+
+def test_get_session_model_returns_the_session_row_model():
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1", "user_id": "user-1", "model": "flux", "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)), "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.get_session_model("user-1", "s1") == "flux"
+
+
+def test_get_session_model_returns_none_for_missing_session():
+    db = _FakeDB(rows={"image_sessions": []})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.get_session_model("user-1", "gone") is None
+
+
 def test_submit_session_job_missing_session_raises():
     from app.exceptions import NotConfiguredError
 
@@ -340,6 +506,25 @@ def test_get_job_returns_result_once_done():
     assert out["job_id"] == "j1"
     assert out["status"] == "done"
     assert out["image_b64"] == "RUNITz=="
+    # Q3.1 pass 2: no enhancement ran for this row -> both None, not absent.
+    assert out["original_prompt"] is None
+    assert out["enhanced_prompt"] is None
+
+
+def test_get_job_returns_original_and_enhanced_prompt_when_set():
+    row = {
+        "id": "j1", "status": "done", "model": "sdxl", "prompt": "a fluffy cat, 85mm lens",
+        "original_prompt": "a cat", "enhanced_prompt": "a fluffy cat, 85mm lens",
+        "image_b64": "RUNITz==", "mime": "image/png", "via": "kaggle", "error": None,
+        "created_at": "2026-06-29T00:00:00+00:00",
+    }
+    db = _FakeDB(rows={"image_jobs": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_job("user-1", "j1")
+
+    assert out["original_prompt"] == "a cat"
+    assert out["enhanced_prompt"] == "a fluffy cat, 85mm lens"
 
 
 def test_get_job_missing_returns_none():
@@ -347,6 +532,64 @@ def test_get_job_missing_returns_none():
     p1, p2, p3, p4 = _patch_db(db)
     with p1, p2, p3, p4:
         assert image_session.get_job("user-1", "nope") is None
+
+
+# --- G1: delete + reorder -----------------------------------------------------
+
+
+def test_delete_job_returns_true_when_a_row_is_deleted():
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.delete_job("user-1", "j1") is True
+    delete_call = next(c for c in db.calls if c[0] == "fetchone" and "delete from image_jobs" in c[1])
+    assert "status != 'running'" in delete_call[1]
+    assert "returning id" in delete_call[1]
+    assert delete_call[2] == ("j1", "user-1")
+
+
+def test_delete_job_returns_false_when_no_row_matches():
+    """Covers not-found, not-owned, and currently-running -- all three collapse
+    to zero rows returned from the same guarded DELETE, and the route maps
+    False -> 409 uniformly (see phase_G1's design decision §4.3)."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.delete_job("user-1", "j1") is False
+
+
+def test_reorder_queue_happy_path_recomputes_queue_pos_in_order():
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}, {"id": "j2"}, {"id": "j3"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        ok = image_session.reorder_queue("user-1", "s1", ["j3", "j1", "j2"])
+
+    assert ok is True
+    updates = [c for c in db.calls if c[0] == "execute" and "update image_jobs set queue_pos" in c[1]]
+    assert len(updates) == 3
+    assert [c[2] for c in updates] == [(1000, "j3"), (2000, "j1"), (3000, "j2")]
+
+
+def test_reorder_queue_rejects_mismatched_job_id_set():
+    """A stale client (a job started/finished/was deleted between fetch and
+    reorder, or a duplicate/foreign id) must be rejected with NO writes at
+    all -- not a partial reorder."""
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        ok = image_session.reorder_queue("user-1", "s1", ["j1", "j2"])
+
+    assert ok is False
+    assert not any(c[0] == "execute" and "queue_pos" in c[1] for c in db.calls)
+
+
+def test_reorder_queue_rejects_duplicate_ids():
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}, {"id": "j2"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        ok = image_session.reorder_queue("user-1", "s1", ["j1", "j1"])
+
+    assert ok is False
 
 
 def test_get_session_status_none_when_absent():
@@ -768,17 +1011,63 @@ def test_route_session_status(client):
 def test_route_session_job(client):
     with patch("app.routes.generate.image_session.submit_session_job", return_value="j1") as m:
         resp = client.post(
-            "/generate/session/job", json={"session_id": "s1", "prompt": "a cat"}
+            "/generate/session/job",
+            json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "off"},
         )
     assert resp.status_code == 200
     assert resp.json() == {"job_id": "j1", "status": "queued"}
     args = m.call_args.args
     assert args[:3] == ("test-user-id", "s1", "a cat")
+    assert args[4:] == (None, None)  # enhance_prompt: off -> no original/enhanced prompt stored
 
 
 def test_route_session_job_requires_prompt(client):
     resp = client.post("/generate/session/job", json={"session_id": "s1", "prompt": "   "})
     assert resp.status_code == 400
+
+
+def test_route_session_job_style_and_subject_suffix_applied(client):
+    """Q3.3b: unlike /generate (which has req.model directly), /session/job
+    must resolve the session's model via get_session_model before composing
+    per-model style/subject-type suffixes -- this proves that wiring end to
+    end, not just the underlying get_session_model/submit_session_job pieces
+    in isolation."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ) as gm, patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j2"
+    ) as m:
+        resp = client.post(
+            "/generate/session/job",
+            json={
+                "session_id": "s1", "prompt": "a mountain range",
+                "params": {"style_preset": "cinematic", "subject_type": "nature"},
+                "enhance_prompt": "off",
+            },
+        )
+    assert resp.status_code == 200
+    gm.assert_called_once_with("test-user-id", "s1")
+    stored_prompt = m.call_args.args[2]
+    assert stored_prompt.startswith("a mountain range")
+    assert "cinematic shot" in stored_prompt
+    assert "landscape" in stored_prompt
+
+
+def test_route_session_job_skips_session_lookup_when_no_preset_or_subject_type(client):
+    """No style_preset/subject_type set AND enhancement off -> no extra DB
+    round-trip. (Auto/Always enhancement modes need the session's model too,
+    for the target PromptSchema -- see the enhance_prompt-gated lookup tests
+    below.)"""
+    with patch(
+        "app.routes.generate.image_session.get_session_model"
+    ) as gm, patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j3"
+    ):
+        client.post(
+            "/generate/session/job",
+            json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "off"},
+        )
+    gm.assert_not_called()
 
 
 def test_route_session_stop(client):

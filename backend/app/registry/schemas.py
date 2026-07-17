@@ -12,6 +12,7 @@ class ModelEntry(BaseModel):
     context_window: int
     active: bool
     supports_tools: bool = True
+    supports_vision: bool = False
 
 class EndpointEntry(BaseModel):
     id: str

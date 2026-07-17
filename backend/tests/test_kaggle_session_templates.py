@@ -102,6 +102,19 @@ def test_session_template_writes_never_raise_unhandled(session_notebooks):
         assert "def patch_job(job_id, fields):\n    _rest_patch(" in src, path
 
 
+def test_session_template_next_job_honors_queue_pos(session_notebooks):
+    """G1: manual queue reordering only works if the kernel's own dequeue
+    query respects queue_pos ahead of the plain created_at FIFO order --
+    otherwise the backend's reorder_queue() call would silently have no
+    effect on which job actually runs next."""
+    for path, nb in session_notebooks.items():
+        src = "".join(nb["cells"][0]["source"])
+        assert '"order": "queue_pos.asc.nullslast,created_at.asc"' in src, path
+        assert '"order": "created_at.asc"' not in src, (
+            f"{path}: old plain-FIFO order string should be fully replaced, not duplicated"
+        )
+
+
 def test_session_template_cell1_wraps_pip_install(session_notebooks):
     """cell-1's dependency install must report failure (status='error')
     instead of dying uncaught with zero trace, mirroring cell-2's model-load
@@ -109,6 +122,78 @@ def test_session_template_cell1_wraps_pip_install(session_notebooks):
     for path, nb in session_notebooks.items():
         src = "".join(nb["cells"][1]["source"])
         assert "try:" in src and "dependency install failed" in src, path
+
+
+def test_sdxl_session_template_has_fp16_vae_fix(session_notebooks):
+    """Q1.2: the stock fp16 SDXL VAE overflows fp16 (>65504 activations ->
+    inf/NaN), producing random black/broken decodes. The SDXL session
+    template's model-load cell (cell-2) must load madebyollin's fp16-fix VAE
+    and assign it onto the pipeline before it's moved to cuda. FLUX uses a
+    different VAE architecture and is deliberately unaffected."""
+    for path, nb in session_notebooks.items():
+        src = "".join(nb["cells"][2]["source"])
+        if "sdxl" in path.name.lower() or "sdxl" in str(path).lower():
+            assert "madebyollin/sdxl-vae-fp16-fix" in src, f"{path} missing the VAE fix"
+            assert "pipe.vae = vae" in src, f"{path} missing the VAE assignment"
+            assert src.index("pipe.vae = vae") < src.index('pipe = pipe.to("cuda")'), (
+                f"{path}: VAE must be assigned before the pipeline moves to cuda"
+            )
+        else:
+            assert "madebyollin/sdxl-vae-fp16-fix" not in src, (
+                f"{path}: SDXL-only VAE fix leaked into a non-SDXL template"
+            )
+
+
+def test_sdxl_session_template_has_scheduler_and_tuned_cfg(session_notebooks):
+    """Q1.3: SDXL's model-load cell (cell-2) must configure DPM++ 2M SDE
+    Karras after the VAE fix and before the pipeline moves to cuda, and the
+    serve loop's (cell-3) inference calls must default guidance_scale to the
+    tuned photoreal value (5, not the old 7.5) for BOTH the text2img and
+    img2img branches. FLUX is unaffected."""
+    for path, nb in session_notebooks.items():
+        cell2 = "".join(nb["cells"][2]["source"])
+        cell3 = "".join(nb["cells"][3]["source"])
+        if "sdxl" in path.name.lower() or "sdxl" in str(path).lower():
+            assert "DPMSolverMultistepScheduler" in cell2, f"{path} missing the scheduler"
+            assert "use_karras_sigmas=True" in cell2, f"{path} missing karras sigmas"
+            assert 'algorithm_type="sde-dpmsolver++"' in cell2, f"{path} missing sde-dpmsolver++"
+            assert "euler_at_final=True" in cell2, f"{path} missing euler_at_final"
+            assert cell2.index("pipe.vae = vae") < cell2.index(
+                "DPMSolverMultistepScheduler.from_config"
+            ), f"{path}: scheduler must be configured after the VAE fix"
+            assert cell2.index("DPMSolverMultistepScheduler.from_config") < cell2.index(
+                'pipe = pipe.to("cuda")'
+            ), f"{path}: scheduler must be configured before the pipeline moves to cuda"
+            assert cell3.count('guidance_scale=p.get("guidance_scale", 5)') == 2, (
+                f"{path}: both text2img and img2img branches must default CFG to 5"
+            )
+            assert 'guidance_scale=p.get("guidance_scale", 7.5)' not in cell3, (
+                f"{path}: old CFG default 7.5 still present"
+            )
+        else:
+            assert "DPMSolverMultistepScheduler" not in cell2, (
+                f"{path}: SDXL-only scheduler swap leaked into a non-SDXL template"
+            )
+
+
+def test_session_template_serve_loop_honors_seed(session_notebooks):
+    """Q1.4: both SDXL and FLUX serve loops (cell-3) must build a
+    torch.Generator seeded from the job's `seed` param when present, and pass
+    it into BOTH the text2img and img2img inference calls -- unlike Q1.2/Q1.3,
+    this applies to every model's session template, not just SDXL."""
+    for path, nb in session_notebooks.items():
+        cell3 = "".join(nb["cells"][3]["source"])
+        assert 'seed = p.get("seed")' in cell3, f"{path} missing seed extraction"
+        assert (
+            'generator = torch.Generator(device="cuda").manual_seed(seed) if seed is not None else None'
+            in cell3
+        ), f"{path} missing the generator construction"
+        assert cell3.count("generator=generator,") == 2, (
+            f"{path}: both text2img and img2img branches must pass the seeded generator"
+        )
+        assert cell3.index('seed = p.get("seed")') < cell3.index("generator=generator,"), (
+            f"{path}: seed must be resolved before it's used in an inference call"
+        )
 
 
 def test_session_template_supervisor_has_unreachable_self_exit(session_notebooks):

@@ -76,6 +76,18 @@ class AgentState(TypedDict):
     # memory.indexer.resolve_scope. None for stateless chats.
     scope_type: Optional[str]
     scope_id: Optional[str]
+    # F-11: an image attached to this turn (vision Q&A, not RAG-indexed).
+    # image_b64/image_mime are only ever read inside direct_answer_node to
+    # build one multimodal message for this turn's own call -- never
+    # touched by classify's router (has_image short-circuits it) or
+    # persisted anywhere past this request.
+    has_image: bool
+    image_b64: Optional[str]
+    image_mime: Optional[str]
+    # Composer's mode picker (Fast / Pro / Create Image) -- an explicit hint
+    # that short-circuits classify_node's heuristic/LLM routing (see
+    # classify_node below). None when no selection reached the request.
+    mode_hint: Optional[str]
     # Router (A.5) output.
     difficulty: str
     needs_agent: bool
@@ -112,13 +124,37 @@ async def classify_node(
     resolver: Optional[Resolver] = None,
     rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
+    # F-11: an image-attached turn always takes the direct vision-answer path
+    # (direct_answer_node's has_image branch) -- never the tool-calling agent
+    # loop this pass, so there's no need to run the text-heuristic router at
+    # all (it also assumes plain-string message content, which a multimodal
+    # turn won't have once direct_answer_node builds it).
+    if state.get("has_image"):
+        return {"difficulty": "light", "needs_agent": False}
+
+    # Composer's mode picker: an explicit user choice always wins over the
+    # heuristic/LLM router below. "fast" forces the zero-overhead direct-
+    # answer path; "pro" forces the full plan->execute agent loop; "image"
+    # forces the agent loop with difficulty='light' so plan_node skips
+    # straight to a single tool-calling turn (generate_image is bound there
+    # whenever the user has Kaggle creds, same as the heuristic path).
+    mode_hint = state.get("mode_hint")
+    if mode_hint == "fast":
+        return {"difficulty": "light", "needs_agent": False}
+    if mode_hint == "pro":
+        return {"difficulty": "heavy", "needs_agent": True}
+    if mode_hint == "image":
+        return {"difficulty": "light", "needs_agent": True}
+
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
 
     has_search_key = False
+    has_kaggle_creds = False
     if user_id:
         from app.core import key_store
         has_search_key = key_store.has_search_key(user_id)
+        has_kaggle_creds = key_store.has_kaggle_creds(user_id)
 
     decision = await router_classify(
         state["messages"],
@@ -130,6 +166,7 @@ async def classify_node(
         rate_limiter=rate_limiter,
         user_id=user_id,
         has_search_key=has_search_key,
+        has_kaggle_creds=has_kaggle_creds,
     )
     return {"difficulty": decision["difficulty"], "needs_agent": decision["needs_agent"]}
 
@@ -146,10 +183,43 @@ async def direct_answer_node(
     rate_limiter: Optional[EndpointRateLimiter] = None,
 ) -> dict:
     """needs_agent=False path: one streaming call, no tools, no plan, no
-    extra step events -- this must incur genuinely zero agent overhead."""
+    extra step events -- this must incur genuinely zero agent overhead.
+
+    F-11: an image-attached turn (classify_node already forced difficulty=
+    light/needs_agent=False for these) picks a vision-capable model instead
+    of the user's own selection -- the user's picked model may not support
+    vision at all -- and sends a multimodal message (text + image_url) built
+    fresh here rather than mutating state["messages"], so the raw image
+    bytes never reach any other node or get persisted."""
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
-    model_id = state["user_model_id"]
+
+    if state.get("has_image"):
+        try:
+            model_id = resolver.pick_model_by_capability(
+                ROLE_LEVELS["vision_answer"], user_id=user_id, require_vision=True,
+            )
+        except NoEndpointError:
+            no_vision_msg = (
+                "I don't have a vision-capable model configured to look at images "
+                "right now — add a Google, Groq, or Cerebras key in Settings."
+            )
+            await adispatch_custom_event("token", {"delta": no_vision_msg})
+            return {"final_answer": no_vision_msg}
+        history = state["messages"][:-1]
+        last = state["messages"][-1]
+        image_mime = state.get("image_mime") or "image/png"
+        multimodal_last = {
+            "role": last["role"],
+            "content": [
+                {"type": "text", "text": last.get("content") or ""},
+                {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{state.get('image_b64')}"}},
+            ],
+        }
+        messages = history + [multimodal_last]
+    else:
+        model_id = state["user_model_id"]
+        messages = state["messages"]
 
     # Best-effort "which provider is about to stream" peek for the UI's initial
     # badge -- NOT the real availability check. It only looks at model_id's own
@@ -175,7 +245,7 @@ async def direct_answer_node(
     full_response = ""
     async for token in normalize.chat_stream(
         model_id=model_id,
-        messages=state["messages"],
+        messages=messages,
         resolver=resolver,
         rate_limiter=rate_limiter,
         on_provider_switch=_on_provider_switch_events,
@@ -294,6 +364,14 @@ def _memory_hit_lines(observation: str) -> List[Dict[str, str]]:
 _RESEARCH_TOOL_NAMES = frozenset({"web_search", "fetch_url", f"{DELEGATE_PREFIX}researcher"})
 
 
+# F-7: shared fallback text for the rare case where a turn ends with
+# genuinely nothing to show the user (empty draft, empty loop content, no
+# prior live-streamed text) -- used by both execute_node's heavy-turn
+# closing-synthesis failure path and verify_node's accept(), so the user is
+# never left with a bare "Composing final answer" and no reply after it.
+_EMPTY_REPLY_FALLBACK = "I wasn't able to put together a complete answer for this one — please try asking again."
+
+
 def _used_research_tools(tool_log: List[Dict[str, Any]]) -> bool:
     """O.3 deep-research gate (shared by execute_node's buffering decision
     and route_after_execute): True if this turn actually did research work
@@ -301,6 +379,30 @@ def _used_research_tools(tool_log: List[Dict[str, Any]]) -> bool:
     heavy-but-non-research turn (e.g. a long code task) shouldn't pay for the
     verifier at all."""
     return any(t.get("name") in _RESEARCH_TOOL_NAMES for t in tool_log)
+
+
+# F-11 (live bug found + fixed): the heavy-turn closing synthesis runs with
+# tools=None and no awareness of what generate_image actually returned --
+# a research-tier model with no image capability of its own would sometimes
+# "helpfully" fabricate a markdown image link (a fake imgur.com URL, seen
+# live) instead of just relaying that generation is already in progress.
+# The real job_id/status is already in working_messages (the tool's own
+# observation), so this is a pure prompting fix: tell the closing model
+# explicitly not to invent image content, only reference what's really there.
+_IMAGE_GEN_TOOL_NAME = "generate_image"
+_IMAGE_GEN_SYNTHESIS_NUDGE = (
+    "You already called generate_image above -- its real result (a job id) "
+    "is in the tool response. The actual image renders automatically on the "
+    "frontend once ready; you cannot see, link to, or embed it yourself. "
+    "Do not invent an image URL, markdown image syntax, or any image "
+    "hosting link (e.g. imgur) -- there is no such link. Just tell the user "
+    "in plain text that the image is generating and will appear "
+    "automatically; do not regenerate or call the tool again."
+)
+
+
+def _used_image_gen_tool(tool_log: List[Dict[str, Any]]) -> bool:
+    return any(t.get("name") == _IMAGE_GEN_TOOL_NAME for t in tool_log)
 
 
 async def execute_node(
@@ -457,6 +559,8 @@ async def execute_node(
 
     answered = False
     budget_exhausted = False
+    content = ""  # F-7: last loop iteration's own draft, used as a fallback
+    # if the mandatory closing-synthesis call below fails outright.
     for _ in range(AGENT_MAX_ITERATIONS):
         if tokens_used >= AGENT_MAX_TOKENS:
             budget_exhausted = True
@@ -478,10 +582,22 @@ async def execute_node(
         if not tool_calls:
             # Heavy turns: `content` here was never dispatched (see
             # defer_loop_content above) -- intentionally discarded, the
-            # closing synthesis is the real answer. Still recorded in
-            # working_messages so that call sees the orchestrator's own
-            # attempt as context, same as before.
-            working_messages.append({"role": "assistant", "content": content})
+            # closing synthesis is the real answer. Still recorded as
+            # context for that call, but as a `system` note rather than a
+            # trailing `assistant` message (F-7 fix): the closing-synthesis
+            # call below always follows on heavy turns, and several
+            # providers (Gemini's OAI-compat layer, confirmed) reject or
+            # silently empty-out a completions request whose final message
+            # is already `assistant`-authored, producing the half-generation/
+            # empty-reply bug this fixes.
+            if defer_loop_content:
+                if content:
+                    working_messages.append({
+                        "role": "system",
+                        "content": f"Orchestrator draft (not shown to the user): {content}",
+                    })
+            else:
+                working_messages.append({"role": "assistant", "content": content})
             answered = True
             break
 
@@ -516,6 +632,7 @@ async def execute_node(
                 tool_log.append(
                     {"name": name, "args": args, "observation": observation, "elapsed_ms": elapsed_ms, "agent": "main"}
                 )
+                await adispatch_custom_event("tool_result", {"name": name, "observation": observation, "agent": "main"})
                 # Nested subagent tool calls, tagged with their own agent name (A.8 renders these nested).
                 tool_log.extend(sub_result["tool_log"])
                 for citation in sub_result["citations"]:
@@ -546,6 +663,7 @@ async def execute_node(
             tool_log.append(
                 {"name": name, "args": args, "observation": observation, "elapsed_ms": elapsed_ms, "agent": "main"}
             )
+            await adispatch_custom_event("tool_result", {"name": name, "observation": observation, "agent": "main"})
 
             if name in ("search_memory", "doc_search") and not observation.startswith("TOOL_ERROR"):
                 if observation not in ("No relevant memory found.", "No relevant document content found."):
@@ -566,6 +684,16 @@ async def execute_node(
                 "tool_call_id": call.get("id", ""),
                 "content": observation,
             })
+
+            # F-11 (live bug, second occurrence): the heavy-only nudge below
+            # (kept for the closing-synthesis pass) never ran for light-agentic
+            # turns, whose own next loop iteration IS the final user-facing
+            # content -- that's the path that was still hallucinating a fake
+            # `sandbox:/mnt/data/...` markdown image link. Inject the nudge
+            # right after the tool call itself so it's in context for whichever
+            # call answers next, light or heavy.
+            if name == _IMAGE_GEN_TOOL_NAME:
+                working_messages.append({"role": "system", "content": _IMAGE_GEN_SYNTHESIS_NUDGE})
     else:
         budget_exhausted = True
 
@@ -573,6 +701,7 @@ async def execute_node(
         working_messages.append({"role": "system", "content": "budget exhausted — answer with what you have"})
 
     verify_draft: Optional[str] = None
+    last_loop_draft = content  # F-7 fallback: the loop's own last draft, pre-synthesis
 
     if state["difficulty"] == "heavy":
         # O.1 (reply-quality plan, RC-1 fix): heavy/deep-research turns always
@@ -609,10 +738,44 @@ async def execute_node(
         will_verify = _used_research_tools(tool_log)
 
         await adispatch_custom_event("step", {"label": "Composing final answer", "detail": "", "agent": "main"})
-        content, _ = await stream_iteration(
-            use_tools=False, override_model_id=final_model_id, override_on_model_switch=on_synthesis_model_switch,
-            emit_tokens=not will_verify,
-        )
+        # F-7: never let a failed/empty closing-synthesis call surface as a
+        # silently empty reply -- fall back to the loop's own last draft
+        # (last_loop_draft) if the call errors outright before any token
+        # reached the user this call (same "already streamed -> must
+        # propagate" contract as the tool loop's own try/except above). On
+        # the success path, stream_iteration already dispatched/accumulated
+        # everything itself (when emit_tokens=True) -- these except blocks
+        # must be the only place that does it for the fallback content, or
+        # a non-exception success would get double-dispatched.
+        synthesis_failed = False
+        try:
+            content, _ = await stream_iteration(
+                use_tools=False, override_model_id=final_model_id, override_on_model_switch=on_synthesis_model_switch,
+                emit_tokens=not will_verify,
+            )
+        except (ProviderError, NoEndpointError) as e:
+            if content_reached_user_this_call:
+                raise
+            print(f"Closing synthesis failed (upstream), falling back to loop draft: {e}", file=sys.stderr)
+            synthesis_failed = True
+            content = last_loop_draft
+        except Exception as e:
+            if content_reached_user_this_call:
+                raise
+            print(f"Closing synthesis failed (unexpected), falling back to loop draft: {e}", file=sys.stderr)
+            synthesis_failed = True
+            content = last_loop_draft
+
+        if synthesis_failed and not will_verify:
+            # Cover the residual gap where BOTH the closing synthesis failed
+            # AND the loop itself never produced any content (e.g. budget
+            # exhausted before any iteration ran): without this, `content`
+            # stays "" and the turn silently ends with no reply at all after
+            # "Composing final answer".
+            if not content:
+                content = _EMPTY_REPLY_FALLBACK
+            full_response += content
+            await adispatch_custom_event("token", {"delta": content})
         working_messages.append({"role": "assistant", "content": content})
         if will_verify:
             verify_draft = content
@@ -697,8 +860,18 @@ async def verify_node(
     draft = state.get("verify_draft") or ""
 
     async def accept() -> dict:
+        # F-7 defense-in-depth: execute_node's upstream fixes should make an
+        # empty draft rare now, but if the closing synthesis genuinely came
+        # back empty (e.g. every fallback also failed) AND nothing else was
+        # streamed to the user this turn (state["final_answer"], the
+        # mid-loop flash content -- already dispatched live, so it must NOT
+        # be re-dispatched here), fall back to a plain apology instead of
+        # silently dispatching zero token events. That combination is the
+        # exact half-generation/empty-reply bug this phase fixes.
         if draft:
             await adispatch_custom_event("token", {"delta": draft})
+        elif not state.get("final_answer"):
+            await adispatch_custom_event("token", {"delta": _EMPTY_REPLY_FALLBACK})
         return {"needs_revision": False}
 
     if revision_count >= VERIFY_MAX_REVISIONS:

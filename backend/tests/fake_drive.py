@@ -80,6 +80,14 @@ class FakeDriveStorage:
             if f["parent"] == folder_id
         ]
 
+    def read_files_in_folders(self, folder_ids: list[str], filename: str) -> dict[str, str]:
+        results = {}
+        for folder_id in folder_ids:
+            fid = self.find_file(filename, folder_id)
+            if fid and fid in self._files:
+                results[folder_id] = self._files[fid]["content"]
+        return results
+
     def delete_file(self, file_id: str) -> None:
         children = [
             fid

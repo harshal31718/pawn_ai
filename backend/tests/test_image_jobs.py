@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from app.core import image_session
+from app.core import image_models, image_session
 from app.exceptions import UnknownModelError
 from app.main import app
 
@@ -95,6 +95,160 @@ def test_create_cold_job_unknown_model_raises():
         image_session.create_cold_job("user-1", "nope", "x")
 
 
+def test_create_cold_job_snaps_old_sd15_resolution_to_native_bucket():
+    """Q1.1 server-side guard: an old cached frontend (or a direct API caller)
+    sending the pre-fix 576x1024 size gets snapped to SDXL's native 9:16
+    bucket (768x1344), not stored as-is."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(width=576, height=1024),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj  # psycopg.types.json.Json wraps the dict
+    assert stored_params["width"] == 768
+    assert stored_params["height"] == 1344
+
+
+def test_create_cold_job_seed_round_trips_to_job_row():
+    """Q1.4: seed is stored on the cold job row unchanged, same as the warm
+    session path. NOTE: run_cold_job (below) does not currently forward
+    job.params to generate.generate_image() at all -- a pre-existing,
+    seed-independent gap on the cold one-shot path (see dev_log's Q1.4 entry)
+    -- so this only proves storage round-trips correctly, not that a cold
+    job's seed reaches Kaggle."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(seed=42),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["seed"] == 42
+
+
+def test_create_cold_job_applies_default_negative_for_sdxl():
+    """Q3.2: SDXL's research-backed default negative prompt is merged in
+    server-side, ahead of the user's own, even when the user supplied none.
+    Same cold-path Kaggle-delivery caveat as Q1.4's seed test applies here --
+    this only proves storage round-trips correctly."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job("user-1", "sdxl", "a cat")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["negative_prompt"] == image_models.IMAGE_MODELS["sdxl"].default_negative
+
+
+def test_create_cold_job_merges_user_negative_after_default_for_sdxl():
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(negative_prompt="extra shadows"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["negative_prompt"] == (
+        f"{image_models.IMAGE_MODELS['sdxl'].default_negative}, extra shadows"
+    )
+
+
+def test_create_cold_job_skips_default_negative_under_anime_style():
+    """Q3.2 fix: the photoreal default negative must not fight the anime
+    style preset's positive suffix (both mention 'anime'/'illustration')."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a cat",
+            image_session.ImageJobParams(style_preset="anime"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert "negative_prompt" not in stored_params
+
+
+def test_create_cold_job_subject_type_round_trips_to_job_row():
+    """Q3.3b: subject_type is stored on the job row unchanged -- the actual
+    prompt-suffix vocabulary is applied route-side (routes/generate.py), this
+    just proves the field survives storage."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a mountain at dawn",
+            image_session.ImageJobParams(subject_type="nature"),
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert stored_params["subject_type"] == "nature"
+
+
+def test_create_cold_job_flux_gets_no_default_negative():
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job("user-1", "flux", "a cat")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    stored_params = insert_call[2][3].obj
+    assert "negative_prompt" not in stored_params
+
+
+def test_create_cold_job_stores_original_and_enhanced_prompt():
+    """Q3.1 pass 2: when the caller (routes/generate.py) ran the enhancer,
+    both the raw prompt (original_prompt) and the rewrite it actually used
+    (enhanced_prompt) are persisted alongside `prompt`."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a fluffy cat, 85mm lens",
+            original_prompt="a cat", enhanced_prompt="a fluffy cat, 85mm lens",
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[4] == "a cat"
+    assert params[5] == "a fluffy cat, 85mm lens"
+
+
+def test_create_cold_job_no_enhancement_stores_null_prompt_fields():
+    """Default (no enhancement ran): both fields are None, not duplicated
+    copies of `prompt`."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job("user-1", "sdxl", "a cat")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[4] is None
+    assert params[5] is None
+
+
 # --- run_cold_job (the background worker) ------------------------------------
 
 
@@ -165,6 +319,22 @@ def test_list_jobs_returns_metadata_without_image_bytes():
     assert all("image_b64" not in j for j in out)
 
 
+def test_list_jobs_includes_original_and_enhanced_prompt():
+    """Q3.1 pass 2: the Generations monitor needs both fields to show the raw
+    prompt with a ✨ marker rather than the (possibly much longer) rewrite."""
+    rows = [
+        {"id": "j1", "session_id": None, "model": "sdxl", "prompt": "a fluffy cat, 85mm lens",
+         "original_prompt": "a cat", "enhanced_prompt": "a fluffy cat, 85mm lens",
+         "status": "done", "created_at": "2026-06-29T00:00:00+00:00"},
+    ]
+    db = _FakeDB(rows={"image_jobs": rows})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        out = image_session.list_jobs("user-1")
+    assert out[0]["original_prompt"] == "a cat"
+    assert out[0]["enhanced_prompt"] == "a fluffy cat, 85mm lens"
+
+
 def test_reap_stale_jobs_marks_stuck_cold_as_error():
     """A cold job stuck active past the wall-clock cutoff is transitioned to error."""
     db = _FakeDB()
@@ -208,11 +378,29 @@ def test_route_generate_image_is_non_blocking(client):
     assert args[:3] == ("test-user-id", "sdxl", "a city")
 
 
+def test_route_generate_image_spawns_shared_worker_on_create(client):
+    """When create_cold_job actually creates a new job (created=True), the
+    route spawns via image_session's shared spawn_cold_job_bg -- the same
+    entry point the chat generate_image tool uses."""
+    with patch("app.routes.generate.image_session.create_cold_job",
+               return_value=("j10", True)), \
+         patch("app.routes.generate.image_session.spawn_cold_job_bg") as bg:
+        resp = client.post("/generate", json={"modality": "image", "prompt": "a city"})
+    assert resp.status_code == 200
+    bg.assert_called_once_with("test-user-id", "sdxl", "j10")
+
+
 def test_route_generate_image_dedup_skips_worker(client):
-    """When create_cold_job de-dups (created=False), no new worker is dispatched."""
+    """When create_cold_job de-dups (created=False), no new worker is dispatched.
+
+    F-1 fix: the cold-job spawn now goes through image_session's own shared
+    lock/task registry (spawn_cold_job_bg), not a route-local helper -- shared
+    with the chat generate_image tool so two cold runs of the same (user,
+    model) triggered from different entry points can't race the same
+    single-writer Kaggle kernel slug."""
     with patch("app.routes.generate.image_session.create_cold_job",
                return_value=("dup", False)), \
-         patch("app.routes.generate._run_cold_job_bg") as bg:
+         patch("app.routes.generate.image_session.spawn_cold_job_bg") as bg:
         resp = client.post("/generate", json={"modality": "image", "prompt": "a city"})
     assert resp.status_code == 200
     assert resp.json()["job_id"] == "dup"

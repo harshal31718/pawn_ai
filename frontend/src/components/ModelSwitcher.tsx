@@ -1,5 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { RegistryModel } from '../api/client'
+
+const DROPDOWN_MAX_HEIGHT = 320 // px, matches the old fixed max-h-80
+const VIEWPORT_MARGIN = 8 // px breathing room from the viewport edge
 
 const LEVEL_LABELS: Record<string, string> = {
   fast:     '⚡ Fast',
@@ -34,6 +37,17 @@ const formatProviderList = (providers?: string[]) => {
 export default function ModelSwitcher({ selected, onChange, disabled, models }: Props) {
   const [isOpen, setIsOpen] = useState(false)
   const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({})
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  // F-2 follow-up (user-reported live): the dropdown always opened upward,
+  // assuming the trigger sits near the bottom of the viewport (true in the
+  // main chat composer, not true everywhere it's used e.g. ProjectPage) --
+  // overflowed off the top of the screen when there wasn't enough room
+  // above. Now computed on open: flips to open downward, and caps its own
+  // height to whichever space is actually available, so it's never clipped.
+  const [dropdownPlacement, setDropdownPlacement] = useState<{ direction: 'up' | 'down'; maxHeight: number }>({
+    direction: 'up',
+    maxHeight: DROPDOWN_MAX_HEIGHT,
+  })
 
   // Group models by level for the display list
   const levelsOrder = ['fast', 'balanced', 'research'] as const
@@ -74,12 +88,20 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
     <div className="relative flex items-center px-1">
       {/* Trigger Button */}
       <button
+        ref={triggerRef}
         id="model-switcher-button"
         type="button"
         disabled={disabled || models.length === 0}
         onClick={() => {
           if (isOpen) {
             setExpandedModels({})
+          } else if (triggerRef.current) {
+            const rect = triggerRef.current.getBoundingClientRect()
+            const spaceAbove = rect.top - VIEWPORT_MARGIN
+            const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_MARGIN
+            const direction = spaceAbove >= DROPDOWN_MAX_HEIGHT || spaceAbove >= spaceBelow ? 'up' : 'down'
+            const available = direction === 'up' ? spaceAbove : spaceBelow
+            setDropdownPlacement({ direction, maxHeight: Math.max(120, Math.min(DROPDOWN_MAX_HEIGHT, available)) })
           }
           setIsOpen(!isOpen)
         }}
@@ -118,13 +140,17 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
         />
       )}
 
-      {/* Custom Dropdown list overlay */}
+      {/* Custom Dropdown list overlay -- direction/height computed on open (see
+          the trigger's onClick) so it never overflows off the viewport edge. */}
       {isOpen && (
-        <div className="
-          absolute right-0 bottom-full mb-1.5 w-80 bg-theme-bg border border-theme-border rounded-lg shadow-lg z-50 overflow-hidden text-xs py-1
-          animate-in fade-in slide-in-from-bottom-1 duration-150
-        ">
-          <div className="max-h-80 overflow-y-auto">
+        <div
+          className={`
+            absolute right-0 w-80 bg-theme-bg border border-theme-border rounded-lg shadow-lg z-50 overflow-hidden text-xs py-1
+            animate-in fade-in duration-150
+            ${dropdownPlacement.direction === 'up' ? 'bottom-full mb-1.5 slide-in-from-bottom-1' : 'top-full mt-1.5 slide-in-from-top-1'}
+          `}
+        >
+          <div className="overflow-y-auto" style={{ maxHeight: dropdownPlacement.maxHeight }}>
             {groups.map(({ level, label, models: groupModels }) =>
               groupModels.length > 0 ? (
                 <div key={level} className="flex flex-col">

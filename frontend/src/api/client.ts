@@ -3,6 +3,11 @@ import type { Citation, TraceEntry } from '../types'
 // Fallback to localhost for local dev without a .env file
 export const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
+/** Thrown for a sync-queue op that can never succeed (e.g. its target project
+ * or chat was deleted out from under it) — syncQueue.ts drops these
+ * immediately instead of retrying forever with the generic backoff path. */
+export class PermanentSyncError extends Error {}
+
 function getToken(): string | null {
   return localStorage.getItem('pawn-token')
 }
@@ -110,7 +115,14 @@ export interface ImageParams {
   negative_prompt?: string
   style_preset?: string
   strength?: number
+  seed?: number
+  subject_type?: string
 }
+
+// Q3.1 pass 2: 3-state prompt-enhancer control -- 'auto' (rule-based gate
+// decides, default), 'always' (force the vision-grounded rewrite), 'off'
+// (never enhance, raw prompt only).
+export type EnhanceMode = 'auto' | 'always' | 'off'
 
 export async function connectKaggle(model = 'sdxl'): Promise<void> {
   const res = await fetch(`${BASE_URL}/generate/connect`, {
@@ -146,6 +158,7 @@ export async function runGenerate(
   params?: ImageParams,
   initImageB64?: string,
   initJobId?: string,
+  enhancePrompt?: EnhanceMode,
 ): Promise<{ job_id: string; status: string }> {
   return postJson('/generate', {
     modality: 'image',
@@ -153,6 +166,7 @@ export async function runGenerate(
     model,
     ...(params && Object.keys(params).length > 0 ? { params } : {}),
     ...(initJobId ? { init_job_id: initJobId } : initImageB64 ? { init_image_b64: initImageB64 } : {}),
+    ...(enhancePrompt ? { enhance_prompt: enhancePrompt } : {}),
   })
 }
 
@@ -197,11 +211,18 @@ export interface JobResult {
   session_id?: string | null
   model?: string
   prompt?: string
+  // Q3.1 pass 2: set only when the vision-grounded enhancer actually rewrote
+  // the prompt for this job -- both null/absent means no enhancement ran.
+  original_prompt?: string | null
+  enhanced_prompt?: string | null
   image_b64?: string | null
   mime?: string | null
   via?: string | null
   error?: string | null
   params?: Record<string, unknown> | null
+  // G1: manual queue-reorder priority (ascending, nulls-last -- untouched
+  // rows keep plain FIFO-by-created_at). Only meaningful for queued jobs.
+  queue_pos?: number | null
   created_at?: string | null
   started_at?: string | null
   done_at?: string | null
@@ -247,12 +268,14 @@ export async function submitSessionJob(
   params?: ImageParams,
   initImageB64?: string,
   initJobId?: string,
+  enhancePrompt?: EnhanceMode,
 ): Promise<{ job_id: string; status: string }> {
   return postJson('/generate/session/job', {
     session_id: sessionId,
     prompt,
     ...(params && Object.keys(params).length > 0 ? { params } : {}),
     ...(initJobId ? { init_job_id: initJobId } : initImageB64 ? { init_image_b64: initImageB64 } : {}),
+    ...(enhancePrompt ? { enhance_prompt: enhancePrompt } : {}),
   })
 }
 
@@ -289,6 +312,26 @@ export async function getJob(jobId: string): Promise<JobResult> {
   return res.json()
 }
 
+/** G1: delete a job (queued/done/error). Rejects with a 409 detail message
+ *  for a running job, a job you don't own, or one already gone -- callers
+ *  surface that as an inline error rather than silently removing the row. */
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/generate/job/${encodeURIComponent(jobId)}`, {
+    method: 'DELETE',
+    headers: { ...authHeaders() },
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+/** G1: recompute queue priority for a session's queued jobs, in the given
+ *  order (index 0 = next to execute). `jobIds` must be exactly the
+ *  session's current queued-job set or the backend rejects it with a 409
+ *  (stale client state -- refetch and retry). */
+export async function reorderQueue(sessionId: string, jobIds: string[]): Promise<void> {
+  await postJson('/generate/jobs/reorder', { session_id: sessionId, job_ids: jobIds })
+}
+
 export async function runKaggleCube(input: number, signal?: AbortSignal): Promise<CubeResult> {
   const res = await fetch(`${BASE_URL}/generate`, {
     method: 'POST',
@@ -315,6 +358,12 @@ export interface StreamChatCallbacks {
    *  is shaped like a tool-call announcement ("Calling <name>"), so callers
    *  get a clean tool name instead of parsing the human-readable label. */
   onToolCall?: (name: string, agent: string) => void
+  /** F-11 follow-up: fires once a tool call actually resolves, carrying its
+   *  real observation live -- previously `observation` was never sent over
+   *  SSE at all (only ever attached to the persisted message after the whole
+   *  turn finished), so anything keyed off it (e.g. ImageJobChip's job id)
+   *  could never appear until a later reload. */
+  onToolResult?: (name: string, observation: string, agent: string) => void
   onMemoryHit?: (summary: string, scope?: string, sourceConvId?: string) => void
   onModelCall?: (model: string, purpose: string) => void
   onProviderSwitch?: (from: string, to: string) => void
@@ -334,8 +383,14 @@ export async function streamChat(
   docId?: string,
   conversationId?: string,
   signal?: AbortSignal,
+  /** F-11: a one-turn image attachment (vision Q&A) -- never persisted,
+   *  sent once alongside this request only. */
+  image?: { b64: string; mime: string },
+  /** Composer's mode picker (Fast / Pro / Create Image) -- a hint that
+   *  short-circuits the backend router's own classify heuristic. */
+  modeHint?: 'fast' | 'pro' | 'image',
 ): Promise<void> {
-  const { onToken, onDone, onError, onRateLimit, onStep, onToolCall, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
+  const { onToken, onDone, onError, onRateLimit, onStep, onToolCall, onToolResult, onMemoryHit, onModelCall, onProviderSwitch, onCitation } =
     callbacks
 
   let res: Response
@@ -348,6 +403,8 @@ export async function streamChat(
         ...(modelId ? { model_id: modelId } : {}),
         ...(docId ? { doc_id: docId } : {}),
         ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(image ? { image_b64: image.b64, image_mime: image.mime } : {}),
+        ...(modeHint ? { mode_hint: modeHint } : {}),
       }),
       signal,
     })
@@ -418,6 +475,9 @@ export async function streamChat(
             if (toolMatch) onToolCall?.(toolMatch[1], agent)
             break
           }
+          case 'tool_result':
+            onToolResult?.(String(event.name ?? ''), String(event.observation ?? ''), String(event.agent ?? 'main'))
+            break
           case 'memory_hit':
             onMemoryHit?.(
               String(event.summary ?? ''),
@@ -571,6 +631,7 @@ export async function updateConversationTitle(convId: string, title: string): Pr
 export interface Project {
   id: string
   name: string
+  description?: string
   created_at: string
   updated_at?: string
   chat_count?: number
@@ -608,6 +669,17 @@ export async function renameProject(projectId: string, name: string): Promise<Pr
   return res.json()
 }
 
+export async function updateProjectDescription(projectId: string, description: string): Promise<Project> {
+  const res = await fetch(`${BASE_URL}/projects/${projectId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ description }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/projects/${projectId}`, {
     method: 'DELETE',
@@ -624,6 +696,11 @@ export async function moveChatToProject(projectId: string, convId: string): Prom
     headers: authHeaders(),
   })
   if (handle401(res)) throw new Error('Session expired')
+  // Unlike delete, a 404 here is NOT success — the chat was never actually
+  // moved. But it also can never succeed (the project or the chat itself is
+  // gone), so it must not retry forever either: PermanentSyncError tells
+  // syncQueue to drop the op instead of backing off and retrying.
+  if (res.status === 404) throw new PermanentSyncError(await errorDetail(res))
   if (!res.ok) throw new Error(await errorDetail(res))
 }
 

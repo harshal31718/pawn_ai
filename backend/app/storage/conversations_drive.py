@@ -170,15 +170,16 @@ def list_conversations(drive: DriveStorage) -> List[Dict[str, Any]]:
     via projects_drive.list_project_chats."""
     convs_folder = _convs_folder(drive)
     subfolders = drive.list_subfolders(convs_folder)
+    contents = drive.read_files_in_folders([f["id"] for f in subfolders], "meta.json")
     results = []
     for folder in subfolders:
-        meta_id = drive.find_file("meta.json", folder["id"])
-        if meta_id:
-            try:
-                meta = json.loads(drive.download_text(meta_id))
-                results.append(meta)
-            except Exception as exc:
-                print(f"list_conversations: skipping {folder['id']}, meta.json read/parse failed: {exc}", file=sys.stderr)
+        raw = contents.get(folder["id"])
+        if raw is None:
+            continue
+        try:
+            results.append(json.loads(raw))
+        except Exception as exc:
+            print(f"list_conversations: skipping {folder['id']}, meta.json parse failed: {exc}", file=sys.stderr)
     results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return results
 

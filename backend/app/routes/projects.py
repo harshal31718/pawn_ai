@@ -25,18 +25,20 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 class ProjectCreate(BaseModel):
     id: str | None = None              # client-owned project id (optimistic UI)
     name: str = "New Project"
+    description: str = ""
 
 
 class ProjectUpdate(BaseModel):
-    name: str
+    name: str | None = None
+    description: str | None = None
 
 
 # ─── Blocking storage helpers (run via run_in_threadpool so Drive/Postgres
 #     I/O never executes on the event loop) ────────────────────────────────
 
 
-def _create(drive, project_id, name):
-    return projects_drive.create_project(drive, project_id=project_id, name=name)
+def _create(drive, project_id, name, description):
+    return projects_drive.create_project(drive, project_id=project_id, name=name, description=description)
 
 
 def _list(drive):
@@ -46,8 +48,8 @@ def _list(drive):
     return projects
 
 
-def _rename(drive, project_id, name):
-    return projects_drive.rename_project(drive, project_id, name)
+def _update(drive, project_id, name, description):
+    return projects_drive.update_project(drive, project_id, name=name, description=description)
 
 
 def _delete(drive, project_id):
@@ -90,7 +92,7 @@ def _update_chunk_scope(user_id, conv_id, scope_type, scope_id):
 async def create_project(req: ProjectCreate, request: Request):
     user_id = request.state.user_id
     drive = await run_in_threadpool(require_drive_for_user, user_id)
-    return await run_in_threadpool(call_drive, _create, drive, req.id, req.name)
+    return await run_in_threadpool(call_drive, _create, drive, req.id, req.name, req.description)
 
 
 @router.get("")
@@ -102,9 +104,11 @@ async def list_projects(request: Request):
 
 @router.patch("/{project_id}")
 async def rename_project(project_id: str, req: ProjectUpdate, request: Request):
+    """Renames the project, updates its description, or both — whichever
+    fields are set on the request body (F-10)."""
     user_id = request.state.user_id
     drive = await run_in_threadpool(require_drive_for_user, user_id)
-    updated = await run_in_threadpool(call_drive, _rename, drive, project_id, req.name)
+    updated = await run_in_threadpool(call_drive, _update, drive, project_id, req.name, req.description)
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project {project_id} not found.")
     return updated

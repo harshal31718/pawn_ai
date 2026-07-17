@@ -19,6 +19,36 @@ from app.resolver.resolver import Resolver
 
 _HEAVY_KEYWORDS = ["plan", "analyze", "debug", "prove", "compare", "research", "step by step", "why"]
 _TIME_SENSITIVE_KEYWORDS = ["latest", "today", "current", "news", "price", "202"]
+# F-11: without this, "generate an image of X" (short, no URL, no heavy
+# keyword) heuristically classifies light+needs_agent=False -- the
+# direct_answer fast path has NO tools bound at all, so generate_image can
+# never actually be invoked no matter how the model would otherwise respond.
+# Gated on has_kaggle_creds (mirrors _TIME_SENSITIVE_KEYWORDS's has_search_key
+# gate) so this only forces agent routing when the tool would really be
+# available.
+_IMAGE_GEN_KEYWORDS = [
+    "generate an image", "generate image", "generate a picture", "generate a photo",
+    "create an image", "create a picture", "make an image", "make a picture",
+    "draw a picture", "draw me", "image of", "picture of",
+]
+# Found live (2026-07-16): a short, casually-phrased memory-recall request
+# ("search the memory of project, i asked you to remember X in another
+# chat") is heuristically "light" (under ROUTER_LIGHT_CHAR_THRESHOLD, no
+# heavy keyword) -> needs_agent=False -> direct_answer_node, which has ZERO
+# tools bound. search_memory/doc_search are only ever reachable through the
+# agent loop, so a message like this could never actually search memory no
+# matter how it was phrased -- the model correctly (and unhelpfully)
+# reported it had no such access. Unlike _IMAGE_GEN_KEYWORDS this needs no
+# has_*_creds gate: search_memory/doc_search are bound whenever the chat has
+# a scope at all (registry.py's `ctx.scope_type is not None`), which is true
+# for every real chat.
+_MEMORY_RECALL_KEYWORDS = [
+    "search the memory", "search memory", "search your memory",
+    "remember", "recall", "you told me", "i told you",
+    "we discussed", "we talked about", "mentioned before",
+    "earlier chat", "previous chat", "other chat", "another chat",
+    "last time", "what did i say", "what did i tell you",
+]
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
@@ -39,16 +69,18 @@ def _has_url(text: str) -> bool:
     return _URL_RE.search(text) is not None
 
 
-def _needs_agent(difficulty: str, text: str, has_search_key: bool) -> bool:
+def _needs_agent(difficulty: str, text: str, has_search_key: bool, has_kaggle_creds: bool = False) -> bool:
     return (
         difficulty == "heavy"
         or _has_url(text)
         or (has_search_key and _matches_any_keyword(text, _TIME_SENSITIVE_KEYWORDS))
+        or (has_kaggle_creds and _matches_any_keyword(text, _IMAGE_GEN_KEYWORDS))
+        or _matches_any_keyword(text, _MEMORY_RECALL_KEYWORDS)
     )
 
 
 def _heuristic_classify(
-    text: str, has_doc: bool, has_tools_likely: bool, has_search_key: bool
+    text: str, has_doc: bool, has_tools_likely: bool, has_search_key: bool, has_kaggle_creds: bool = False
 ) -> Optional[RouteDecision]:
     """Returns a RouteDecision if the rule tier can decide, else None (defer
     to the LLM fallback tier)."""
@@ -66,7 +98,7 @@ def _heuristic_classify(
     else:
         return None  # ambiguous band — defer to the LLM fallback tier
 
-    return {"difficulty": difficulty, "needs_agent": _needs_agent(difficulty, text, has_search_key)}
+    return {"difficulty": difficulty, "needs_agent": _needs_agent(difficulty, text, has_search_key, has_kaggle_creds)}
 
 
 _CLASSIFY_SYSTEM_PROMPT = (
@@ -83,6 +115,7 @@ async def _llm_fallback_classify(
     rate_limiter: EndpointRateLimiter,
     user_id: Optional[str],
     has_search_key: bool,
+    has_kaggle_creds: bool = False,
 ) -> RouteDecision:
     """One chat_complete call on the 'fast' capability level. ANY failure
     (no available model, upstream error, unparseable response) defaults to
@@ -113,7 +146,7 @@ async def _llm_fallback_classify(
         print(f"Router LLM fallback tier failed, defaulting to heavy: {e}", file=sys.stderr)
         return {"difficulty": "heavy", "needs_agent": True}
 
-    return {"difficulty": difficulty, "needs_agent": _needs_agent(difficulty, text, has_search_key)}
+    return {"difficulty": difficulty, "needs_agent": _needs_agent(difficulty, text, has_search_key, has_kaggle_creds)}
 
 
 async def classify(
@@ -124,11 +157,13 @@ async def classify(
     rate_limiter: Optional[EndpointRateLimiter] = None,
     user_id: Optional[str] = None,
     has_search_key: bool = False,
+    has_kaggle_creds: bool = False,
 ) -> RouteDecision:
     """Classify a message's difficulty ('light'/'heavy') and whether it needs
     the full agent. `has_doc` (a doc is attached) and `has_tools_likely` (the
     previous assistant turn used tools) are precomputed by the caller, same
-    as `has_search_key` (the user has a Tavily/Brave key configured).
+    as `has_search_key` (the user has a Tavily/Brave key configured) and
+    `has_kaggle_creds` (F-11: the user can actually use generate_image).
 
     `resolver`/`rate_limiter` are only needed for the LLM fallback tier; if
     omitted (or the heuristic tier already decided), no model call is made.
@@ -137,14 +172,14 @@ async def classify(
     """
     text = _total_user_text(messages)
 
-    decision = _heuristic_classify(text, has_doc, has_tools_likely, has_search_key)
+    decision = _heuristic_classify(text, has_doc, has_tools_likely, has_search_key, has_kaggle_creds)
     if decision is not None:
         return decision
 
     if resolver is None or rate_limiter is None:
         return {"difficulty": "heavy", "needs_agent": True}
 
-    return await _llm_fallback_classify(text, resolver, rate_limiter, user_id, has_search_key)
+    return await _llm_fallback_classify(text, resolver, rate_limiter, user_id, has_search_key, has_kaggle_creds)
 
 
 def resolve_final_model(

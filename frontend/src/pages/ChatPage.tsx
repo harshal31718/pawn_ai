@@ -3,6 +3,7 @@ import { useParams, useOutletContext, useNavigate, useLocation } from 'react-rou
 import type { Message, Segment, TraceEntry } from '../types'
 import ChatWindow from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
+import type { Mode } from '../components/ModePicker'
 import InteractiveGridBackground from '../components/InteractiveGridBackground'
 import { useAppContext } from '../contexts/AppContext'
 import {
@@ -80,10 +81,12 @@ export default function ChatPage() {
     models,
     displayName,
     backgroundEffect,
+    defaultModel,
   } = useAppContext()
 
   const {
     conversations,
+    projects,
     activeConvId,
     messages,
     streamingConvIds,
@@ -94,16 +97,25 @@ export default function ChatPage() {
     bumpAfterTurn,
     setStreaming,
     quietTitleRefresh,
+    refreshTraceObservations,
   } = store
 
   // Rate-limit cooldowns are per-conversation (epoch-ms when the lock lifts)
   const [rateLimitUntil, setRateLimitUntil] = useState<Record<string, number>>({})
   const [now, setNow] = useState(() => Date.now())
-  const [selectedProvider, setSelectedProvider] = useState('gemini-2.5-flash')
+
+  // Composer's mode picker (Fast / Pro / Create Image) -- a routing hint
+  // sent with every /chat call, not a per-conversation persisted setting.
+  const [mode, setMode] = useState<Mode>('fast')
 
   // Document upload states
   const [attachedDoc, setAttachedDoc] = useState<{ id: string; name: string } | null>(null)
   const [isUploading, setIsUploading] = useState(false)
+
+  // F-11: attached image state (vision Q&A) -- kept client-side only until
+  // Send, never uploaded/persisted like a doc (no backend storage at all;
+  // read straight into a data URI and sent along with the next /chat call).
+  const [attachedImage, setAttachedImage] = useState<{ name: string; previewUrl: string; b64: string; mime: string } | null>(null)
 
   // One registry of in-flight streams, keyed by conversation id.
   const streamsRef = useRef<
@@ -180,23 +192,16 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConvId, conversations])
 
-  // When the active conversation changes, sync the model picker to its model
-  // and drop any attached document.
+  // When the active conversation changes, drop any attached document/image.
   useEffect(() => {
     if (!activeConvId) return
-    const conv = conversations.find((c) => c.id === activeConvId)
-    if (conv?.model_id) setSelectedProvider(conv.model_id)
     setAttachedDoc(null)
+    setAttachedImage((prev) => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl)
+      return null
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConvId])
-
-  // Coerce selected provider when available models change.
-  useEffect(() => {
-    if (availableModels.length === 0) return
-    const ids = availableModels.map((m) => m.model_id)
-    if (!ids.includes(selectedProvider)) setSelectedProvider(availableModels[0].model_id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableModels, selectedProvider])
 
   // Tick once a second while any conversation is rate-limited.
   useEffect(() => {
@@ -234,6 +239,23 @@ export default function ChatPage() {
   async function handleSend(content: string) {
     if ((activeConvId && streamingConvIds.has(activeConvId)) || isUploading) return
 
+    // Both attachment kinds are one-turn-only in the composer: captured and
+    // cleared here so neither is silently resent with a later, unrelated
+    // message. A doc's content keeps living on for the rest of the
+    // conversation via the doc_search RAG tool (indexed at upload time,
+    // scope-based retrieval, not dependent on doc_id being resent -- see
+    // routes/chat.py's ChatRequest.doc_id, unused server-side since A.4) --
+    // only the composer chip and the one-shot message card are per-message.
+    const imageToSend = attachedImage
+    if (imageToSend) {
+      URL.revokeObjectURL(imageToSend.previewUrl)
+      setAttachedImage(null)
+    }
+    const docToSend = attachedDoc
+    if (docToSend) {
+      setAttachedDoc(null)
+    }
+
     const convId = activeConvId ?? createConversation()
     promoteDraft(convId)
 
@@ -242,7 +264,15 @@ export default function ChatPage() {
       navigate(`/chat/${convId}`, { replace: true })
     }
 
-    const userMsg: Message = { id: mid(), role: 'user', content }
+    // Attachment card shown above the sent bubble -- data: URL for images
+    // (survives the revoke above); the doc card just needs the filename.
+    const attachment: Message['attachment'] = imageToSend
+      ? { kind: 'image', name: imageToSend.name, previewUrl: `data:${imageToSend.mime};base64,${imageToSend.b64}` }
+      : docToSend
+        ? { kind: 'doc', name: docToSend.name }
+        : undefined
+
+    const userMsg: Message = { id: mid(), role: 'user', content, attachment }
     const assistantId = mid()
 
     const controller = new AbortController()
@@ -253,6 +283,11 @@ export default function ChatPage() {
       userContent: content,
     })
     setStreaming(convId, true)
+    // F-11 follow-up: any tool call this turn means the persisted message
+    // will carry `observation` fields the live trace never does -- flagged
+    // here so onDone can backfill them via refreshTraceObservations once
+    // the turn (and its server-side persist) is actually done.
+    let usedToolThisTurn = false
 
     const history = [...messages, userMsg]
       .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -303,6 +338,7 @@ export default function ChatPage() {
           streamsRef.current.delete(convId)
           bumpAfterTurn(convId)
           quietTitleRefresh()
+          if (usedToolThisTurn) void refreshTraceObservations(convId)
         },
         onError: (err) => {
           setMessagesFor(convId, (prev) =>
@@ -321,6 +357,7 @@ export default function ChatPage() {
           streamsRef.current.delete(convId)
         },
         onStep: (label, detail, agent) => {
+          if (TOOL_STEP_RE.test(label)) usedToolThisTurn = true
           setMessagesFor(convId, (prev) =>
             prev.map((m) => {
               if (m.id !== assistantId) return m
@@ -349,6 +386,47 @@ export default function ChatPage() {
                 const last = m.segments[m.segments.length - 1]
                 if (last.type === 'tool' && last.entry.kind === 'tool' && last.entry.status === 'running' && last.entry.agent === agent) {
                   next = { ...next, segments: [...m.segments.slice(0, -1), { type: 'tool', entry: { ...last.entry, name } }] }
+                }
+              }
+              return next
+            }),
+          )
+        },
+        onToolResult: (name, observation, agent) => {
+          // F-11 follow-up: attaches the tool's real result (e.g.
+          // generate_image's job id) to its trace/segment entry the moment
+          // it's actually available -- previously `observation` never
+          // arrived until a later reload, so anything keyed off it (the
+          // image chip) could never show up live. Matches the most recent
+          // still-running entry for this exact tool+agent, same pairing
+          // onToolCall already relies on.
+          setMessagesFor(convId, (prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              let next = m
+              if (m.trace) {
+                const idx = [...m.trace].reverse().findIndex(
+                  (e) => e.kind === 'tool' && e.name === name && e.agent === agent && e.status === 'running',
+                )
+                if (idx !== -1) {
+                  const i = m.trace.length - 1 - idx
+                  const updated = [...m.trace]
+                  updated[i] = { ...updated[i], observation }
+                  next = { ...next, trace: updated }
+                }
+              }
+              if (m.segments) {
+                const idx = [...m.segments].reverse().findIndex(
+                  (s) => s.type === 'tool' && s.entry.kind === 'tool' && s.entry.name === name && s.entry.agent === agent && s.entry.status === 'running',
+                )
+                if (idx !== -1) {
+                  const i = m.segments.length - 1 - idx
+                  const seg = m.segments[i]
+                  if (seg.type === 'tool') {
+                    const updated = [...m.segments]
+                    updated[i] = { ...seg, entry: { ...seg.entry, observation } }
+                    next = { ...next, segments: updated }
+                  }
                 }
               }
               return next
@@ -412,10 +490,12 @@ export default function ChatPage() {
           )
         },
       },
-      selectedProvider,
-      attachedDoc?.id || undefined,
+      defaultModel,
+      docToSend?.id || undefined,
       convId,
       controller.signal,
+      imageToSend ? { b64: imageToSend.b64, mime: imageToSend.mime } : undefined,
+      mode,
     )
   }
 
@@ -439,8 +519,37 @@ export default function ChatPage() {
     }
   }
 
+  function handleUploadImage(file: File) {
+    // F-11: no backend call at all -- unlike handleUpload's doc pipeline,
+    // an attached image is never indexed/persisted, just read straight into
+    // a data URI and held until Send (or dropped on remove/conv switch).
+    const previewUrl = URL.createObjectURL(file)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+      setAttachedImage({ name: file.name, previewUrl, b64, mime: file.type || 'image/png' })
+    }
+    reader.onerror = () => {
+      URL.revokeObjectURL(previewUrl)
+      alert('Failed to read the image file.')
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function handleRemoveImageAttachment() {
+    setAttachedImage((prev) => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl)
+      return null
+    })
+  }
+
   const activeConv = conversations.find((c) => c.id === activeConvId)
+  const activeConvProject = activeConv?.project_id
+    ? projects.find((p) => p.id === activeConv.project_id)
+    : undefined
   const headerTitle = activeConv ? activeConv.title : 'PAWN Chat'
+  const headerTitleForAttr = activeConvProject ? `${activeConvProject.name} / ${headerTitle}` : headerTitle
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -452,7 +561,7 @@ export default function ChatPage() {
       {/* Floating Top Header Area — left island only (toggle is global in Layout) */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none pt-4 pl-4 pr-4 flex items-center w-full">
         {/* Left Floating Island: Project Name/Chat Title */}
-        <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
+        <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">
           {!isSidebarOpen && (
             <button
               type="button"
@@ -465,8 +574,26 @@ export default function ChatPage() {
               </svg>
             </button>
           )}
-          <h1 className="text-xs font-semibold text-theme-text truncate max-w-[150px] md:max-w-xs select-none" title={headerTitle}>
-            {headerTitle}
+          <h1
+            className="flex items-center gap-1.5 text-xs font-semibold text-theme-text truncate max-w-[150px] md:max-w-xs select-none"
+            title={headerTitleForAttr}
+          >
+            {activeConvProject && (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    navigate(`/project/${activeConvProject.id}`)
+                  }}
+                  className="text-theme-text-muted hover:text-theme-text hover:underline truncate transition-colors cursor-pointer"
+                >
+                  {activeConvProject.name}
+                </button>
+                <span className="text-theme-text-muted/50 select-none shrink-0">/</span>
+              </>
+            )}
+            <span className="truncate">{headerTitle}</span>
           </h1>
         </div>
       </header>
@@ -529,11 +656,13 @@ export default function ChatPage() {
                 disabled={isActiveStreaming || rateLimitCountdown !== null}
                 onUpload={handleUpload}
                 isUploading={isUploading}
-                selectedProvider={selectedProvider}
-                onChangeProvider={setSelectedProvider}
-                models={availableModels}
+                onUploadImage={handleUploadImage}
                 attachment={attachedDoc}
                 onRemoveAttachment={() => setAttachedDoc(null)}
+                imageAttachment={attachedImage}
+                onRemoveImageAttachment={handleRemoveImageAttachment}
+                mode={mode}
+                onChangeMode={setMode}
               />
             </div>
           </div>
@@ -560,11 +689,13 @@ export default function ChatPage() {
             disabled={isActiveStreaming || rateLimitCountdown !== null}
             onUpload={handleUpload}
             isUploading={isUploading}
-            selectedProvider={selectedProvider}
-            onChangeProvider={setSelectedProvider}
-            models={availableModels}
+            onUploadImage={handleUploadImage}
             attachment={attachedDoc}
             onRemoveAttachment={() => setAttachedDoc(null)}
+            imageAttachment={attachedImage}
+            onRemoveImageAttachment={handleRemoveImageAttachment}
+            mode={mode}
+            onChangeMode={setMode}
           />
         </div>
       </div>

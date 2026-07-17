@@ -29,6 +29,7 @@ from __future__ import annotations
 import io
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -45,6 +46,15 @@ from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 # Hard socket timeout (seconds) for every Drive HTTP round-trip. Without this,
 # a stalled connection hangs the calling thread indefinitely ("no replies").
 _DRIVE_TIMEOUT = 20
+
+# Fan-out width for read_files_in_folders. Each of list_conversations/
+# list_projects/list_project_chats used to walk N chat/project folders one at
+# a time (find_file + download_text per folder, ~2 blocking Drive round-trips
+# each) -- with 30 real chats that alone took ~49s and tripped the app's 45s
+# request-timeout middleware on every GET /conversations. Fanning the same
+# calls out across a small thread pool cuts wall-clock to roughly one
+# round-trip's worth regardless of folder count.
+_META_FETCH_WORKERS = 8
 
 
 class DriveStorage:
@@ -262,6 +272,50 @@ class DriveStorage:
         if not fid:
             return None
         return self.download_text(fid)
+
+    def read_files_in_folders(self, folder_ids: list[str], filename: str) -> dict[str, str]:
+        """Fetch `filename`'s text content from each of the given folders,
+        in parallel. Returns {folder_id: content} — folders where the file
+        is missing or fails to read are simply absent from the result.
+
+        Each worker builds its own short-lived AuthorizedHttp instead of
+        going through self._service/self._lock: the shared httplib2 transport
+        is not thread-safe (see the class docstring), and self._creds' token
+        is already fresh by the time any caller reaches this (DriveStorage.
+        __init__ always refreshes via _build_service before this can run), so
+        concurrent reads sharing the same Credentials object is safe -- none
+        of them trigger a refresh.
+        """
+        if not folder_ids:
+            return {}
+
+        def _one(folder_id: str) -> tuple[str, Optional[str]]:
+            try:
+                http = AuthorizedHttp(self._creds, http=httplib2.Http(timeout=_DRIVE_TIMEOUT))
+                resource = build("drive", "v3", http=http, cache_discovery=False)
+                q = (
+                    f"name = {filename!r} and "
+                    f"'{folder_id}' in parents and "
+                    "trashed = false"
+                )
+                result = resource.files().list(q=q, fields="files(id)", pageSize=1).execute()
+                files = result.get("files", [])
+                if not files:
+                    return folder_id, None
+                request = resource.files().get_media(fileId=files[0]["id"])
+                buf = io.BytesIO()
+                downloader = MediaIoBaseDownload(buf, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                return folder_id, buf.getvalue().decode("utf-8")
+            except Exception as exc:
+                print(f"read_files_in_folders: folder {folder_id} failed: {exc}", file=sys.stderr)
+                return folder_id, None
+
+        with ThreadPoolExecutor(max_workers=min(_META_FETCH_WORKERS, len(folder_ids))) as pool:
+            pairs = list(pool.map(_one, folder_ids))
+        return {fid: content for fid, content in pairs if content is not None}
 
     def list_folder(self, folder_id: str) -> list[dict]:
         """List files (id, name) in folder_id, excluding trashed items."""

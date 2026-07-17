@@ -10,13 +10,15 @@ parallel.
 """
 
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from app.core import generate, image_session
-from app.core.image_models import DEFAULT_IMAGE_MODEL
+from app.core import generate, image_session, vision_enhance
+from app.core.image_models import DEFAULT_IMAGE_MODEL, get_image_model
+from app.core.image_presets import get_preset_suffix, get_subject_type_suffix
 from app.core.image_session import ImageJobParams
 
 router = APIRouter(prefix="/generate", tags=["generate"])
@@ -35,26 +37,9 @@ def _lock_for(key: str) -> asyncio.Lock:
     return lock
 
 
-# Strong refs to in-flight background workers. asyncio keeps only WEAK refs to
-# tasks, so without holding them here a GC cycle could collect a running cold-job
-# worker mid-Kaggle-call and silently drop the job (it would stay 'running' until
-# reaped) — exactly the lost-result class of bug W.1 fixes.
-_bg_tasks: set[asyncio.Task] = set()
-
-
-def _spawn_bg(coro) -> None:
-    task = asyncio.create_task(coro)
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
-
-
-STYLE_SUFFIXES: dict[str, str] = {
-    "photorealistic": ", RAW photo, 8K, ultra detailed, photorealistic, DSLR",
-    "cinematic": ", cinematic shot, anamorphic lens, dramatic lighting, film grain",
-    "anime": ", anime style, studio ghibli, detailed illustration, vibrant colors",
-    "oil_painting": ", oil painting, impressionist, thick brushstrokes, canvas texture",
-    "sketch": ", pencil sketch, charcoal drawing, black and white, cross-hatching",
-}
+# Q3.1 pass 2: 3-state selection mechanism (plan §3.1.4) -- Auto (rule-based
+# gate decides, default), Always (force the enhancer), Off (never enhance).
+EnhanceMode = Literal["auto", "always", "off"]
 
 
 class GenerateRequest(BaseModel):
@@ -65,6 +50,7 @@ class GenerateRequest(BaseModel):
     params: ImageJobParams = ImageJobParams()
     init_image_b64: str | None = None   # direct base64 upload
     init_job_id: str | None = None      # refine an existing done job
+    enhance_prompt: EnhanceMode = "auto"
 
 
 class ConnectRequest(BaseModel):
@@ -83,6 +69,7 @@ class SessionJobRequest(BaseModel):
     params: ImageJobParams = ImageJobParams()
     init_image_b64: str | None = None   # direct base64 upload
     init_job_id: str | None = None      # refine an existing done job
+    enhance_prompt: EnhanceMode = "auto"
 
 
 class SessionStopRequest(BaseModel):
@@ -92,6 +79,11 @@ class SessionStopRequest(BaseModel):
 class SessionExtendRequest(BaseModel):
     session_id: str
     add_minutes: int = 30
+
+
+class ReorderQueueRequest(BaseModel):
+    session_id: str
+    job_ids: list[str]
 
 
 async def _resolve_init_image(
@@ -109,6 +101,63 @@ async def _resolve_init_image(
         if job and job.get("image_b64"):
             return job["image_b64"]
     return None
+
+
+async def _apply_prompt_enhancement(
+    prompt: str,
+    model_id: str,
+    mode: EnhanceMode,
+    image_b64: str | None,
+    request: Request,
+    user_id: str,
+) -> tuple[str, str | None, str | None, str | None]:
+    """Q3.1 pass 2: runs the vision-grounded enhancer (vision_enhance.py, Q3.1
+    pass 1) ahead of style/subject suffix composition, per the rule-based-
+    default/LLM-based-extra selection mechanism in
+    phase_Q3_prompting_presets.md §3.1.4. `image_b64`, when present, is the
+    resolved img2img reference image -- enhancement still runs text-only
+    without one.
+
+    Returns (prompt_to_use, original_prompt, enhanced_prompt, extra_negative).
+    The last three are None whenever nothing changed (mode="off", the target
+    model has no PromptSchema, the Auto gate says the prompt is already
+    scaffolded, or the enhancer degraded to the raw prompt) -- callers persist
+    "no enhancement happened" honestly instead of storing a duplicate of the
+    prompt as its own "enhanced" version.
+    """
+    if mode == "off":
+        return prompt, None, None, None
+    schema = get_image_model(model_id).prompt_schema
+    if schema is None:
+        return prompt, None, None, None
+    if mode == "auto" and not vision_enhance.needs_enhancement(prompt):
+        return prompt, None, None, None
+    result = await vision_enhance.enhance_with_vision(
+        prompt,
+        image_b64,
+        schema,
+        request.app.state.resolver,
+        request.app.state.rate_limiter,
+        user_id=user_id,
+    )
+    if result["degraded"]:
+        return prompt, None, None, None
+    return result["prompt"], prompt, result["prompt"], result.get("negative")
+
+
+def _finalize_original_prompt(
+    original_prompt: str | None, pre_suffix_prompt: str, final_prompt: str
+) -> str | None:
+    """G1: broadens original_prompt (Q3.1 pass 2) to also cover suffix-only jobs
+    (style/subject-type preset appended, no enhancer run). If the enhancer already
+    set it, that's the true pre-enhancement raw text and takes precedence -- suffix
+    composition happening on top of an enhanced prompt doesn't change what the user
+    originally typed. Otherwise, falls back to the pre-suffix text only when suffix
+    composition actually changed the prompt, keeping the "None means nothing
+    changed" contract intact for plain jobs with no preset and no enhancement."""
+    if original_prompt is not None:
+        return original_prompt
+    return pre_suffix_prompt if final_prompt != pre_suffix_prompt else None
 
 
 @router.post("/connect")
@@ -140,15 +189,31 @@ async def generate_artifact(req: GenerateRequest, request: Request):
                 detail="Field 'prompt' is required for the image modality.",
             )
         prompt = req.prompt.strip()
-        if req.params.style_preset:
-            prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
         init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
+        prompt, original_prompt, enhanced_prompt, extra_negative = await _apply_prompt_enhancement(
+            prompt, req.model, req.enhance_prompt, init_b64, request, user_id
+        )
+        pre_suffix_prompt = prompt
+        if req.params.style_preset:
+            prompt += get_preset_suffix(req.params.style_preset, req.model)
+        if req.params.subject_type:
+            prompt += get_subject_type_suffix(req.params.subject_type, req.model)
+        original_prompt = _finalize_original_prompt(original_prompt, pre_suffix_prompt, prompt)
         params = req.params
+        params_dict = params.model_dump()
+        mutated = False
         if init_b64:
-            params_dict = params.model_dump()
             params_dict["init_image_b64"] = init_b64
             if params_dict.get("strength") is None:
                 params_dict["strength"] = 0.6
+            mutated = True
+        if extra_negative:
+            existing_negative = params_dict.get("negative_prompt")
+            params_dict["negative_prompt"] = (
+                f"{existing_negative}, {extra_negative}" if existing_negative else extra_negative
+            )
+            mutated = True
+        if mutated:
             params = image_session.ImageJobParams(**params_dict)
         # Non-blocking: create a durable job row (de-duped per user+model) and run
         # the slow Kaggle round-trip as a fire-and-forget background task, returning
@@ -157,12 +222,19 @@ async def generate_artifact(req: GenerateRequest, request: Request):
         # model (cold job would waste a GPU slot alongside the running warm kernel).
         try:
             job_id, created = await run_in_threadpool(
-                image_session.create_cold_job, user_id, req.model, prompt, params
+                image_session.create_cold_job, user_id, req.model, prompt, params,
+                original_prompt, enhanced_prompt,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         if created:
-            _spawn_bg(_run_cold_job_bg(user_id, req.model, job_id))
+            # F-1 fix: spawn via image_session's own shared lock/task registry
+            # (not this module's _lock_for/_spawn_bg) -- the chat generate_image
+            # tool creates cold jobs too, and both entry points must serialize
+            # against the SAME lock per (user, model), or two cold runs of the
+            # same model triggered from different places (Image Lab UI vs. chat)
+            # could race the same single-writer Kaggle kernel slug.
+            image_session.spawn_cold_job_bg(user_id, req.model, job_id)
         return {"job_id": job_id, "status": "queued"}
 
     else:
@@ -176,13 +248,6 @@ async def generate_artifact(req: GenerateRequest, request: Request):
 # Every generation is a durable image_jobs row tracked from the server, so the UI
 # survives refresh/tab-switch and the button derives from job state (no duplicate
 # submit). Supabase/Kaggle work is blocking → off-loaded to the threadpool.
-
-
-async def _run_cold_job_bg(user_id: str, model: str, job_id: str) -> None:
-    """Fire-and-forget worker: serialise same-model cold runs behind the per-
-    (user, model) lock (single-writer slug), then run the blocking round-trip."""
-    async with _lock_for(f"{user_id}:{model}"):
-        await run_in_threadpool(image_session.run_cold_job, job_id)
 
 
 @router.get("/jobs")
@@ -220,17 +285,47 @@ async def session_job(req: SessionJobRequest, request: Request):
             detail="Field 'prompt' is required.",
         )
     prompt = req.prompt.strip()
-    if req.params.style_preset:
-        prompt += STYLE_SUFFIXES.get(req.params.style_preset, "")
+    # Per-model suffix variants (Q3.3b) and the enhancer's PromptSchema both need
+    # the session's model, which isn't on this request -- unlike /generate's
+    # req.model. One cheap lookup here beats duplicating submit_session_job's
+    # liveness check.
+    session_model = None
+    if req.params.style_preset or req.params.subject_type or req.enhance_prompt != "off":
+        session_model = await run_in_threadpool(
+            image_session.get_session_model, user_id, req.session_id
+        )
     init_b64 = await _resolve_init_image(req.init_image_b64, req.init_job_id, user_id)
+    original_prompt = enhanced_prompt = extra_negative = None
+    if session_model and req.enhance_prompt != "off":
+        prompt, original_prompt, enhanced_prompt, extra_negative = await _apply_prompt_enhancement(
+            prompt, session_model, req.enhance_prompt, init_b64, request, user_id
+        )
+    pre_suffix_prompt = prompt
+    if session_model:
+        if req.params.style_preset:
+            prompt += get_preset_suffix(req.params.style_preset, session_model)
+        if req.params.subject_type:
+            prompt += get_subject_type_suffix(req.params.subject_type, session_model)
+    original_prompt = _finalize_original_prompt(original_prompt, pre_suffix_prompt, prompt)
     params = req.params
+    params_dict = params.model_dump()
+    mutated = False
     if init_b64:
-        params_dict = params.model_dump()
         params_dict["init_image_b64"] = init_b64
-        params_dict.setdefault("strength", 0.6)
+        if params_dict.get("strength") is None:
+            params_dict["strength"] = 0.6
+        mutated = True
+    if extra_negative:
+        existing_negative = params_dict.get("negative_prompt")
+        params_dict["negative_prompt"] = (
+            f"{existing_negative}, {extra_negative}" if existing_negative else extra_negative
+        )
+        mutated = True
+    if mutated:
         params = image_session.ImageJobParams(**params_dict)
     job_id = await run_in_threadpool(
-        image_session.submit_session_job, user_id, req.session_id, prompt, params
+        image_session.submit_session_job, user_id, req.session_id, prompt, params,
+        original_prompt, enhanced_prompt,
     )
     return {"job_id": job_id, "status": "queued"}
 
@@ -259,3 +354,32 @@ async def get_job(job_id: str, request: Request):
             status_code=status.HTTP_404_NOT_FOUND, detail="Job not found."
         )
     return job
+
+
+# --- G1: Generations tab management (delete, reorder) -----------------------
+
+
+@router.delete("/job/{job_id}")
+async def delete_job_route(job_id: str, request: Request):
+    user_id = request.state.user_id
+    ok = await run_in_threadpool(image_session.delete_job, user_id, job_id)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job not found, not yours, or currently running.",
+        )
+    return {"status": "deleted"}
+
+
+@router.post("/jobs/reorder")
+async def reorder_jobs(req: ReorderQueueRequest, request: Request):
+    user_id = request.state.user_id
+    ok = await run_in_threadpool(
+        image_session.reorder_queue, user_id, req.session_id, req.job_ids
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Queue changed since it was loaded -- refresh and try again.",
+        )
+    return {"status": "reordered"}

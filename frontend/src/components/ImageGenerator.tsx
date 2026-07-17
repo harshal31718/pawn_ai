@@ -10,9 +10,10 @@ import {
   type JobResult,
   type SessionStatus,
   type ImageParams,
+  type EnhanceMode,
 } from '../api/client'
 import AdvancedParams from './AdvancedParams'
-import type { RefineHandler } from '../types'
+import type { RefineHandler, ReuseSeedHandler, EditHandler } from '../types'
 
 export interface ModelDef {
   id: string
@@ -24,6 +25,15 @@ export interface ModelDef {
 }
 
 export const WARMUP_STATUSES = new Set(['starting', 'installing', 'loading_model'])
+
+// Q3.1 pass 2: the composer's ✨ Enhance toggle -- 3 states per
+// phase_Q3_prompting_presets.md §3.1.4 (Auto is the default so most users
+// never think about it).
+const ENHANCE_MODES: { key: EnhanceMode; label: string; title: string }[] = [
+  { key: 'auto', label: 'Auto', title: 'Enhance only when the prompt looks short or vague' },
+  { key: 'always', label: 'Always', title: 'Always rewrite the prompt with the vision-grounded enhancer' },
+  { key: 'off', label: 'Off', title: 'Never enhance -- use the raw prompt as typed' },
+]
 
 // Short human labels for each warmup phase — shown in the Warming pill so a
 // session stuck in one phase for a long time is visibly stuck, not
@@ -63,9 +73,14 @@ function elapsed(createdAt?: string | null): string {
 }
 
 const ImageGenerator = forwardRef<
-  { triggerRefine: RefineHandler },
+  { triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler; triggerEdit: EditHandler },
   {
     model: ModelDef
+    // This model's jobs (newest-fetched slice), kept in sync by ImageLabPage
+    // via periodic polling + onJobsChanged after any GenerationsPanel mutation
+    // (delete/edit/reorder). Used to derive "Latest" from real history instead
+    // of only this component's own submit-and-watch state.
+    jobs: JobResult[]
     isConnected: boolean
     onSubmitted: () => void
     session: SessionStatus | null
@@ -73,7 +88,7 @@ const ImageGenerator = forwardRef<
     busyAction: 'start' | 'stop' | 'extend' | null
     setBusyAction: (action: 'start' | 'stop' | 'extend' | null) => void
   }
->(function ImageGenerator({ model, isConnected, onSubmitted, session, setSession, busyAction, setBusyAction }, ref) {
+>(function ImageGenerator({ model, jobs, isConnected, onSubmitted, session, setSession, busyAction, setBusyAction }, ref) {
   const [prompt, setPrompt] = useState('')
   const [advParams, setAdvParams] = useState<ImageParams>({})
   const [initImage, setInitImage] = useState<InitImage | null>(null)
@@ -83,7 +98,15 @@ const ImageGenerator = forwardRef<
   const [latestResult, setLatestResult] = useState<JobResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
+  const [enhanceMode, setEnhanceMode] = useState<EnhanceMode>('auto')
   const [headerDuration, setHeaderDuration] = useState(30)
+  const [forcedSeed, setForcedSeed] = useState<{ value: number; nonce: number } | null>(null)
+  // G1: Refine/Edit prefill -- an existing job's params, seeded into
+  // AdvancedParams on mount. `refineKey` (the source job's id) forces a
+  // remount so a second Refine/Edit re-seeds even if the panel was already
+  // open with different values.
+  const [refineParams, setRefineParams] = useState<ImageParams | undefined>(undefined)
+  const [refineKey, setRefineKey] = useState<string | undefined>(undefined)
   const sessionBusy = busyAction !== null
   const [, setTick] = useState(0)
 
@@ -161,14 +184,35 @@ const ImageGenerator = forwardRef<
 
   useImperativeHandle(ref, () => ({
     triggerRefine(job: JobResult, imageSrc: string) {
+      const label = job.original_prompt ?? job.prompt ?? ''
       setInitImage({
         preview: imageSrc,
         jobId: job.job_id,
-        label: `Refining: "${(job.prompt ?? '').slice(0, 40)}${(job.prompt ?? '').length > 40 ? '…' : ''}"`,
+        label: `Refining: "${label.slice(0, 40)}${label.length > 40 ? '…' : ''}"`,
         isRefinement: true,
       })
       setPrompt('')
       setError(null)
+      // G1: carry the source job's additional settings into Advanced too --
+      // previously only the image was seeded, silently dropping whatever
+      // params the original job used.
+      setRefineParams((job.params as ImageParams | undefined) ?? undefined)
+      setRefineKey(job.job_id)
+      setIsAdvancedOpen(true)
+    },
+    triggerReuseSeed(seed: number) {
+      setForcedSeed((prev) => ({ value: seed, nonce: (prev?.nonce ?? 0) + 1 }))
+      setIsAdvancedOpen(true)
+    },
+    triggerEdit(job: JobResult) {
+      // G1: unlike Refine, Edit never carries a source image -- the job
+      // being edited is still queued, so it has no output yet. The caller
+      // (GenerationsPanel) deletes the source job before calling this.
+      setPrompt(job.original_prompt ?? job.prompt ?? '')
+      setError(null)
+      setRefineParams((job.params as ImageParams | undefined) ?? undefined)
+      setRefineKey(job.job_id)
+      setIsAdvancedOpen(true)
     },
   }))
 
@@ -218,6 +262,8 @@ const ImageGenerator = forwardRef<
     setError(null)
     setWatchIds(new Set())
     setInitImage(null)
+    setRefineParams(undefined)
+    setRefineKey(undefined)
   }, [model.id])
 
   const live = !!session?.alive
@@ -265,6 +311,32 @@ const ImageGenerator = forwardRef<
     }
   }, [watchIds, onSubmitted, session, hasSession])
 
+  // "Latest" should always reflect real history for this model, not just
+  // whatever this component itself last submitted-and-watched -- and must
+  // disappear the moment that job is deleted from the Generations tab
+  // (GenerationsPanel's delete -> onJobsChanged -> ImageLabPage's
+  // refreshAllJobs -> this `jobs` prop updates).
+  const latestDoneSummary = jobs.reduce<JobResult | null>((best, j) => (
+    j.status === 'done' && (!best || (j.created_at ?? '') > (best.created_at ?? '')) ? j : best
+  ), null)
+
+  useEffect(() => {
+    setLatestResult((prev) => {
+      if (!prev) return prev
+      const stillExists = jobs.some((j) => j.job_id === prev.job_id)
+      return stillExists ? prev : null
+    })
+  }, [jobs])
+
+  useEffect(() => {
+    if (latestResult || !latestDoneSummary) return
+    let active = true
+    getJob(latestDoneSummary.job_id).then((full) => {
+      if (active) setLatestResult(full)
+    }).catch(() => { /* keep showing nothing over a stale/wrong result */ })
+    return () => { active = false }
+  }, [latestResult, latestDoneSummary?.job_id])
+
   const busy = submitting
 
   async function handleGenerate() {
@@ -286,7 +358,7 @@ const ImageGenerator = forwardRef<
         setBusyAction(null)
       }
 
-      const { job_id } = await submitSessionJob(sid, prompt.trim(), params, initB64, initJobId)
+      const { job_id } = await submitSessionJob(sid, prompt.trim(), params, initB64, initJobId, enhanceMode)
       setWatchIds((prev) => new Set([...prev, job_id]))
       setPrompt('')
       setInitImage(null)
@@ -421,16 +493,46 @@ const ImageGenerator = forwardRef<
             </>
           )}
 
-          <button
-            type="button"
-            onClick={() => setIsAdvancedOpen((o) => !o)}
-            className="text-[11px] text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer font-semibold"
-          >
-            {isAdvancedOpen ? '− Advanced' : '+ Advanced'}
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <div
+              className="flex items-center rounded-lg border border-theme-border/60 overflow-hidden"
+              title="✨ Prompt enhancer"
+            >
+              {ENHANCE_MODES.map(({ key, label, title }) => (
+                <button
+                  key={key}
+                  type="button"
+                  title={title}
+                  onClick={() => setEnhanceMode(key)}
+                  className={`px-1.5 py-0.5 text-[9px] font-semibold cursor-pointer transition-colors ${
+                    enhanceMode === key
+                      ? 'bg-theme-brand text-theme-brand-text'
+                      : 'text-theme-text-muted hover:text-theme-text'
+                  }`}
+                >
+                  {key === 'auto' ? `✨ ${label}` : label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsAdvancedOpen((o) => !o)}
+              className="text-[11px] text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer font-semibold"
+            >
+              {isAdvancedOpen ? '− Advanced' : '+ Advanced'}
+            </button>
+          </div>
         </div>
 
-        <AdvancedParams modelId={model.id} onChange={setAdvParams} showStrength={!!initImage} open={isAdvancedOpen} />
+        <AdvancedParams
+          key={refineKey}
+          modelId={model.id}
+          onChange={setAdvParams}
+          showStrength={!!initImage}
+          open={isAdvancedOpen}
+          forcedSeed={forcedSeed ?? undefined}
+          initial={refineParams}
+        />
 
         <textarea
           value={prompt}
@@ -468,8 +570,9 @@ const ImageGenerator = forwardRef<
 
       {latestResult && latestResult.status === 'done' && resultIsImage && latestResult.image_b64 && (
         <div className="space-y-1.5">
-          <div className="text-[10px] font-medium text-theme-text-muted truncate">
-            Latest: {latestResult.prompt}
+          <div className="text-[10px] font-medium text-theme-text-muted truncate" title={latestResult.enhanced_prompt ?? undefined}>
+            Latest: {latestResult.original_prompt ?? latestResult.prompt}
+            {latestResult.enhanced_prompt && ' ✨'}
           </div>
           <div className="rounded-xl overflow-hidden border border-theme-border/60 bg-theme-bg flex justify-center">
             <img

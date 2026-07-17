@@ -15,8 +15,8 @@ services:
       # D.3/D.4 migration off Supabase (whose REST URL was always public,
       # so local warm-session testing worked before that migration with no
       # extra setup) moved PostgREST to a local-only Docker container with no
-      # public URL. To test warm sessions locally, use the `cloudflared`
-      # tunnel service below (see its comment) instead of editing this line —
+      # public URL. To test warm sessions locally, use the `pgrst-tunnel`
+      # service below (see its comment) instead of editing this line —
       # a docker-compose.override.yml supplies the real value.
       - POSTGREST_PUBLIC_URL=
     volumes:
@@ -73,27 +73,41 @@ services:
     # proxy set up in D.7 (production). Not usable from a local dev compose up
     # alone — see the POSTGREST_PUBLIC_URL note on the backend service above.
 
-  # Dev-only tunnel so a remote Kaggle warm-session kernel can reach the local
-  # `postgrest` container (regression from the D.3/D.4 Supabase -> self-hosted
-  # Postgres+PostgREST migration: Supabase's URL was always public, so local
-  # warm-session testing worked before that migration without this). Not part
-  # of the default `docker compose up` -- gated behind the `tunnel` profile so
-  # nothing changes for anyone not testing Image Lab locally. Usage:
-  #   docker compose --profile tunnel up -d cloudflared
-  #   docker compose logs cloudflared   # grab the printed https://*.trycloudflare.com URL
-  #   copy docker-compose.override.yml.example to docker-compose.override.yml,
-  #   paste the URL into POSTGREST_PUBLIC_URL, then `docker compose up -d backend`
-  # to restart the backend so it picks up the new env var.
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    # --protocol http2: QUIC (the default transport) dials over UDP, which
-    # this host's Docker Desktop network setup repeatedly fails to establish
-    # ("failed to dial to edge with quic: timeout: no recent network
-    # activity", retried with exponential backoff, never connects). HTTP/2
-    # runs over plain TCP 443, which isn't blocked the same way.
-    command: tunnel --no-autoupdate --protocol http2 --url http://postgrest:3000
+  # Dev-only reverse SSH tunnel so a remote Kaggle warm-session kernel can
+  # reach the local `postgrest` container over a STABLE public HTTPS URL
+  # (regression from the D.3/D.4 Supabase -> self-hosted Postgres+PostgREST
+  # migration: Supabase's URL was always public, so local warm-session
+  # testing worked before that migration without this). Replaces the old
+  # `cloudflared` quick-tunnel, which minted a brand-new random
+  # *.trycloudflare.com hostname on every restart -- breaking any
+  # already-running Kaggle kernel's baked-in payload and requiring a manual
+  # docker-compose.override.yml edit every single time. This tunnel reaches
+  # a stable Nginx location (/pgrst-dev/) on the same Oracle VM that already
+  # hosts production, via a dedicated SSH key restricted (in the VM's
+  # authorized_keys) to forwarding only 127.0.0.1:3002 -- no shell, no other
+  # host/port. One-time VM setup required -- see deployment.md "Local-dev
+  # PostgREST tunnel". Not part of the default `docker compose up` -- gated
+  # behind the `tunnel` profile so nothing changes for anyone not testing
+  # Image Lab locally. Usage:
+  #   docker compose --profile tunnel up -d pgrst-tunnel   # stays up permanently
+  #   copy docker-compose.override.yml.example to docker-compose.override.yml
+  #   (POSTGREST_PUBLIC_URL is fixed -- never needs updating again)
+  #   docker compose up -d backend
+  # `restart: unless-stopped` + ssh's own keepalive/ExitOnForwardFailure
+  # handle reconnects automatically across restarts/sleep/network blips --
+  # no autossh needed, Docker itself is the process supervisor here.
+  pgrst-tunnel:
+    image: alpine:3.20
+    # Copies the secret-mounted key to a scratch path and chmods it 600 first --
+    # on Windows/Docker Desktop, secret file mounts come through as 0777 (no
+    # POSIX permission translation from the host filesystem), which ssh
+    # refuses to use directly ("UNPROTECTED PRIVATE KEY FILE").
+    entrypoint: sh -c "apk add --no-cache openssh-client >/dev/null && cp /run/secrets/pgrst_tunnel_key /tmp/tunnel_key && chmod 600 /tmp/tunnel_key && exec ssh -i /tmp/tunnel_key -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -N -R 127.0.0.1:3002:postgrest:3000 ubuntu@144.24.119.184"
+    secrets:
+      - pgrst_tunnel_key
     depends_on:
       - postgrest
+    restart: unless-stopped
     profiles:
       - tunnel
 
@@ -134,3 +148,7 @@ secrets:
     file: ./secrets/google_client_secret
   jwt_secret:
     file: ./secrets/jwt_secret
+  pgrst_tunnel_key:
+    # An SSH key (like keys/pawn_oci.key), not an API key -- lives in keys/,
+    # not secrets/, per the same convention as the existing deploy key.
+    file: ./keys/pgrst_tunnel_key

@@ -1,15 +1,19 @@
 # Local-only override to test Image Lab warm sessions from dev.
 #
-# Steps:
-#   1. docker compose --profile tunnel up -d cloudflared
-#   2. docker compose logs cloudflared    # find the line with https://*.trycloudflare.com
-#   3. cp docker-compose.override.yml.example docker-compose.override.yml
-#   4. Paste that URL below, replacing the placeholder.
-#   5. docker compose up -d backend       # restart so it picks up the new env var
+# One-time setup (see deployment.md "Local-dev PostgREST tunnel"):
+#   1. Generate a dedicated SSH key on the VM, restrict it in authorized_keys
+#      to forward only 127.0.0.1:3002, add the matching Nginx /pgrst-dev/
+#      location. (VM-side, done once, ever.)
+#   2. Copy the generated private key into secrets/pgrst_tunnel_key (gitignored).
+#   3. docker compose --profile tunnel up -d pgrst-tunnel   # stays up permanently
+#   4. cp docker-compose.override.yml.example docker-compose.override.yml
+#   5. docker compose up -d backend
 #
-# The tunnel URL changes every time the `cloudflared` container restarts
-# (quick tunnels are ephemeral, no account needed) -- repeat steps 1-2 and
-# update this file whenever that happens.
+# The URL below is STABLE and never needs to change again -- ssh's own
+# keepalive + Docker's `restart: unless-stopped` on pgrst-tunnel reconnect
+# automatically across reboots/sleep/network blips. A running Kaggle warm
+# session self-heals on the next poll cycle once the tunnel is back; its
+# retry-loop never dies from a transient failure.
 #
 # docker-compose.override.yml (without .example) is gitignored -- this is a
 # personal dev convenience, never committed, and never used in production
@@ -18,4 +22,4 @@
 services:
   backend:
     environment:
-      - POSTGREST_PUBLIC_URL=https://REPLACE-ME.trycloudflare.com
+      - POSTGREST_PUBLIC_URL=https://pawnai.duckdns.org/pgrst-dev/

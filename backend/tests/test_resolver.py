@@ -64,6 +64,25 @@ def test_pick_without_user_id_keeps_legacy_behavior():
     assert r.pick_model_by_capability("fast", user_id=None) == "gemini-2.5-flash-lite"
 
 
+# ── F-6: Groq-priority ordering ──────────────────────────────────────────────
+
+def test_balanced_pick_prioritizes_groq_when_user_holds_a_groq_key():
+    """With both a Google and a Groq key, the default file order would return
+    gemini-2.5-flash (Google, first in file order) -- but F-6 reprioritizes
+    Groq-endpoint-having models first when the user holds a Groq key, so
+    llama-3.3-70b (which has a Groq endpoint) must win instead."""
+    r = _resolver()
+    with _keys("google", "groq"):
+        assert r.pick_model_by_capability("balanced", user_id="u") == "llama-3.3-70b"
+
+
+def test_balanced_pick_without_groq_key_keeps_default_order():
+    """No Groq key -> unaffected, still the plain file-order pick."""
+    r = _resolver()
+    with _keys("google"):
+        assert r.pick_model_by_capability("balanced", user_id="u") == "gemini-2.5-flash"
+
+
 # ── usable_user_models ───────────────────────────────────────────────────────
 
 def test_usable_user_models_filters_by_key():

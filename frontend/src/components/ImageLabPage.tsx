@@ -10,7 +10,7 @@ import GenerationsPanel from './GenerationsPanel'
 import KaggleCredentials from './KaggleCredentials'
 import ImageGenerator, { type ModelDef, WARMUP_STATUSES } from './ImageGenerator'
 import { loadDeployed, saveDeployed } from '../store/deployedStore'
-import type { RefineHandler } from '../types'
+import type { RefineHandler, ReuseSeedHandler, EditHandler } from '../types'
 
 interface Props {
   onClose: () => void
@@ -89,9 +89,15 @@ export default function ImageLabPage({ onClose }: Props) {
     }
   }
 
-  const generatorRef = useRef<{ triggerRefine: RefineHandler } | null>(null)
+  const generatorRef = useRef<{ triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler; triggerEdit: EditHandler } | null>(null)
   const handleRefine: RefineHandler = useCallback((job, imageSrc) => {
     generatorRef.current?.triggerRefine(job, imageSrc)
+  }, [])
+  const handleReuseSeed: ReuseSeedHandler = useCallback((seed) => {
+    generatorRef.current?.triggerReuseSeed(seed)
+  }, [])
+  const handleEdit: EditHandler = useCallback((job) => {
+    generatorRef.current?.triggerEdit(job)
   }, [])
 
   const activeModelJobs = allJobs.filter((j) => j.model === activeModelId)
@@ -100,11 +106,11 @@ export default function ImageLabPage({ onClose }: Props) {
     <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-theme-bg pt-16">
       {/* Floating Top Header */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center justify-between w-full">
-        <div className="flex items-center gap-2 px-3.5 py-1.5 bg-theme-surface border border-theme-border/60 rounded-full shadow-md pointer-events-auto z-20 transition-all">
+        <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">
           <button
             type="button"
             onClick={onClose}
-            className="px-0.5 py-0 rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center cursor-pointer"
+            className="rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center cursor-pointer"
             title="Back to chat"
           >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
@@ -216,6 +222,7 @@ export default function ImageLabPage({ onClose }: Props) {
                     <ImageGenerator
                       ref={m.id === activeModelId ? generatorRef : undefined}
                       model={m}
+                      jobs={allJobs.filter((j) => j.model === m.id)}
                       isConnected={!!connected[m.id]}
                       onSubmitted={refreshAllJobs}
                       session={sessions[m.id] ?? null}
@@ -235,6 +242,9 @@ export default function ImageLabPage({ onClose }: Props) {
           <GenerationsPanel
             jobs={activeModelJobs}
             onRefine={handleRefine}
+            onReuseSeed={handleReuseSeed}
+            onEdit={handleEdit}
+            onJobsChanged={refreshAllJobs}
           />
         </div>
 

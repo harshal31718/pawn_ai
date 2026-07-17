@@ -11,6 +11,7 @@ from app.exceptions import NotConfiguredError, ProviderError, NoEndpointError
 from app import events
 from app.constants import TRACE_MAX_ENTRIES
 from app.core import key_store
+from app.core.title import derive_fallback_title
 from app.core.drive_factory import call_drive, require_drive_for_user
 from app.storage import conversations_drive
 from app.memory.summarize import summarize_conversation_task
@@ -93,9 +94,27 @@ class ChatRequest(BaseModel):
     provider: str | None = None        # Backward compatibility for provider selection
     doc_id: str | None = None          # deprecated/unused — doc content now reaches the model only via the doc_search tool (Phase A / A.4); kept for frontend backward-compat, ignored here
     conversation_id: str | None = None  # optional conversation ID for persistence
+    # F-11: an attached image for this turn only -- a direct vision Q&A
+    # ("what's in this picture"), never persisted to Drive/history and never
+    # indexed like a doc_search document; used once to build a multimodal
+    # message for this turn's direct-answer call, then discarded.
+    image_b64: str | None = None
+    image_mime: str | None = None
+    # Composer's mode picker (Fast / Pro / Create Image) -- an explicit hint
+    # that short-circuits classify_node's heuristic/LLM routing entirely
+    # rather than feeding into it. None (no selection reached the request)
+    # falls back to the normal heuristic classify.
+    mode_hint: Literal["fast", "pro", "image"] | None = None
 
 async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None) -> str:
-    """Helper to generate a short title for the conversation using the first user prompt."""
+    """Helper to generate a short title for the conversation using the first
+    user prompt. Falls back to a plain truncation of the prompt itself
+    (derive_fallback_title) on any failure — a real bug here (this used to
+    call pick_model_by_capability("fast") without user_id, so it could pick
+    a model the user holds no BYOK key for; chat_stream would then fail on
+    the real user_id and the exception was silently swallowed) left chats
+    stuck on the literal "New Chat" forever instead of ever showing anything
+    prompt-derived."""
     system_prompt = (
         "You are a helpful assistant. Generate a short title (max 4-5 words) "
         "for a conversation starting with the user message. Return ONLY the "
@@ -106,7 +125,7 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
         {"role": "user", "content": first_prompt}
     ]
     try:
-        model_id = resolver.pick_model_by_capability("fast")
+        model_id = resolver.pick_model_by_capability("fast", user_id=user_id)
         title_text = ""
         async for token in chat_stream(model_id, messages, resolver, rate_limiter, user_id=user_id):
             title_text += token
@@ -115,7 +134,7 @@ async def generate_title(first_prompt: str, resolver: Resolver, rate_limiter: En
             return cleaned
     except Exception:
         pass
-    return "New Chat"
+    return derive_fallback_title(first_prompt)
 
 async def auto_title_background_task(conv_id: str, first_prompt: str, resolver: Resolver, rate_limiter: EndpointRateLimiter, user_id: str | None = None):
     """Background task to generate and save the conversation title.
@@ -237,6 +256,10 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
         "has_tools_likely": prior_turn_used_tools,
         "scope_type": scope_type,
         "scope_id": scope_id,
+        "has_image": bool(req.image_b64),
+        "image_b64": req.image_b64,
+        "image_mime": req.image_mime,
+        "mode_hint": req.mode_hint,
         "difficulty": "light",
         "needs_agent": False,
         "plan": [],
@@ -269,6 +292,10 @@ async def chat(req: ChatRequest, request: Request, background_tasks: BackgroundT
                         yield events.token_event(delta)
                     elif name == "step":
                         yield events.step_event(data.get("label", ""), data.get("detail", ""), data.get("agent", "main"))
+                    elif name == "tool_result":
+                        yield events.tool_result_event(
+                            data.get("name", ""), data.get("observation", ""), data.get("agent", "main")
+                        )
                     elif name == "memory_hit":
                         yield events.memory_hit_event(
                             data.get("summary", ""), data.get("scope", ""), data.get("source_conv_id", "")

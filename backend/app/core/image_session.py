@@ -26,6 +26,7 @@ Every DB + Kaggle call here is BLOCKING -- routes invoke them via
 run_in_threadpool so the event loop is never stalled.
 """
 
+import asyncio
 import secrets as _secrets
 import sys
 import time as _time
@@ -34,6 +35,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 from psycopg.types.json import Json
+from starlette.concurrency import run_in_threadpool
 
 from app import config
 from app.constants import (
@@ -47,7 +49,12 @@ from app.constants import (
     KAGGLE_SESSION_POLL_INTERVAL_SECONDS,
 )
 from app.core import generate, kaggle, key_store
-from app.core.image_models import DEFAULT_IMAGE_MODEL, get_image_model
+from app.core.image_models import (
+    DEFAULT_IMAGE_MODEL,
+    get_image_model,
+    merge_negative_prompt,
+    snap_resolution,
+)
 from app.db.postgres_client import execute, fetchall, fetchone, transaction
 from app.exceptions import NotConfiguredError
 
@@ -60,6 +67,8 @@ class ImageJobParams(BaseModel):
     style_preset: str | None = None
     strength: float | None = None          # img2img: 0.1–1.0 (lower = closer to source)
     init_image_b64: str | None = None      # img2img: base64 source image (stored transiently)
+    seed: int | None = None                # Q1.4: fixed seed for reproducible A/Bs
+    subject_type: str | None = None        # Q3.3b: portrait/nature/product/architecture
 
 
 # Job statuses still owned by a (live) worker -- used for de-dup + liveness.
@@ -68,6 +77,35 @@ _ACTIVE_JOB_STATUSES = ("queued", "running")
 # Statuses that mean a kernel is (or should be) alive and serving.
 # Includes the W.4 startup phases so a kernel mid-install/load isn't reaped.
 _LIVE_STATUSES = frozenset({"starting", "installing", "loading_model", "ready"})
+
+
+def _snap_params(model: str, params: Optional[ImageJobParams]) -> Optional[ImageJobParams]:
+    """Q1.1 server-side guard: snap width/height to the model's nearest native
+    resolution bucket, so old cached frontends / direct API callers can't send
+    off-bucket sizes that produce half-generated/deformed output."""
+    if params is None or (params.width is None and params.height is None):
+        return params
+    w, h = snap_resolution(model, params.width, params.height)
+    if w == params.width and h == params.height:
+        return params
+    return params.model_copy(update={"width": w, "height": h})
+
+
+def _apply_default_negative(model: str, params: Optional[ImageJobParams]) -> Optional[ImageJobParams]:
+    """Q3.2: prepend the model's research-backed default negative prompt ahead
+    of the user's own, server-side, so every generation gets it -- not just
+    ones where the user knew to type it in manually. Skipped under a
+    non-photoreal style preset (anime/oil_painting/sketch) -- see
+    merge_negative_prompt's NON_PHOTOREAL_STYLE_PRESETS."""
+    style_preset = params.style_preset if params else None
+    merged = merge_negative_prompt(
+        model, params.negative_prompt if params else None, style_preset
+    )
+    if params is None:
+        return ImageJobParams(negative_prompt=merged) if merged else None
+    if merged == params.negative_prompt:
+        return params
+    return params.model_copy(update={"negative_prompt": merged})
 
 
 def _now() -> datetime:
@@ -458,17 +496,37 @@ def _session_row(user_id: str, session_id: str, _fetchone=fetchone) -> Optional[
     )
 
 
+def get_session_model(user_id: str, session_id: str) -> Optional[str]:
+    """Q3.3b: lightweight lookup so routes/generate.py's /session/job handler
+    can resolve the model BEFORE composing the prompt (needed for per-model
+    style/subject-type suffix variants) without duplicating submit_session_job's
+    liveness-check logic. Returns None if the session doesn't exist.
+
+    Explicitly passes `_fetchone=fetchone` (a fresh lookup of the module-level
+    name at call time) rather than relying on `_session_row`'s own default
+    parameter, which is bound once at module-import time and so would NOT
+    pick up a test's `patch("app.core.image_session.fetchone", ...)`."""
+    row = _session_row(user_id, session_id, _fetchone=fetchone)
+    return row["model"] if row else None
+
+
 def submit_session_job(
     user_id: str,
     session_id: str,
     prompt: str,
     params: Optional[ImageJobParams] = None,
+    original_prompt: Optional[str] = None,
+    enhanced_prompt: Optional[str] = None,
 ) -> str:
     """Insert a queued job for a live (or warming-up) session.
 
     Jobs submitted during installing/loading_model queue up and are picked up
     FIFO once the kernel enters its serve loop. Only truly dead sessions
     (stopped/ended/expired) are rejected. Returns the new job id.
+
+    `original_prompt`/`enhanced_prompt` (Q3.1 pass 2) are set only when the
+    caller ran the vision-grounded enhancer and it actually rewrote the
+    prompt -- None/None means no enhancement happened for this job.
     """
     # Liveness check + insert in one transaction, so a session that dies
     # between the two can't still have a job queued against it.
@@ -478,10 +536,13 @@ def submit_session_job(
             raise NotConfiguredError("That session no longer exists. Start a new session.")
         if not _is_alive(sess):
             raise NotConfiguredError("That session isn't running anymore. Start a new session.")
+        params = _snap_params(sess["model"], params)
+        params = _apply_default_negative(sess["model"], params)
         row = tx.fetchone(
             """
-            insert into image_jobs (user_id, session_id, model, prompt, status, params)
-            values (%s, %s, %s, %s, 'queued', %s)
+            insert into image_jobs
+                (user_id, session_id, model, prompt, status, params, original_prompt, enhanced_prompt)
+            values (%s, %s, %s, %s, 'queued', %s, %s, %s)
             returning id
             """,
             (
@@ -490,6 +551,8 @@ def submit_session_job(
                 sess["model"],
                 prompt,
                 Json(params.model_dump(exclude_none=True) if params else {}),
+                original_prompt,
+                enhanced_prompt,
             ),
         )
     return str(row["id"])
@@ -508,12 +571,52 @@ def get_job(user_id: str, job_id: str) -> Optional[dict]:
         "status": row["status"],
         "model": row.get("model"),
         "prompt": row.get("prompt"),
+        "original_prompt": row.get("original_prompt"),
+        "enhanced_prompt": row.get("enhanced_prompt"),
         "image_b64": row.get("image_b64"),
         "mime": row.get("mime"),
         "via": row.get("via"),
         "error": row.get("error"),
         "created_at": row.get("created_at"),
     }
+
+
+def delete_job(user_id: str, job_id: str) -> bool:
+    """G1: delete a job (queued/done/error), scoped to its owner. Running jobs
+    are never deletable -- can't safely interrupt an in-flight Kaggle round-trip.
+    Returns False (caller maps to 409) if the job doesn't exist, isn't owned by
+    user_id, or is currently running."""
+    row = fetchone(
+        "delete from image_jobs where id = %s and user_id = %s and status != 'running' "
+        "returning id",
+        (job_id, user_id),
+    )
+    return row is not None
+
+
+def reorder_queue(user_id: str, session_id: str, job_ids: list[str]) -> bool:
+    """G1: recompute queue_pos for a session's queued jobs per the given order
+    (spaced integers -- simpler and safer than per-move fractional-index math
+    for queues this small). Validates job_ids is EXACTLY the session's current
+    queued-job set (owned by user_id) before writing anything -- returns False
+    (caller maps to 409) on any mismatch (stale client state: a job started,
+    finished, or was deleted between the client fetching the list and reordering
+    it, or a duplicate/foreign id)."""
+    with transaction() as tx:
+        rows = tx.fetchall(
+            "select id from image_jobs where user_id = %s and session_id = %s "
+            "and status = 'queued'",
+            (user_id, session_id),
+        )
+        current_ids = {str(r["id"]) for r in rows}
+        if len(job_ids) != len(set(job_ids)) or current_ids != set(job_ids):
+            return False
+        for index, job_id in enumerate(job_ids):
+            tx.execute(
+                "update image_jobs set queue_pos = %s where id = %s",
+                (1000 * (index + 1), job_id),
+            )
+    return True
 
 
 # --- Cold one-shot jobs ------------------------------------------------------
@@ -525,8 +628,8 @@ def get_job(user_id: str, job_id: str) -> Optional[dict]:
 # Columns the monitor panel needs -- deliberately EXCLUDES image_b64 so the
 # list stays light; bytes are fetched lazily via get_job when opened.
 _JOB_LIST_COLUMNS = (
-    "id, session_id, model, prompt, status, mime, via, error, params, "
-    "created_at, started_at, done_at"
+    "id, session_id, model, prompt, original_prompt, enhanced_prompt, status, mime, via, error, params, "
+    "queue_pos, created_at, started_at, done_at"
 )
 
 
@@ -548,10 +651,16 @@ def create_cold_job(
     model: str,
     prompt: str,
     params: Optional[ImageJobParams] = None,
+    original_prompt: Optional[str] = None,
+    enhanced_prompt: Optional[str] = None,
 ) -> tuple[str, bool]:
     """Create (or de-dup to) a queued cold job. Returns (job_id, created).
 
     Raises RuntimeError if a warm session is currently alive for this model.
+
+    `original_prompt`/`enhanced_prompt` (Q3.1 pass 2) are set only when the
+    caller ran the vision-grounded enhancer and it actually rewrote the
+    prompt -- None/None means no enhancement happened for this job.
     """
     get_image_model(model)  # validate before touching the DB
     latest = _latest_session(user_id, model)
@@ -563,13 +672,20 @@ def create_cold_job(
     existing = _active_cold_job(user_id, model)
     if existing is not None:
         return str(existing["id"]), False
+    params = _snap_params(model, params)
+    params = _apply_default_negative(model, params)
     row = fetchone(
         """
-        insert into image_jobs (user_id, session_id, model, prompt, status, params)
-        values (%s, NULL, %s, %s, 'queued', %s)
+        insert into image_jobs
+            (user_id, session_id, model, prompt, status, params, original_prompt, enhanced_prompt)
+        values (%s, NULL, %s, %s, 'queued', %s, %s, %s)
         returning id
         """,
-        (user_id, model, prompt, Json(params.model_dump(exclude_none=True) if params else {})),
+        (
+            user_id, model, prompt,
+            Json(params.model_dump(exclude_none=True) if params else {}),
+            original_prompt, enhanced_prompt,
+        ),
     )
     return str(row["id"]), True
 
@@ -601,6 +717,41 @@ def run_cold_job(job_id: str) -> None:
             "update image_jobs set status = 'error', error = %s, done_at = %s where id = %s",
             (str(e)[:300], _iso(_now()), job_id),
         )
+
+
+# --- Shared cold-job bg-task/lock state (F-1 fix) ---------------------------
+# A kernel slug is single-writer, so two concurrent cold runs of the same
+# (user, model) -- however they were triggered -- must never overlap. This
+# used to be a per-caller-module lock/task-set (routes/generate.py had its
+# own copy, and the chat generate_image tool duplicated it again), which only
+# serialized runs triggered through the SAME entry point: a cold job started
+# from Image Lab and one started from chat for the same (user, model) at
+# roughly the same time could still race each other. Centralized here so
+# every caller shares the same lock/task registry regardless of entry point.
+_cold_job_locks: dict[str, asyncio.Lock] = {}
+_cold_job_bg_tasks: set[asyncio.Task] = set()
+
+
+def _cold_job_lock_for(key: str) -> asyncio.Lock:
+    lock = _cold_job_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _cold_job_locks[key] = lock
+    return lock
+
+
+def spawn_cold_job_bg(user_id: str, model: str, job_id: str) -> None:
+    """Fire-and-forget worker for a cold job, serialized per (user, model)
+    across every caller. Strong ref held in _cold_job_bg_tasks -- asyncio
+    only keeps a WEAK ref to a task, so without this a GC pass could collect
+    a running worker mid-Kaggle-call and silently drop the job."""
+    async def _run() -> None:
+        async with _cold_job_lock_for(f"{user_id}:{model}"):
+            await run_in_threadpool(run_cold_job, job_id)
+
+    task = asyncio.create_task(_run())
+    _cold_job_bg_tasks.add(task)
+    task.add_done_callback(_cold_job_bg_tasks.discard)
 
 
 def reap_stale_jobs(user_id: str) -> None:
@@ -684,11 +835,14 @@ def list_jobs(user_id: str, model: Optional[str] = None, limit: int = 20) -> lis
             "session_id": str(r["session_id"]) if r.get("session_id") else None,
             "model": r.get("model"),
             "prompt": r.get("prompt"),
+            "original_prompt": r.get("original_prompt"),
+            "enhanced_prompt": r.get("enhanced_prompt"),
             "status": r.get("status"),
             "mime": r.get("mime"),
             "via": r.get("via"),
             "error": r.get("error"),
             "params": r.get("params"),
+            "queue_pos": r.get("queue_pos"),
             "created_at": r.get("created_at"),
             "started_at": r.get("started_at"),
             "done_at": r.get("done_at"),
