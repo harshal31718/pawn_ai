@@ -25,9 +25,10 @@ rule-vs-LLM routing literature) — see §3.1.5 for sources.
 ## Q3.1 — LLM prompt enhancer
 
 **Mechanics (the Groq→Gemini→raw fallback chain, vision-aware img2img path, multimodal
-plumbing prerequisites) are specified in `workspace/plan/plan_vision_prompt_enhancement.md`
-— read that plan for routes/registry/testing details. This section specifies what
-THIS session's research adds on top: concrete per-model prompt schemas, real
+plumbing prerequisites) were specified in
+`workspace/implemented_phases/plan_vision_prompt_enhancement.md` (now archived — its
+design shipped as part of Q3.1 pass 1 + pass 2 below, both done). This section specifies
+what THIS session's research adds on top: concrete per-model prompt schemas, real
 system-prompt text, and the rule-based-vs-LLM-based selection mechanism.**
 
 **Files:** new `backend/app/core/image_prompting.py`, `routes/generate.py`,

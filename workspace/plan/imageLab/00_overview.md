@@ -27,12 +27,17 @@ research-backed quality program executed entirely on the existing Kaggle pipelin
 | File | What |
 |---|---|
 | `00_overview.md` | this file |
-| `01_research_quality.md` | web-research reference: checkpoints, settings, fixes, prompting (+sources) |
-| `open_items.md` | pre-existing open items (FLUX OOM merge, live smoke tests, prod-gated, stop hypotheses) — moved from `plan/plan_imagelab_open_items.md` |
-| `phase_Q1_generation_fixes.md` | correctness: resolution buckets, fp16 VAE fix, scheduler, per-model defaults, seed |
-| `phase_Q2_realism_models.md` | photoreal checkpoints as new model rows (Juggernaut/RealVis), FLUX guidance |
-| `phase_Q3_prompting_presets.md` | LLM prompt enhancer, negative defaults/embeddings, preset rework |
-| `phase_G1_generations_management.md` | feature (not quality): delete/edit/reorder generations in the Generations tab, requested 2026-07-15 |
+| `01_research_quality.md` | web-research reference: checkpoints, settings, fixes, prompting (+sources) — still cited by Q2 |
+| `open_items.md` | pre-existing open items (FLUX OOM merge, live smoke tests, prod-gated, stop hypotheses) — I-1 done, I-2..I-5 open |
+| `phase_Q2_realism_models.md` | photoreal checkpoints as new model rows (Juggernaut/RealVis), FLUX guidance — **open, next up** |
+| `phase_Q3_prompting_presets.md` | LLM prompt enhancer, negative defaults/embeddings, preset rework — Q3.1/Q3.2/Q3.3 done, Q3.4 (optional spike) open |
+| `benchmarks.md` | Q1.5's fixed-seed A/B benchmark set — regression baseline, stays in use through Q2-Q3 |
+
+**Done, archived to `workspace/implemented_phases/`:** `phase_Q1_generation_fixes.md`
+(correctness: resolution buckets, fp16 VAE fix, scheduler, per-model defaults, seed),
+`phase_G1_generations_management.md` (Generations tab delete/edit/reorder, done
+2026-07-17), `plan_vision_prompt_enhancement.md` (its design was fully implemented under
+Q3.1).
 
 **Dropped:** `phase_Q4_detail_post.md` (two-pass hires fix, face detailer, refiner, FreeU
 — the polish layer) — cut entirely by user decision 2026-07-17, file removed. Not being

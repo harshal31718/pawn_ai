@@ -15,7 +15,9 @@ F-1/F-2/F-3/F-6/F-7/F-8/F-9/F-10 (image-gen tool, model-switcher
 investigation, Drive-mandatory wording, Groq resolver priority, agent
 half-generation fix, sync-warning relocation, sidebar scroll fix, Projects
 gallery page) all shipped 2026-07-16 — closed-out record at
-`workspace/implemented_phases/phase_13_chat_feature_fixes.md`.
+`workspace/implemented_phases/phase_13_chat_feature_fixes.md`. F-11 (attach
+image + forced-SDXL session) shipped 2026-07-16 — closed-out record at
+`workspace/implemented_phases/phase_F11_chat_io_formats.md`.
 
 F-4 (repo mirror runbook) moved into `deployment.md` §8 as a pre-public-launch
 step. F-5 (Kaggle-hosted LLM API) was scrapped outright, not carried forward.

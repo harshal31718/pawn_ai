@@ -23,7 +23,7 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   F-4 moved into root `deployment.md` §8 (pre-public-launch step); F-5 scrapped.
   Plan files removed from `workspace/plan/chat/` (folder kept for future plans).
 - `[x]` **F-11 — Chat I/O formats: attach image + forced-SDXL session**
-  (`workspace/plan/chat/phase_F11_chat_io_formats.md`, done 2026-07-16).
+  (`workspace/implemented_phases/phase_F11_chat_io_formats.md`, done 2026-07-16).
   Composer `+`/kebab menu with "Attach PDF" (unchanged) and new "Attach
   image" (vision Q&A via a new `direct_answer_node` branch — picks a
   vision-capable model, builds one fresh multimodal message, never persists
@@ -266,8 +266,8 @@ done, per the user's instruction (see `workspace/plan/README.md`).
       dropdown shows all 9 presets. Full record: `dev_log.md`'s 2026-07-16
       "imageLab Q3.3b" entry, `current_state.md`. **Q3.3 (a+b) now closed.**
   - `[ ]` Q3.4 — Optional: negative embeddings (spike)
-- `[~]` **Vision-grounded prompt enhancement (imageLab)** —
-  `workspace/plan/plan_vision_prompt_enhancement.md` (registered 2026-07-15,
+- `[x]` **Vision-grounded prompt enhancement (imageLab)** ✓ (design done, archived) —
+  `workspace/implemented_phases/plan_vision_prompt_enhancement.md` (registered 2026-07-15,
   user-requested). Image+prompt → vision model analysis → refined prompt → generation
   model, provider chain Groq (default) → Gemini (fallback) → raw prompt (final
   fallback), for imageLab's img2img reference image. Supersedes imageLab Q3.1's
@@ -279,10 +279,11 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   multimodal message building, `ModelEntry.supports_vision`, and
   `resolver.pick_model_by_capability(require_vision=True)` all exist today; the Groq
   vision model (`llama-4-scout`) is already registered. See this plan file's §2/§5 for
-  the resolution detail. Implementation is tracked under imageLab Q3.1 above (pass 1
-  done 2026-07-16, pass 2 not started) rather than duplicated here.
+  the resolution detail. Implementation was tracked under imageLab Q3.1 above (pass 1 +
+  pass 2, both done 2026-07-16/17) rather than duplicated here — this design is now
+  fully implemented, plan file archived.
 - `[x]` **Generations tab management (G1)** ✓ (2026-07-17) —
-  `workspace/plan/imageLab/phase_G1_generations_management.md`. Delete (queued/done/error;
+  `workspace/implemented_phases/phase_G1_generations_management.md`. Delete (queued/done/error;
   never running), reorder the queue (up/down arrows, single table with a status-priority
   sort), edit a queued job (delete-and-reload into the composer with full params via the
   same `AdvancedParams` prefill mechanism as Refine), settings popover, input-image tag.
@@ -340,8 +341,9 @@ done, per the user's instruction (see `workspace/plan/README.md`).
 
 ## Deployment: dev -> main promoted, live on the pawn Oracle VM (2026-07-14) -- DONE
 
-Plan reference: workspace/plan/deployment.md (drafted on a not-yet-merged
-branch; the plan itself is unaffected by that -- it was followed directly).
+Plan reference: workspace/implemented_phases/plan_deployment_dev_to_main_promotion.md
+(drafted on a not-yet-merged branch; the plan itself is unaffected by that -- it was
+followed directly; archived here on completion).
 User approved proceeding end-to-end: no real users yet, so the destructive
 memory_chunks wipe was accepted; the FLUX OOM fix (separate, PR #2) was
 kept out of this round. Promoted as commit f7263f5, pushed to origin/main,

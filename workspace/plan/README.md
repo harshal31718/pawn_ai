@@ -5,9 +5,10 @@ Entry point for any agent picking up planned work. Every plan folder is self-con
 human-dependency list that lives nowhere else.
 
 > **`chat/` is done — cross-plan order is now: imageLab next.** All of chat/'s
-> 2026-07-15/16 batch (F-1/F-2/F-3/F-6/F-7/F-8/F-9/F-10) shipped; see
-> `workspace/implemented_phases/phase_13_chat_feature_fixes.md` for the closed-out
-> record. `chat/` stays as a folder for whatever gets planned there next.
+> 2026-07-15/16 batch (F-1/F-2/F-3/F-6/F-7/F-8/F-9/F-10) plus F-11 (image attach +
+> forced-SDXL session) shipped; see `workspace/implemented_phases/phase_13_chat_feature_fixes.md`
+> and `workspace/implemented_phases/phase_F11_chat_io_formats.md` for the closed-out
+> records. `chat/` stays as a folder for whatever gets planned there next.
 > **videoLab is deferred — no plans to implement it for now; it will only be picked up
 > at the very end**, once `imageLab/` is also done. Its plan files stay put
 > in `videoLab/` untouched; nothing else in this workspace should reference it in the
@@ -15,19 +16,19 @@ human-dependency list that lives nowhere else.
 
 ## Recommended cross-plan order
 
-1. **imageLab Q1** (`imageLab/phase_Q1_generation_fixes.md`) — smallest diffs, biggest
-   user-visible win (fixes half-generated/black/soft images).
-2. **imageLab I-1** (`imageLab/open_items.md`) — FLUX OOM: rebase `worktree-flux-oom-fix`,
-   live-verify, merge. Quick, already written.
-3. **imageLab Q2 → Q3** — realism checkpoints, prompting. Q3.1's enhancer
-   mechanics are superseded by `plan_vision_prompt_enhancement.md` (below) — build the
-   shared vision plumbing there first if Q3 is picked up after it lands. (Q4 — polish/
-   detail pass — dropped entirely 2026-07-17, not being built.)
-4. **Vision-grounded prompt enhancement** (`plan_vision_prompt_enhancement.md`) — imageLab
-   plumbing (image+prompt → vision-model refine → generation model, Groq→Gemini→raw
-   chain); build before/alongside imageLab Q3 once its 3 open questions are answered.
-   (The plan file's own text also scopes a videoLab reuse of this plumbing — out of
-   scope until videoLab is picked back up; treat those sections as parked, not active.)
+**imageLab Q1, G1, and the vision-grounded prompt enhancement plan are all DONE** — see
+`workspace/implemented_phases/phase_Q1_generation_fixes.md`,
+`workspace/implemented_phases/phase_G1_generations_management.md`, and
+`workspace/implemented_phases/plan_vision_prompt_enhancement.md` (its design was fully
+implemented under imageLab Q3.1). What's left, in order:
+
+1. **imageLab Q2** (`imageLab/phase_Q2_realism_models.md`) — realism checkpoints
+   (Juggernaut/RealVis), deliberately deferred by the user until Q3's prompting work
+   landed (it has — Q3.1/Q3.2/Q3.3 all done, only the optional Q3.4 negative-embeddings
+   spike remains open). Now the natural point to revisit.
+2. **imageLab open items** (`imageLab/open_items.md`) — I-1 (FLUX OOM) is done; I-2/I-3/
+   I-4/I-5 remain, mostly gated on the user + a real Kaggle session or a deployment
+   session.
 
 **videoLab — deferred to the very end, not currently planned for implementation.** Its
 plan folder (`videoLab/`, phases V1–V6, and `videoLab/v2/`, phases P1–P7) stays exactly
@@ -60,9 +61,13 @@ it as self-contained and not to be cross-referenced from other plan files.
 ## Folder map
 
 - `chat/` — no active plans (last batch shipped 2026-07-16, see
-  `implemented_phases/phase_13_chat_feature_fixes.md`); kept for future plans
-- `imageLab/` — quality program Q1–Q3 (Q4 dropped 2026-07-17) + open items (I-1..I-5)
-- `plan_vision_prompt_enhancement.md` — imageLab vision-grounded prompt-enhancement
-  plumbing (supersedes imageLab Q3.1 mechanics)
+  `implemented_phases/phase_13_chat_feature_fixes.md` and
+  `implemented_phases/phase_F11_chat_io_formats.md`); kept for future plans
+- `imageLab/` — quality program: Q1 done (archived), Q2 open (deferred until now),
+  Q3 mostly done (Q3.4 spike still open), G1 done (archived); Q4 dropped 2026-07-17.
+  Open items I-1..I-5 in `open_items.md` (I-1 done).
 - `plan_findings.md` — user's notepad, don't process without being asked
-- History of completed plans → `workspace/implemented_phases/`
+- History of completed plans → `workspace/implemented_phases/` (includes
+  `phase_Q1_generation_fixes.md`, `phase_G1_generations_management.md`,
+  `plan_vision_prompt_enhancement.md`, `phase_F11_chat_io_formats.md`,
+  `plan_deployment_dev_to_main_promotion.md`)
