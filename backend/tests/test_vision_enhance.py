@@ -1,5 +1,7 @@
-"""Tests for Q3.1's vision-grounded prompt enhancer (backend plumbing only --
-no routes/generate.py wiring yet, that's pass 2)."""
+"""Tests for Q3.1's vision-grounded prompt enhancer -- the core enhancer
+plumbing (pass 1). The routes/generate.py wiring (pass 2: Auto/Always/Off gate,
+per-model schema selection, style/subject suffix composition order) is covered
+in test_generate.py and test_image_session.py instead."""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -155,6 +157,30 @@ async def test_sdxl_negative_prompt_split_out():
 
     assert result["prompt"] == "detailed cat portrait, 85mm lens"
     assert result["negative"] == "blurry, low quality"
+
+
+@pytest.mark.asyncio
+async def test_sdxl_negative_prompt_split_out_when_model_uses_avoid_marker():
+    """Regression test (found live 2026-07-17): a real vision model used
+    "Avoid:" instead of the requested "Negative:" marker -- the old exact-
+    literal-only marker list left that text stuck in the positive prompt sent
+    to generation instead of being split into its own negative_prompt field."""
+    resolver = _fake_resolver(["llama-4-scout"])
+    rate_limiter = MagicMock()
+
+    with patch(
+        "app.core.vision_enhance.normalize.chat_complete_single_model",
+        new=AsyncMock(return_value={
+            "role": "assistant",
+            "content": "detailed cat portrait, 85mm lens\nAvoid: cartoonish, low resolution",
+        }),
+    ):
+        result = await enhance_with_vision(
+            "a cat", None, IMAGE_MODELS["sdxl"].prompt_schema, resolver, rate_limiter,
+        )
+
+    assert result["prompt"] == "detailed cat portrait, 85mm lens"
+    assert result["negative"] == "cartoonish, low resolution"
 
 
 @pytest.mark.asyncio

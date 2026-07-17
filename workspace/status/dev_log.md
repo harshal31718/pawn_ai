@@ -6,6 +6,71 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — imageLab Q3.1 pass 2: wire vision-grounded enhancer into generation routes (closes Q3.1)
+
+Wires pass 1's `enhance_with_vision()` into both image-generation entry points
+and adds the composer's Auto/Always/Off toggle, closing out Q3.1.
+
+**Backend.** New `_apply_prompt_enhancement()` helper in `routes/generate.py`,
+called from both the cold `/generate` path and the warm `/generate/session/job`
+path, ahead of style/subject-preset suffix composition and Q3.2's default-
+negative merge. `enhance_prompt: EnhanceMode = "auto"` (`Literal["auto",
+"always", "off"]`) on both request models. "auto" defers to pass 1's rule-based
+gate (`needs_enhancement`); "always" forces the call; "off" skips it entirely
+(and, on the warm path, skips the extra `get_session_model` DB lookup too when
+no preset needs it either). `original_prompt`/`enhanced_prompt` are only ever
+set when the enhancer actually ran and didn't degrade -- `None`/`None`
+otherwise, so "no enhancement happened" is stored honestly rather than as a
+duplicate of the prompt. New `image_jobs.original_prompt`/`enhanced_prompt`
+columns (`postgres/schema.sql` + `postgres/migrations/2026-07_Q31_enhance_prompts.sql`,
+applied to local dev), threaded through `create_cold_job`/`submit_session_job`/
+`get_job`/`list_jobs`.
+
+**Frontend.** `ImageGenerator.tsx` gets a 3-button Auto/Always/Off toggle next
+to "+ Advanced" (Auto is the default, so most users never touch it);
+`client.ts`'s `EnhanceMode` type threads it through `submitSessionJob` (the
+only path the composer actually calls -- `runGenerate` is legacy/unused from
+the UI). `GenerationsPanel.tsx` and the "Latest:" preview both now show
+`original_prompt` (what the user actually typed) with a `✨` affordance whose
+tooltip surfaces the full `enhanced_prompt`, instead of the verbose rewrite.
+
+**Real bugs found and fixed this session, independent of the plan's scope:**
+1. **Vision-enhance marker parsing.** The enhancer's system prompt asks for a
+   literal `"Negative:"` line, but a live model was observed using `"Avoid:"`
+   instead -- the exact-case-only marker list left the negative text stuck
+   inside the positive prompt. Fixed with a case-insensitive, earliest-match
+   scan over `("negative prompt:", "negative:", "avoid:")`
+   (`vision_enhance.py::_parse_enhancer_output`), regression-tested.
+2. **CRITICAL, caught by code-reviewer: no-op `strength` default on the warm
+   path.** `params_dict.setdefault("strength", 0.6)` never fires because
+   Pydantic v2's `model_dump()` (no `exclude_none`) always includes `strength`
+   as a key, `None` when unset -- so `setdefault` sees the key already present
+   and does nothing. Since the composer's "Refine" flow only ever calls
+   `submitSessionJob` (never the cold `/generate` path, which already had the
+   correct `is None` check), every img2img job through the main UI was
+   silently getting `strength=None` instead of the intended 0.6 default.
+   Fixed to match the cold path's `if params_dict.get("strength") is None:
+   params_dict["strength"] = 0.6` pattern; added
+   `test_session_job_init_image_b64_defaults_strength` regression test.
+   Also fixed a related NOTE: `triggerRefine`'s "Refining: ..." label used the
+   post-enhancement `job.prompt` instead of `job.original_prompt`, inconsistent
+   with `GenerationsPanel.tsx`'s display convention.
+
+566 backend tests green (up from 550 after pass 1), `tsc`/`npm run build`
+clean. code-reviewer: 1st pass FAIL (the `strength` CRITICAL above) → fixed →
+re-reviewed PASS (0 CRITICAL/WARN, 3 accepted NOTEs: a same-text-as-input
+enhancer-output edge case that doesn't practically occur with real LLM
+rewrites, the "avoid:" marker's pre-existing raw-substring-match risk widened
+slightly, and the resolver's `(ProviderError, NoEndpointError)`-only catch in
+`enhance_with_vision` being pass-1-inherited, not introduced here). test-runner
+PASS. build-validator: 1st pass FAIL (docs not yet updated, this entry closes
+that) → PASS. No security-auditor run (no new secret surface -- reuses pass
+1's already-audited vision-call path; base64 image bytes still never touch
+disk). See `workspace/plan/imageLab/phase_Q3_prompting_presets.md` §Q3.1 and
+`current_state.md`. **Closes Q3.1 (pass 1 + pass 2).**
+
+---
+
 ### [2026-07-16] — imageLab Q3.3b: subject-type axis + per-model preset variants (closes Q3.3)
 
 Deferred remainder of Q3.3, building on Q3.3a's registry foundation. Added the

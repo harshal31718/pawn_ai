@@ -165,7 +165,7 @@ done, per the user's instruction (see `workspace/plan/README.md`).
     (the style-preset conflict, fixed + re-verified). build-validator PASS. No
     security-auditor run (pure data/param-merge, no secrets/config/auth touched).
     Full record: `dev_log.md`'s 2026-07-16 "imageLab Q3.2" entry, `current_state.md`.
-  - `[~]` **Q3.1 — LLM prompt enhancer** (split into 2 build-step passes; vision-
+  - `[x]` **Q3.1 — LLM prompt enhancer** (split into 2 build-step passes; vision-
     plumbing prerequisites resolved 2026-07-16 — already shipped by F-11, no
     longer blocked)
     - `[x]` **Q3.1 pass 1 — backend plumbing** ✓ (2026-07-16)
@@ -186,9 +186,33 @@ done, per the user's instruction (see `workspace/plan/README.md`).
       security-auditor light-touch PASS (no new secret surface). build-
       validator PASS. Full record: `dev_log.md`'s 2026-07-16 "imageLab Q3.1
       pass 1" entry, `current_state.md`.
-    - `[ ]` Q3.1 pass 2 — wire into `routes/generate.py` (call
-      `enhance_with_vision`, store `original_prompt`/`enhanced_prompt` on the
-      job) + frontend composer's Auto/Always/Off 3-state toggle. Not started.
+    - `[x]` **Q3.1 pass 2 — wire into `routes/generate.py` + composer toggle** ✓
+      (2026-07-17)
+      New `_apply_prompt_enhancement()` helper called from both the cold
+      `/generate` and warm `/generate/session/job` routes, ahead of style/
+      subject-preset suffix composition and Q3.2's default-negative merge.
+      New `enhance_prompt: EnhanceMode = "auto"` (`Literal["auto", "always",
+      "off"]`) on both request models. `original_prompt`/`enhanced_prompt`
+      persist on the job only when the enhancer actually ran and didn't
+      degrade — new `image_jobs` columns (`postgres/schema.sql` + migration
+      `2026-07_Q31_enhance_prompts.sql`), threaded through
+      `create_cold_job`/`submit_session_job`/`get_job`/`list_jobs`. Frontend:
+      `ImageGenerator.tsx`'s composer gets an Auto/Always/Off 3-button toggle;
+      `GenerationsPanel.tsx`/"Latest:" preview show the original prompt with a
+      `✨` affordance tooltipping the enhanced rewrite. **Two real bugs found
+      and fixed:** enhancer negative-marker parsing was exact-case
+      `"Negative:"`-only (a live model used `"Avoid:"` instead) — fixed with a
+      case-insensitive earliest-match scan; **CRITICAL** — the warm path's
+      `params_dict.setdefault("strength", 0.6)` was a no-op (Pydantic v2's
+      `model_dump()` always includes the key, `None` when unset), so every
+      img2img job through the main composer (which only ever calls
+      `submitSessionJob`) silently got `strength=None` — fixed to match the
+      cold path's `is None` check, regression-tested. 566 backend tests green
+      (up from 550), `tsc`/build clean. code-reviewer: 1st pass FAIL (the
+      `strength` CRITICAL) → fixed → PASS. test-runner PASS. build-validator:
+      1st pass FAIL (docs) → PASS. No security-auditor run (reuses pass 1's
+      audited vision-call path). Full record: `dev_log.md`'s 2026-07-17
+      "imageLab Q3.1 pass 2" entry, `current_state.md`. **Closes Q3.1.**
   - `[~]` **Q3.3 — Style + subject-type presets rebuilt** (scoped into sub-steps, like Q3.2)
     - `[x]` **Q3.3a — Registry-load foundation** ✓ (2026-07-16)
       Moved the 5 existing style presets (photorealistic/cinematic/anime/oil_painting/

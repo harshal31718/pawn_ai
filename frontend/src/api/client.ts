@@ -119,6 +119,11 @@ export interface ImageParams {
   subject_type?: string
 }
 
+// Q3.1 pass 2: 3-state prompt-enhancer control -- 'auto' (rule-based gate
+// decides, default), 'always' (force the vision-grounded rewrite), 'off'
+// (never enhance, raw prompt only).
+export type EnhanceMode = 'auto' | 'always' | 'off'
+
 export async function connectKaggle(model = 'sdxl'): Promise<void> {
   const res = await fetch(`${BASE_URL}/generate/connect`, {
     method: 'POST',
@@ -153,6 +158,7 @@ export async function runGenerate(
   params?: ImageParams,
   initImageB64?: string,
   initJobId?: string,
+  enhancePrompt?: EnhanceMode,
 ): Promise<{ job_id: string; status: string }> {
   return postJson('/generate', {
     modality: 'image',
@@ -160,6 +166,7 @@ export async function runGenerate(
     model,
     ...(params && Object.keys(params).length > 0 ? { params } : {}),
     ...(initJobId ? { init_job_id: initJobId } : initImageB64 ? { init_image_b64: initImageB64 } : {}),
+    ...(enhancePrompt ? { enhance_prompt: enhancePrompt } : {}),
   })
 }
 
@@ -204,6 +211,10 @@ export interface JobResult {
   session_id?: string | null
   model?: string
   prompt?: string
+  // Q3.1 pass 2: set only when the vision-grounded enhancer actually rewrote
+  // the prompt for this job -- both null/absent means no enhancement ran.
+  original_prompt?: string | null
+  enhanced_prompt?: string | null
   image_b64?: string | null
   mime?: string | null
   via?: string | null
@@ -254,12 +265,14 @@ export async function submitSessionJob(
   params?: ImageParams,
   initImageB64?: string,
   initJobId?: string,
+  enhancePrompt?: EnhanceMode,
 ): Promise<{ job_id: string; status: string }> {
   return postJson('/generate/session/job', {
     session_id: sessionId,
     prompt,
     ...(params && Object.keys(params).length > 0 ? { params } : {}),
     ...(initJobId ? { init_job_id: initJobId } : initImageB64 ? { init_image_b64: initImageB64 } : {}),
+    ...(enhancePrompt ? { enhance_prompt: enhancePrompt } : {}),
   })
 }
 

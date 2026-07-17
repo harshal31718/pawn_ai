@@ -109,7 +109,7 @@ function JobRow({
 
   function handleCopy() {
     navigator.clipboard
-      .writeText(job.prompt ?? '')
+      .writeText(job.original_prompt ?? job.prompt ?? '')
       .then(() => {
         setCopied(true)
         if (copyTimer.current) clearTimeout(copyTimer.current)
@@ -145,7 +145,17 @@ function JobRow({
           <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-theme-bg border border-theme-border/60 text-theme-text-muted shrink-0">
             {job.model ?? '?'}
           </span>
-          <span className="text-[11px] text-theme-text truncate flex-1">{job.prompt ?? ''}</span>
+          <span className="text-[11px] text-theme-text truncate flex-1">
+            {job.original_prompt ?? job.prompt ?? ''}
+          </span>
+          {job.enhanced_prompt && (
+            <span
+              className="shrink-0 text-[10px] cursor-help"
+              title={`Enhanced prompt used for generation:\n${job.enhanced_prompt}`}
+            >
+              ✨
+            </span>
+          )}
           {stylePreset && (
             <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full border bg-theme-brand/10 text-theme-brand border-theme-brand/20">
               {stylePreset}

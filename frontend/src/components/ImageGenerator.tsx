@@ -10,6 +10,7 @@ import {
   type JobResult,
   type SessionStatus,
   type ImageParams,
+  type EnhanceMode,
 } from '../api/client'
 import AdvancedParams from './AdvancedParams'
 import type { RefineHandler, ReuseSeedHandler } from '../types'
@@ -24,6 +25,15 @@ export interface ModelDef {
 }
 
 export const WARMUP_STATUSES = new Set(['starting', 'installing', 'loading_model'])
+
+// Q3.1 pass 2: the composer's ✨ Enhance toggle -- 3 states per
+// phase_Q3_prompting_presets.md §3.1.4 (Auto is the default so most users
+// never think about it).
+const ENHANCE_MODES: { key: EnhanceMode; label: string; title: string }[] = [
+  { key: 'auto', label: 'Auto', title: 'Enhance only when the prompt looks short or vague' },
+  { key: 'always', label: 'Always', title: 'Always rewrite the prompt with the vision-grounded enhancer' },
+  { key: 'off', label: 'Off', title: 'Never enhance -- use the raw prompt as typed' },
+]
 
 // Short human labels for each warmup phase — shown in the Warming pill so a
 // session stuck in one phase for a long time is visibly stuck, not
@@ -83,6 +93,7 @@ const ImageGenerator = forwardRef<
   const [latestResult, setLatestResult] = useState<JobResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false)
+  const [enhanceMode, setEnhanceMode] = useState<EnhanceMode>('auto')
   const [headerDuration, setHeaderDuration] = useState(30)
   const [forcedSeed, setForcedSeed] = useState<{ value: number; nonce: number } | null>(null)
   const sessionBusy = busyAction !== null
@@ -162,10 +173,11 @@ const ImageGenerator = forwardRef<
 
   useImperativeHandle(ref, () => ({
     triggerRefine(job: JobResult, imageSrc: string) {
+      const label = job.original_prompt ?? job.prompt ?? ''
       setInitImage({
         preview: imageSrc,
         jobId: job.job_id,
-        label: `Refining: "${(job.prompt ?? '').slice(0, 40)}${(job.prompt ?? '').length > 40 ? '…' : ''}"`,
+        label: `Refining: "${label.slice(0, 40)}${label.length > 40 ? '…' : ''}"`,
         isRefinement: true,
       })
       setPrompt('')
@@ -291,7 +303,7 @@ const ImageGenerator = forwardRef<
         setBusyAction(null)
       }
 
-      const { job_id } = await submitSessionJob(sid, prompt.trim(), params, initB64, initJobId)
+      const { job_id } = await submitSessionJob(sid, prompt.trim(), params, initB64, initJobId, enhanceMode)
       setWatchIds((prev) => new Set([...prev, job_id]))
       setPrompt('')
       setInitImage(null)
@@ -426,13 +438,35 @@ const ImageGenerator = forwardRef<
             </>
           )}
 
-          <button
-            type="button"
-            onClick={() => setIsAdvancedOpen((o) => !o)}
-            className="text-[11px] text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer font-semibold"
-          >
-            {isAdvancedOpen ? '− Advanced' : '+ Advanced'}
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <div
+              className="flex items-center rounded-lg border border-theme-border/60 overflow-hidden"
+              title="✨ Prompt enhancer"
+            >
+              {ENHANCE_MODES.map(({ key, label, title }) => (
+                <button
+                  key={key}
+                  type="button"
+                  title={title}
+                  onClick={() => setEnhanceMode(key)}
+                  className={`px-1.5 py-0.5 text-[9px] font-semibold cursor-pointer transition-colors ${
+                    enhanceMode === key
+                      ? 'bg-theme-brand text-theme-brand-text'
+                      : 'text-theme-text-muted hover:text-theme-text'
+                  }`}
+                >
+                  {key === 'auto' ? `✨ ${label}` : label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsAdvancedOpen((o) => !o)}
+              className="text-[11px] text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer font-semibold"
+            >
+              {isAdvancedOpen ? '− Advanced' : '+ Advanced'}
+            </button>
+          </div>
         </div>
 
         <AdvancedParams modelId={model.id} onChange={setAdvParams} showStrength={!!initImage} open={isAdvancedOpen} forcedSeed={forcedSeed ?? undefined} />
@@ -473,8 +507,9 @@ const ImageGenerator = forwardRef<
 
       {latestResult && latestResult.status === 'done' && resultIsImage && latestResult.image_b64 && (
         <div className="space-y-1.5">
-          <div className="text-[10px] font-medium text-theme-text-muted truncate">
-            Latest: {latestResult.prompt}
+          <div className="text-[10px] font-medium text-theme-text-muted truncate" title={latestResult.enhanced_prompt ?? undefined}>
+            Latest: {latestResult.original_prompt ?? latestResult.prompt}
+            {latestResult.enhanced_prompt && ' ✨'}
           </div>
           <div className="rounded-xl overflow-hidden border border-theme-border/60 bg-theme-bg flex justify-center">
             <img

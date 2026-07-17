@@ -1,10 +1,44 @@
 # PAWN — Current State
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
+
+**imageLab Q3.1 pass 2 — Vision-grounded prompt enhancer wired into generation
+routes + composer toggle — DONE (2026-07-17). Closes Q3.1.** Both image-
+generation entry points now call pass 1's `enhance_with_vision()`: new
+`_apply_prompt_enhancement()` helper in `routes/generate.py`, called from the
+cold `/generate` path and the warm `/generate/session/job` path, ahead of
+style/subject-preset suffix composition and Q3.2's default-negative merge.
+New `enhance_prompt: EnhanceMode = "auto"` field (`Literal["auto", "always",
+"off"]`) on both request models — "auto" defers to pass 1's rule-based gate,
+"always" forces the call, "off" skips it (and, on the warm path, skips the
+extra `get_session_model` lookup too when no preset needs it either).
+`original_prompt`/`enhanced_prompt` persist on the job only when the enhancer
+actually ran and didn't degrade — new `image_jobs` columns
+(`postgres/schema.sql` + `postgres/migrations/2026-07_Q31_enhance_prompts.sql`,
+applied to local dev), threaded through `create_cold_job`/`submit_session_job`/
+`get_job`/`list_jobs`. Frontend: `ImageGenerator.tsx` gets a 3-button
+Auto/Always/Off toggle next to "+ Advanced" (Auto default); `GenerationsPanel.tsx`
+and the "Latest:" preview show the original (as-typed) prompt with a `✨`
+affordance tooltipping the full enhanced rewrite. **Two real bugs found and
+fixed this session:** (1) the enhancer's negative-list marker parsing was
+exact-case `"Negative:"`-only — a live model used `"Avoid:"` instead, so the
+negative text stayed stuck in the positive prompt; fixed with a
+case-insensitive, earliest-match scan over `("negative prompt:", "negative:",
+"avoid:")`. (2) **CRITICAL:** the warm path's `params_dict.setdefault
+("strength", 0.6)` was a no-op — Pydantic v2's `model_dump()` always includes
+`strength` as a key (`None` when unset), so `setdefault` never fired; since
+the composer's Refine flow only ever calls `submitSessionJob`, every img2img
+job through the main UI was silently getting `strength=None`. Fixed to match
+the cold path's `if params_dict.get("strength") is None:` pattern. 566 backend
+tests green (up from 550), `tsc`/build clean. code-reviewer: 1st pass FAIL (the
+`strength` CRITICAL) → fixed → PASS. test-runner PASS. build-validator: 1st
+pass FAIL (docs) → PASS. No security-auditor run (reuses pass 1's audited
+vision-call path, no new secret surface). See
+`workspace/plan/imageLab/phase_Q3_prompting_presets.md` §Q3.1 and
+`dev_log.md`'s 2026-07-17 "imageLab Q3.1 pass 2" entry.
 
 **imageLab Q3.1 pass 1 — Vision-grounded prompt enhancer, backend plumbing —
-DONE (2026-07-16). Not yet wired into routes/generate.py or the frontend
-(pass 2, separate step).** New `backend/app/core/vision_enhance.py`:
+DONE (2026-07-16).** New `backend/app/core/vision_enhance.py`:
 `enhance_with_vision(prompt, image_b64, target_model_schema, resolver,
 rate_limiter, user_id=None)` rewrites a raw imageLab prompt via a
 vision-capable LLM, chain Groq (`llama-4-scout`, preferred by the resolver's

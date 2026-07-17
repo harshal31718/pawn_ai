@@ -515,12 +515,18 @@ def submit_session_job(
     session_id: str,
     prompt: str,
     params: Optional[ImageJobParams] = None,
+    original_prompt: Optional[str] = None,
+    enhanced_prompt: Optional[str] = None,
 ) -> str:
     """Insert a queued job for a live (or warming-up) session.
 
     Jobs submitted during installing/loading_model queue up and are picked up
     FIFO once the kernel enters its serve loop. Only truly dead sessions
     (stopped/ended/expired) are rejected. Returns the new job id.
+
+    `original_prompt`/`enhanced_prompt` (Q3.1 pass 2) are set only when the
+    caller ran the vision-grounded enhancer and it actually rewrote the
+    prompt -- None/None means no enhancement happened for this job.
     """
     # Liveness check + insert in one transaction, so a session that dies
     # between the two can't still have a job queued against it.
@@ -534,8 +540,9 @@ def submit_session_job(
         params = _apply_default_negative(sess["model"], params)
         row = tx.fetchone(
             """
-            insert into image_jobs (user_id, session_id, model, prompt, status, params)
-            values (%s, %s, %s, %s, 'queued', %s)
+            insert into image_jobs
+                (user_id, session_id, model, prompt, status, params, original_prompt, enhanced_prompt)
+            values (%s, %s, %s, %s, 'queued', %s, %s, %s)
             returning id
             """,
             (
@@ -544,6 +551,8 @@ def submit_session_job(
                 sess["model"],
                 prompt,
                 Json(params.model_dump(exclude_none=True) if params else {}),
+                original_prompt,
+                enhanced_prompt,
             ),
         )
     return str(row["id"])
@@ -562,6 +571,8 @@ def get_job(user_id: str, job_id: str) -> Optional[dict]:
         "status": row["status"],
         "model": row.get("model"),
         "prompt": row.get("prompt"),
+        "original_prompt": row.get("original_prompt"),
+        "enhanced_prompt": row.get("enhanced_prompt"),
         "image_b64": row.get("image_b64"),
         "mime": row.get("mime"),
         "via": row.get("via"),
@@ -579,7 +590,7 @@ def get_job(user_id: str, job_id: str) -> Optional[dict]:
 # Columns the monitor panel needs -- deliberately EXCLUDES image_b64 so the
 # list stays light; bytes are fetched lazily via get_job when opened.
 _JOB_LIST_COLUMNS = (
-    "id, session_id, model, prompt, status, mime, via, error, params, "
+    "id, session_id, model, prompt, original_prompt, enhanced_prompt, status, mime, via, error, params, "
     "created_at, started_at, done_at"
 )
 
@@ -602,10 +613,16 @@ def create_cold_job(
     model: str,
     prompt: str,
     params: Optional[ImageJobParams] = None,
+    original_prompt: Optional[str] = None,
+    enhanced_prompt: Optional[str] = None,
 ) -> tuple[str, bool]:
     """Create (or de-dup to) a queued cold job. Returns (job_id, created).
 
     Raises RuntimeError if a warm session is currently alive for this model.
+
+    `original_prompt`/`enhanced_prompt` (Q3.1 pass 2) are set only when the
+    caller ran the vision-grounded enhancer and it actually rewrote the
+    prompt -- None/None means no enhancement happened for this job.
     """
     get_image_model(model)  # validate before touching the DB
     latest = _latest_session(user_id, model)
@@ -621,11 +638,16 @@ def create_cold_job(
     params = _apply_default_negative(model, params)
     row = fetchone(
         """
-        insert into image_jobs (user_id, session_id, model, prompt, status, params)
-        values (%s, NULL, %s, %s, 'queued', %s)
+        insert into image_jobs
+            (user_id, session_id, model, prompt, status, params, original_prompt, enhanced_prompt)
+        values (%s, NULL, %s, %s, 'queued', %s, %s, %s)
         returning id
         """,
-        (user_id, model, prompt, Json(params.model_dump(exclude_none=True) if params else {})),
+        (
+            user_id, model, prompt,
+            Json(params.model_dump(exclude_none=True) if params else {}),
+            original_prompt, enhanced_prompt,
+        ),
     )
     return str(row["id"]), True
 
@@ -775,6 +797,8 @@ def list_jobs(user_id: str, model: Optional[str] = None, limit: int = 20) -> lis
             "session_id": str(r["session_id"]) if r.get("session_id") else None,
             "model": r.get("model"),
             "prompt": r.get("prompt"),
+            "original_prompt": r.get("original_prompt"),
+            "enhanced_prompt": r.get("enhanced_prompt"),
             "status": r.get("status"),
             "mime": r.get("mime"),
             "via": r.get("via"),

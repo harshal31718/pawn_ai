@@ -411,6 +411,29 @@ def test_submit_session_job_subject_type_round_trips_to_job_row():
     assert stored_params["subject_type"] == "nature"
 
 
+def test_submit_session_job_stores_original_and_enhanced_prompt():
+    """Q3.1 pass 2: same original_prompt/enhanced_prompt persistence as the
+    cold path, for the warm-session job path."""
+    now = datetime.now(timezone.utc)
+    live = {
+        "id": "s1", "user_id": "user-1", "model": "sdxl", "status": "ready",
+        "expires_at": _iso(now + timedelta(minutes=30)), "heartbeat_at": _iso(now),
+    }
+    db = _FakeDB(rows={"image_sessions": [live]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        image_session.submit_session_job(
+            "user-1", "s1", "a fluffy cat, 85mm lens",
+            original_prompt="a cat", enhanced_prompt="a fluffy cat, 85mm lens",
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[5] == "a cat"
+    assert params[6] == "a fluffy cat, 85mm lens"
+
+
 def test_get_session_model_returns_the_session_row_model():
     now = datetime.now(timezone.utc)
     live = {
@@ -483,6 +506,25 @@ def test_get_job_returns_result_once_done():
     assert out["job_id"] == "j1"
     assert out["status"] == "done"
     assert out["image_b64"] == "RUNITz=="
+    # Q3.1 pass 2: no enhancement ran for this row -> both None, not absent.
+    assert out["original_prompt"] is None
+    assert out["enhanced_prompt"] is None
+
+
+def test_get_job_returns_original_and_enhanced_prompt_when_set():
+    row = {
+        "id": "j1", "status": "done", "model": "sdxl", "prompt": "a fluffy cat, 85mm lens",
+        "original_prompt": "a cat", "enhanced_prompt": "a fluffy cat, 85mm lens",
+        "image_b64": "RUNITz==", "mime": "image/png", "via": "kaggle", "error": None,
+        "created_at": "2026-06-29T00:00:00+00:00",
+    }
+    db = _FakeDB(rows={"image_jobs": [row]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        out = image_session.get_job("user-1", "j1")
+
+    assert out["original_prompt"] == "a cat"
+    assert out["enhanced_prompt"] == "a fluffy cat, 85mm lens"
 
 
 def test_get_job_missing_returns_none():
@@ -911,12 +953,14 @@ def test_route_session_status(client):
 def test_route_session_job(client):
     with patch("app.routes.generate.image_session.submit_session_job", return_value="j1") as m:
         resp = client.post(
-            "/generate/session/job", json={"session_id": "s1", "prompt": "a cat"}
+            "/generate/session/job",
+            json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "off"},
         )
     assert resp.status_code == 200
     assert resp.json() == {"job_id": "j1", "status": "queued"}
     args = m.call_args.args
     assert args[:3] == ("test-user-id", "s1", "a cat")
+    assert args[4:] == (None, None)  # enhance_prompt: off -> no original/enhanced prompt stored
 
 
 def test_route_session_job_requires_prompt(client):
@@ -940,6 +984,7 @@ def test_route_session_job_style_and_subject_suffix_applied(client):
             json={
                 "session_id": "s1", "prompt": "a mountain range",
                 "params": {"style_preset": "cinematic", "subject_type": "nature"},
+                "enhance_prompt": "off",
             },
         )
     assert resp.status_code == 200
@@ -951,14 +996,18 @@ def test_route_session_job_style_and_subject_suffix_applied(client):
 
 
 def test_route_session_job_skips_session_lookup_when_no_preset_or_subject_type(client):
-    """No style_preset/subject_type set -> no extra DB round-trip."""
+    """No style_preset/subject_type set AND enhancement off -> no extra DB
+    round-trip. (Auto/Always enhancement modes need the session's model too,
+    for the target PromptSchema -- see the enhance_prompt-gated lookup tests
+    below.)"""
     with patch(
         "app.routes.generate.image_session.get_session_model"
     ) as gm, patch(
         "app.routes.generate.image_session.submit_session_job", return_value="j3"
     ):
         client.post(
-            "/generate/session/job", json={"session_id": "s1", "prompt": "a cat"}
+            "/generate/session/job",
+            json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "off"},
         )
     gm.assert_not_called()
 

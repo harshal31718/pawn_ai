@@ -215,6 +215,40 @@ def test_create_cold_job_flux_gets_no_default_negative():
     assert "negative_prompt" not in stored_params
 
 
+def test_create_cold_job_stores_original_and_enhanced_prompt():
+    """Q3.1 pass 2: when the caller (routes/generate.py) ran the enhancer,
+    both the raw prompt (original_prompt) and the rewrite it actually used
+    (enhanced_prompt) are persisted alongside `prompt`."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job(
+            "user-1", "sdxl", "a fluffy cat, 85mm lens",
+            original_prompt="a cat", enhanced_prompt="a fluffy cat, 85mm lens",
+        )
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[4] == "a cat"
+    assert params[5] == "a fluffy cat, 85mm lens"
+
+
+def test_create_cold_job_no_enhancement_stores_null_prompt_fields():
+    """Default (no enhancement ran): both fields are None, not duplicated
+    copies of `prompt`."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        image_session.create_cold_job("user-1", "sdxl", "a cat")
+    insert_call = next(
+        c for c in db.calls if c[0] == "fetchone" and "insert into image_jobs" in c[1]
+    )
+    params = insert_call[2]
+    assert params[4] is None
+    assert params[5] is None
+
+
 # --- run_cold_job (the background worker) ------------------------------------
 
 
@@ -283,6 +317,22 @@ def test_list_jobs_returns_metadata_without_image_bytes():
     assert out[1]["has_image"] is False  # queued
     # No image bytes in the list payload (fetched lazily via get_job).
     assert all("image_b64" not in j for j in out)
+
+
+def test_list_jobs_includes_original_and_enhanced_prompt():
+    """Q3.1 pass 2: the Generations monitor needs both fields to show the raw
+    prompt with a ✨ marker rather than the (possibly much longer) rewrite."""
+    rows = [
+        {"id": "j1", "session_id": None, "model": "sdxl", "prompt": "a fluffy cat, 85mm lens",
+         "original_prompt": "a cat", "enhanced_prompt": "a fluffy cat, 85mm lens",
+         "status": "done", "created_at": "2026-06-29T00:00:00+00:00"},
+    ]
+    db = _FakeDB(rows={"image_jobs": rows})
+    p1, p2, p3 = _patch_db(db)
+    with p1, p2, p3:
+        out = image_session.list_jobs("user-1")
+    assert out[0]["original_prompt"] == "a cat"
+    assert out[0]["enhanced_prompt"] == "a fluffy cat, 85mm lens"
 
 
 def test_reap_stale_jobs_marks_stuck_cold_as_error():

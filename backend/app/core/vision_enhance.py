@@ -66,19 +66,34 @@ def _build_messages(prompt: str, image_b64: Optional[str], system_prompt: str) -
     ]
 
 
+# Case-insensitive, earliest-match: the system prompt asks for a "Negative:"
+# line, but live models don't always use that exact wording (e.g. "Avoid:" was
+# observed live 2026-07-17) -- matching only the exact-case literal left the
+# negative text stuck inside the positive prompt sent to the generation model
+# instead of being split into its own field.
+_NEGATIVE_MARKERS = ("negative prompt:", "negative:", "avoid:")
+
+
 def _parse_enhancer_output(raw_text: str, wants_negative: bool) -> tuple[str, Optional[str]]:
     """The enhancer is instructed to output only the rewritten prompt (plus,
-    for wants_negative models, a negative-prompt list). Split on a
-    "Negative:"-style marker if present; otherwise the whole output is the
+    for wants_negative models, a negative-prompt list). Split on the earliest
+    negative-list marker if present; otherwise the whole output is the
     positive prompt and there's no negative."""
     text = raw_text.strip()
     if not wants_negative:
         return text, None
-    for marker in ("Negative:", "Negative prompt:", "\nNegative", "NEGATIVE:"):
-        if marker in text:
-            positive, _, negative = text.partition(marker)
-            return positive.strip().rstrip(","), negative.strip().lstrip(":").strip()
-    return text, None
+    lowered = text.lower()
+    earliest: Optional[tuple[int, str]] = None
+    for marker in _NEGATIVE_MARKERS:
+        idx = lowered.find(marker)
+        if idx != -1 and (earliest is None or idx < earliest[0]):
+            earliest = (idx, marker)
+    if earliest is None:
+        return text, None
+    idx, marker = earliest
+    positive = text[:idx].strip().rstrip(",")
+    negative = text[idx + len(marker):].strip()
+    return positive, negative
 
 
 async def enhance_with_vision(

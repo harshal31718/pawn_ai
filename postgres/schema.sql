@@ -178,7 +178,11 @@ create table if not exists image_jobs (
   user_id     text not null,                         -- direct ownership (cold jobs have no session)
   session_id  uuid references image_sessions(id) on delete cascade,  -- NULL = cold one-shot job
   model       text not null,                         -- 'sdxl' | 'flux'
-  prompt      text not null,
+  prompt      text not null,                         -- prompt actually sent to the model (post-enhancement)
+  original_prompt  text,                              -- Q3.1 pass 2: the raw user prompt, only set when
+                                                       -- the vision enhancer actually rewrote it
+  enhanced_prompt  text,                               -- Q3.1 pass 2: the enhancer's rewrite (== prompt
+                                                       -- minus any later style/subject suffix), same gate
   status      text not null default 'queued',        -- queued | running | done | error
   image_b64   text,
   mime        text default 'image/png',

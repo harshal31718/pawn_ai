@@ -49,7 +49,9 @@ def _build_enhancer_system_prompt(
         "cinematic_grammar": "cinematic-grammar description",
     }[schema_format]
     negative_instruction = (
-        "Also produce a separate negative-prompt list of what to avoid."
+        'Then, on a new line, produce a negative-prompt list of what to avoid, '
+        'introduced with the exact literal word "Negative:" (not "Avoid:" or any '
+        "other wording) so it can be reliably separated from the prompt above it."
         if wants_negative else ""
     )
     length_line = f" Keep the rewritten prompt under {max_length} words." if max_length else ""
