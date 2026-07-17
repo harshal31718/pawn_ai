@@ -11,25 +11,44 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
-## Deployment — `dev` → `main` release, prep done, awaiting go-ahead (2026-07-17)
+## Deployment — `dev` → `main` release, DEPLOYED to prod (2026-07-17)
 
-`[~]` **Release: 48-commit batch (chat F-1–F-11, imageLab Q1/Q3/G1, today's 2
-polish fixes) → prod (`pawnai.duckdns.org`)** —
-`workspace/plan/deployment.md` (this release's plan; root `deployment.md` is the
-general reusable runbook, unchanged). **Full pre-flight gate already run and green**
-this session: 580 backend tests, `tsc` clean, 37 frontend tests, production
-`npm run build` clean, prod backend Docker image builds clean, working tree clean,
-no new secrets needed, no stray TODO/FIXME markers, `scripts/promote-to-main.sh`
-verified intact. Two manual, additive (`add column if not exists`) SQL migrations
-identified and queued for after the code deploy: `2026-07_Q31_enhance_prompts.sql`,
-`2026-07_G1_image_jobs_queue_pos.sql` — no destructive migration this time (unlike
-the 2026-07-14 promotion's `memory_chunks` wipe). **Per the user's explicit
-instruction: waiting for their go-ahead before pushing `dev`→`origin/dev` or
-touching `origin/main`/the VM** — this step registers the prep, not the execution.
-Also confirmed live in a real, unrelated compose-file question this session: the
-docker-compose 3-file layout (`docker-compose.yml` dev / `docker-compose.prod.yml`
-prod / gitignored `docker-compose.override.yml`) is intentional, not redundant —
-user agreed to keep as-is, no merge.
+`[x]` **Release: 48-commit batch (chat F-1–F-11, imageLab Q1/Q3/G1, today's 2
+polish fixes) → prod (`pawnai.duckdns.org`)** ✓ —
+`workspace/implemented_phases/plan_deployment_2026-07-17_release.md`.
+**Full pre-flight gate green** (580 backend tests, `tsc` clean, 37 frontend tests,
+production `npm run build` clean, prod backend Docker image builds clean, no new
+secrets needed, no stray TODO/FIXME markers, `scripts/promote-to-main.sh` verified
+intact). **Executed, with the user's explicit go-ahead, in 3 steps:**
+1. `git push origin dev` (49 commits, closes the "unrecoverable if this machine is
+   lost" gap).
+2. `scripts/promote-to-main.sh` — clean run, expected modify/delete conflicts on
+   doc paths auto-resolved, self-verified no `.claude/`/`workspace/`/`CLAUDE.md`
+   leaks onto `main` (84 files, 7250 insertions, real code/schema only — manually
+   eyeballed the full file list before pushing). `git push origin main`
+   (`f7263f5..6f2f75f`).
+3. **VM deploy** (SSH `ubuntu@144.24.119.184`, `/opt/pawn`): routine `pg_dump`
+   backup taken first (114MB), `git pull origin main` (clean fast-forward),
+   frontend rebuilt (`npm ci && npm run build`, output byte-identical to the local
+   pre-flight build), backend rebuilt + restarted
+   (`docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build`),
+   both migrations applied (`2026-07_Q31_enhance_prompts.sql`,
+   `2026-07_G1_image_jobs_queue_pos.sql` — both additive, no destructive step this
+   time unlike the 2026-07-14 promotion's `memory_chunks` wipe), confirmed
+   `image_jobs` schema on prod now matches local dev exactly.
+   **Verified**: `GET /health` → `{"status":"ok"}` over HTTPS with a valid cert;
+   landing page loads with the correct security headers (`X-Frame-Options`,
+   CSP incl. `img-src 'self' data:`) and zero browser console errors/CSP
+   violations. **Not verified this session** (needs the user's own Google/Kaggle
+   credentials, which this agent won't enter): full OAuth login round-trip, Drive
+   link, a saved BYOK key + real chat stream, one real Kaggle image-gen job. Also
+   flagged: any Kaggle kernel that was already warm/running from before this
+   release is still on the OLD notebook template until the user clicks Redeploy —
+   not a deploy defect, just needs surfacing.
+   **Also this session (unrelated side question, resolved):** confirmed the
+   docker-compose 3-file layout (`docker-compose.yml` dev / `docker-compose.prod.yml`
+   prod / gitignored `docker-compose.override.yml`) is intentional, not redundant —
+   user agreed to keep as-is, no merge.
 
 ---
 

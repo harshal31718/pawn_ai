@@ -6,6 +6,52 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — Deployed: 48-commit release live on prod (`pawnai.duckdns.org`)
+
+User gave the explicit go-ahead (in 2 steps: "push to dev/origin" first, then
+separately "proceed" for the actual promotion+deploy), so executed the plan
+drafted earlier this session (now archived at
+`workspace/implemented_phases/plan_deployment_2026-07-17_release.md`).
+
+1. `git push origin dev` — 49 commits, `origin/dev` now matches local `dev`
+   exactly (closes the "unrecoverable if this machine is lost" risk the plan
+   flagged).
+2. `scripts/promote-to-main.sh` — ran clean; the expected modify/delete
+   conflicts on doc paths (`.claude/`, `workspace/`, `CLAUDE.md`/`AGENTS.md`,
+   and the two `workspace/plan/*` → `implemented_phases/*` renames from
+   today's plan-cleanup step) were auto-resolved by the script exactly as
+   designed, self-verified zero leaks onto `main`. Manually eyeballed the
+   full `git diff origin/main..main --stat` before pushing — 84 files, 7250
+   insertions, real code/schema/registry files only, nothing unexpected.
+   `git push origin main` (`f7263f5..6f2f75f`).
+3. **VM deploy** (SSH to `ubuntu@144.24.119.184`, `/opt/pawn`, using
+   `keys/pawn_oci.key`): confirmed the VM was at the pre-promotion commit
+   with a clean tree and all 3 containers healthy before touching anything.
+   Took the routine `pg_dump` backup (114MB — real prior user data, not
+   test data, confirming this VM has genuine users). `git pull origin main`
+   fast-forwarded cleanly. Rebuilt the frontend (`npm ci && npm run build`)
+   — output was byte-for-byte the same build as the local pre-flight run
+   (same asset hash). Rebuilt + restarted the backend container
+   (`docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+   --build`) — Postgres/PostgREST untouched (`Running`, not recreated).
+   Applied both migrations directly via `psql < file.sql` over SSH; `\d
+   image_jobs` on prod confirmed the resulting schema (columns + the new
+   `queue_pos` index) matches local dev exactly.
+   **Verified**: `GET /health` → `{"status":"ok"}` over HTTPS with a valid
+   cert; `curl -sI` confirmed the security headers (`X-Frame-Options`,
+   CSP with `img-src 'self' data:`) are present on the served page; loaded
+   the real site in Chrome, zero console errors/CSP violations on load.
+   **Deliberately not verified this session**: the OAuth login round-trip,
+   Drive link, a saved BYOK key + live chat stream, and a real Kaggle
+   image-gen job — all need the user's own Google/Kaggle credentials, which
+   this agent does not enter on the user's behalf per the session's safety
+   rules. Handed back to the user as the remaining checklist items.
+   **Flagged, not a defect**: any Kaggle kernel that was already warm from
+   before this deploy is still running the OLD notebook template (VAE fix,
+   scheduler, seed handling, G1's `queue_pos` dequeue order only take effect
+   on a freshly pushed notebook) — existing users need to click Redeploy in
+   Image Lab to pick up the new template.
+
 ### [2026-07-17] — Deployment prep: pre-flight gate + release plan drafted, execution held
 
 User asked to move toward deploying the current 48-commit `dev`→`main` gap (last

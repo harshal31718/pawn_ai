@@ -1,8 +1,11 @@
 # Plan: Promote `dev` → `main` and release to prod (`pawnai.duckdns.org`)
 
-*Written 2026-07-17. Planning only — no live/production step below has been
-executed. Nothing here touches `origin/main` or prod's VM/database until the
-user explicitly says go. See "Go/no-go" at the bottom before starting.*
+**Status: EXECUTED 2026-07-17.** `dev` pushed to `origin/dev`, promoted to
+`main` (`f7263f5..6f2f75f`), deployed to the VM, both migrations applied,
+automated verification passed (health/HTTPS/security-headers/console clean).
+Login-gated checklist items (OAuth, Drive, BYOK chat, real Kaggle gen) handed
+to the user — see `workspace/status/dev_log.md`'s 2026-07-17 "Deployed" entry
+for the full executed record. Archived here on completion.
 
 *This is the one-time plan for **this specific release**. The general,
 reusable runbook (secrets, Nginx config, firewall rules, first-deploy steps)

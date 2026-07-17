@@ -2,15 +2,25 @@
 
 Last updated: 2026-07-17
 
-**Deployment prep — DONE, execution awaiting user go-ahead (2026-07-17).** Full
-pre-deploy gate green (580 backend tests, `tsc` clean, 37 frontend tests, prod
-`npm run build` clean, prod backend Docker image builds clean). Release plan
-drafted at `workspace/plan/deployment.md`, scoped to the current 48-commit
-`dev`→`main` gap (chat F-1–F-11, imageLab Q1/Q3/G1, today's polish fixes) — 2
-pending manual migrations identified (both additive, non-destructive). This is a
-routine release to the already-live `pawnai.duckdns.org` VM, not a first deploy.
-**Nothing pushed/deployed yet** — waiting on the user's explicit go-ahead per
-standing instruction. See `dev_log.md`'s 2026-07-17 "Deployment prep" entry.
+**DEPLOYED — 48-commit release now LIVE on prod (`pawnai.duckdns.org`),
+2026-07-17.** `main` is now at `6f2f75f` (was `f7263f5`), matching `dev` at the
+time of promotion. Ships: the full chat feature batch (F-1–F-11), imageLab Q1
+(generation correctness fixes) + Q3.1–Q3.3 (prompting/presets) + G1
+(Generations tab management), and today's 2 polish fixes (chat attachment
+card, imageLab "Latest" preview). Both pending DB migrations applied to prod
+(`2026-07_Q31_enhance_prompts.sql`, `2026-07_G1_image_jobs_queue_pos.sql`) —
+`image_jobs` schema on prod now matches local dev. Health/HTTPS/security
+headers/console all verified clean. **Still needs the user's own hands**: full
+OAuth login round-trip, Drive link, a saved BYOK key + live chat, one real
+Kaggle image-gen job — plus clicking Redeploy on any already-warm Kaggle
+session to pick up the updated notebook templates. See `dev_log.md`'s
+2026-07-17 "Deployed" entry and
+`workspace/implemented_phases/plan_deployment_2026-07-17_release.md` for the
+full plan this executed.
+
+**Q2 (imageLab realism checkpoint models) and Q3.4 (optional negative-
+embeddings spike) remain open** — deliberately deferred, not part of this
+release.
 
 **Chat: attached file/image shown as a card on the sent message — DONE, live-verified
 (2026-07-17).** New `Message.attachment` field (`types.ts`, live-session only, not
