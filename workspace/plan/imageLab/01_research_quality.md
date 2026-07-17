@@ -80,7 +80,8 @@ FLUX.1-dev (better than schnell) is non-commercial-licensed and 20–30 steps (s
 - **LLM prompt enhancer** (Q3): PAWN already has `normalize.chat_complete` — a per-model
   system prompt turns "a girl in a café" into a full photoreal scaffold.
 
-## 6. Detail/polish techniques (Q4 menu, all Diffusers-native, T4-viable)
+## 6. Detail/polish techniques (was the Q4 menu — **Q4 dropped entirely 2026-07-17,
+not being built**; section kept only as inert research reference, all Diffusers-native, T4-viable)
 
 - **Two-pass hires fix:** generate at bucket → upscale latents/image 1.5–2× → img2img pass
   at low strength (0.25–0.4) — sharper detail, fixes soft output. Uses the existing img2img

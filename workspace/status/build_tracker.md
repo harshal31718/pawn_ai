@@ -52,12 +52,14 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   first). Root-caused the "bad/unreal/half-generated images" report: SD1.5-era resolution
   sizes in `AdvancedParams.tsx` (Q1.1 headline fix), stock fp16 SDXL VAE (black images,
   Q1.2), no scheduler configured (Q1.3), base-SDXL realism ceiling (Q2 photoreal
-  checkpoint rows), no prompt scaffolding/negatives (Q3), no face/detail pass (Q4).
+  checkpoint rows), no prompt scaffolding/negatives (Q3), no face/detail pass (was Q4,
+  **dropped entirely 2026-07-17 per the user's explicit call — not being built**,
+  `phase_Q4_detail_post.md` deleted, see `dev_log.md`'s 2026-07-17 "Q4 dropped" entry).
   Original order Q1 → Q2 → Q3 → Q4; **re-ordered 2026-07-16 per the user's explicit
   call: skip Q2 (new checkpoint models) for now, do Q3 (prompting/presets) next —
   optimize the existing pipeline before adding new models to it.** Q2 stays registered,
-  just deferred; revisit after Q3 (and optionally Q4) land. New order: Q1 (done) → Q3 →
-  Q4 → Q2 (deferred, pick a point to revisit).
+  just deferred; revisit after Q3. Current order: Q1 (done) → Q3 (done) → Q2 (deferred,
+  pick a point to revisit).
   - `[x]` **Q1.1 — SDXL-native resolution buckets (headline fix)** ✓ (2026-07-16)
     Replaced the SD1.5-era `RATIO_TO_SIZE` global with six SDXL-native, model-aware
     buckets (`bucketsFor(modelId)`); default aspect ratio 1:1→3:4 portrait; server-side

@@ -1,7 +1,8 @@
 # imageLab — Fixed-Seed A/B Benchmark Set (Q1.5)
 
 Defined per `phase_Q1_generation_fixes.md`'s Q1.5. This set is the regression
-baseline for Q1's correctness fixes (Q1.1-Q1.4) and stays in use for Q2-Q4.
+baseline for Q1's correctness fixes (Q1.1-Q1.4) and stays in use for Q2-Q3.
+(Q4 dropped entirely 2026-07-17 — not being built.)
 
 Run against a live warm SDXL session. Each prompt uses a fixed seed so the
 same run is exactly reproducible via Q1.4's seed field / "reuse seed" action.

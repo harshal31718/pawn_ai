@@ -20,7 +20,7 @@ research-backed quality program executed entirely on the existing Kaggle pipelin
 | Soft/artifacty output | **no scheduler configured** (library default); DPM++ 2M Karras-class samplers with stabilizers are the community-proven recipe; steps/CFG defaults untuned per model | Q1.3 |
 | "Doesn't look real" | model is **base SDXL 1.0** — mediocre photorealism by 2026 standards; photoreal fine-tunes (Juggernaut XL, RealVisXL) are drop-in same-architecture upgrades; FLUX-schnell capped by 4-step distillation | Q2 |
 | Flat/generic look | no default negative prompt, no photoreal prompt scaffolding, style presets are thin suffixes | Q3 |
-| Broken faces/hands at distance | no face-detail pass, no refiner/two-pass, no FreeU | Q4 |
+| Broken faces/hands at distance | no face-detail pass, no refiner/two-pass, no FreeU | **dropped** — was Q4, cut entirely 2026-07-17 (user decision), not being built |
 
 ## 3. File index
 
@@ -32,8 +32,11 @@ research-backed quality program executed entirely on the existing Kaggle pipelin
 | `phase_Q1_generation_fixes.md` | correctness: resolution buckets, fp16 VAE fix, scheduler, per-model defaults, seed |
 | `phase_Q2_realism_models.md` | photoreal checkpoints as new model rows (Juggernaut/RealVis), FLUX guidance |
 | `phase_Q3_prompting_presets.md` | LLM prompt enhancer, negative defaults/embeddings, preset rework |
-| `phase_Q4_detail_post.md` | two-pass hires fix, face detailer, refiner, FreeU — the polish layer |
 | `phase_G1_generations_management.md` | feature (not quality): delete/edit/reorder generations in the Generations tab, requested 2026-07-15 |
+
+**Dropped:** `phase_Q4_detail_post.md` (two-pass hires fix, face detailer, refiner, FreeU
+— the polish layer) — cut entirely by user decision 2026-07-17, file removed. Not being
+built; not deferred, dropped.
 
 Related but living elsewhere: **F-1 chat image-gen tool** in `plan/chat/` (feature,
 not quality — unchanged).
@@ -47,8 +50,10 @@ not quality — unchanged).
   per numbered step; tracker/current_state/dev_log updated per step.
 - Every quality change lands with a **before/after A/B on a fixed prompt+seed set**
   (defined in Q1.5) recorded in dev_log — no vibes-only "improvements."
-- Order: **Q1 → Q2 → Q3 → Q4**. Q1 alone should eliminate the reported flaws; Q2 delivers
-  the realism jump; Q3/Q4 are refinement.
+- Order: **Q1 → Q3 → Q2** (re-ordered 2026-07-16 — Q3 optimizes the existing pipeline
+  before new checkpoint models land; Q2 stays deferred). **Q4 dropped entirely
+  2026-07-17**, not part of this program anymore. Q1 alone should eliminate the reported
+  flaws; Q2 delivers the realism jump; Q3 is refinement.
 
 ## 5. Success criteria
 

@@ -6,6 +6,24 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — imageLab Q4 (detail/polish phase) dropped — decision, no code change
+
+User decision: drop Phase Q4 (`phase_Q4_detail_post.md` — two-pass hires fix, face
+detailer/ADetailer, FreeU spike, "Quality boost" toggle + refiner decision) entirely,
+not deferred. Plan file deleted; every forward-looking reference to Q4 across the
+imageLab plan folder updated to reflect it's no longer part of the program:
+`00_overview.md` (root-cause table row, file index, phase order line),
+`01_research_quality.md` (§6 marked inert/dropped, research text left as reference
+only), `benchmarks.md` and `phase_Q1_generation_fixes.md` (regression-baseline scope
+trimmed from "Q2-Q4" to "Q2-Q3"), `workspace/plan/README.md` (both mentions),
+`workspace/status/build_tracker.md` (Q1's summary entry + re-order note). Dated,
+historical dev_log/current_state entries that predate this decision were left
+unedited (they're an accurate record of what was planned on 2026-07-15/16, not a live
+status). **Current imageLab quality program is now Q1 (done) → Q3 (done) → Q2
+(deferred, revisit later). No Q4.**
+
+---
+
 ### [2026-07-17] — imageLab Q3.1 pass 2: wire vision-grounded enhancer into generation routes (closes Q3.1)
 
 Wires pass 1's `enhance_with_vision()` into both image-generation entry points

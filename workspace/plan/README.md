@@ -19,9 +19,10 @@ human-dependency list that lives nowhere else.
    user-visible win (fixes half-generated/black/soft images).
 2. **imageLab I-1** (`imageLab/open_items.md`) — FLUX OOM: rebase `worktree-flux-oom-fix`,
    live-verify, merge. Quick, already written.
-3. **imageLab Q2 → Q3 → Q4** — realism checkpoints, prompting, polish. Q3.1's enhancer
+3. **imageLab Q2 → Q3** — realism checkpoints, prompting. Q3.1's enhancer
    mechanics are superseded by `plan_vision_prompt_enhancement.md` (below) — build the
-   shared vision plumbing there first if Q3 is picked up after it lands.
+   shared vision plumbing there first if Q3 is picked up after it lands. (Q4 — polish/
+   detail pass — dropped entirely 2026-07-17, not being built.)
 4. **Vision-grounded prompt enhancement** (`plan_vision_prompt_enhancement.md`) — imageLab
    plumbing (image+prompt → vision-model refine → generation model, Groq→Gemini→raw
    chain); build before/alongside imageLab Q3 once its 3 open questions are answered.
@@ -60,7 +61,7 @@ it as self-contained and not to be cross-referenced from other plan files.
 
 - `chat/` — no active plans (last batch shipped 2026-07-16, see
   `implemented_phases/phase_13_chat_feature_fixes.md`); kept for future plans
-- `imageLab/` — quality program Q1–Q4 + open items (I-1..I-5)
+- `imageLab/` — quality program Q1–Q3 (Q4 dropped 2026-07-17) + open items (I-1..I-5)
 - `plan_vision_prompt_enhancement.md` — imageLab vision-grounded prompt-enhancement
   plumbing (supersedes imageLab Q3.1 mechanics)
 - `plan_findings.md` — user's notepad, don't process without being asked

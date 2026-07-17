@@ -76,7 +76,7 @@ grep + one integration assertion on params passthrough).
 - Define `imageLab/benchmarks.md`: 6 fixed prompts (portrait, full-body, landscape, object
   macro, low-light, group scene) × fixed seeds. Run pre-fix (dev as-is) and post-Q1 on a
   live warm SDXL session; embed/reference results in dev_log. This set becomes the
-  regression baseline for Q2–Q4.
+  regression baseline for Q2–Q3. (Q4 dropped entirely 2026-07-17 — not being built.)
 - Live checklist: no black frames in 20 gens; 9:16 full-body prompt renders whole person;
   visible sharpness gain from scheduler.
 
