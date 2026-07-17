@@ -6,6 +6,29 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — Deployed: FLUX warmup + Create Image mode fixes live on prod
+
+User confirmed all three chat modes generate images correctly and both Image
+Lab models complete full session cycles, then said go. Straightforward
+release -- pure backend code + tests, no schema/migration, no frontend
+changes needed.
+
+1. `git push origin dev` (commit `46c68d2`).
+2. `scripts/promote-to-main.sh` -- clean run, only the expected doc-path
+   conflicts, self-verified no leaks. `git diff origin/main..main --stat`
+   showed exactly the 8 changed files from the fix commit, nothing else.
+   `git push origin main` (`6f2f75f..22695be`).
+3. VM deploy (SSH, `/opt/pawn`): confirmed clean tree at the pre-deploy
+   commit first, `git pull origin main` fast-forwarded, backend rebuilt +
+   restarted (`docker compose --env-file .env.prod -f docker-compose.prod.yml
+   up -d --build`) -- Postgres/PostgREST untouched (no migration this time).
+   No routine backup taken (no schema change, nothing at risk beyond a normal
+   code rollback would already cover). Verified `GET /health` -> ok over
+   HTTPS, and directly confirmed via `docker compose exec backend python3 -c
+   ...` that `IMAGE_MODELS['flux'].startup_*` on prod now reads
+   300/600/1500 (vs sdxl's unchanged 90/180/900) -- the fix is live, not just
+   deployed.
+
 ### [2026-07-17] — fixes: FLUX warmup false-dead-session + chat "Create Image" mode not actually generating
 
 Two real, user-reported bugs found and fixed same session, both live-verified.

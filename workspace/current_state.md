@@ -2,8 +2,15 @@
 
 Last updated: 2026-07-17
 
+**DEPLOYED — FLUX warmup + Create Image mode fixes live on prod
+(`pawnai.duckdns.org`), 2026-07-17.** `main` is now at `22695be` (was
+`6f2f75f`). Pure backend fix, no schema/migration/frontend changes needed —
+directly confirmed on the VM that `IMAGE_MODELS['flux'].startup_*` reads the
+new 300/600/1500 values (sdxl unchanged at 90/180/900). See `dev_log.md`'s
+2026-07-17 "Deployed" entry.
+
 **fixes: FLUX warmup false-dead-session + chat "Create Image" mode — DONE,
-live-verified (2026-07-17), about to be promoted/deployed.** (1) FLUX warm
+live-verified (2026-07-17).** (1) FLUX warm
 sessions were being falsely declared dead mid-warmup ("session ended before
 this job ran") because the dead-session-detection thresholds in
 `image_session.get_session_status()` were flat globals tuned for SDXL's fast
