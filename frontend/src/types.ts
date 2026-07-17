@@ -87,6 +87,11 @@ export type RefineHandler = (job: JobResult, imageSrc: string) => void
 // Q1.4: "Reuse seed" on a Generations row populates the composer's seed field.
 export type ReuseSeedHandler = (seed: number) => void
 
+// G1: Edit a queued job -- loads its prompt + params into the composer (no
+// source image, unlike Refine). The caller (GenerationsPanel) deletes the
+// source job itself before invoking this; this handle only does the prefill.
+export type EditHandler = (job: JobResult) => void
+
 // Image Lab's Advanced Params panel state — shared between the per-model
 // config classes (advancedParamsConfig.ts) and the AdvancedParams component.
 export interface ParamState<T> {

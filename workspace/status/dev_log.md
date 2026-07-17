@@ -6,6 +6,41 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-17] — imageLab G1 (Generations tab: delete/edit/reorder) — DONE, live-verified
+
+Full implementation was found already code-complete but uncommitted at the start of this
+session (picked up mid-flight from a prior session that hadn't updated the tracker docs).
+Ran code-reviewer + build-validator against the diff, found and fixed 2 real bugs, then
+live-verified via Chrome. See `workspace/status/build_tracker.md`'s G1 entry for the full
+backend/frontend change list. Summary of this session's work:
+
+- **CRITICAL bug fixed:** `AdvancedParams.tsx`'s new `initial` prop (used by Refine/Edit to
+  pre-fill the Advanced panel from a source job's params) only seeded local component state
+  on mount — it never called `onChange`, so the parent's `advParams` state (what Generate
+  actually sends) stayed empty until the user manually touched a field. Refine/Edit visually
+  showed the right settings but silently dropped all of them on the next Generate. Fixed with
+  a mount-only `useEffect` that fires `onChange` once when `initial` is set.
+- **WARN fixed:** the Generations row lightbox still passed the suffixed `job.prompt` instead
+  of `job.original_prompt ?? job.prompt` (plan §1.8 requires raw user text everywhere a
+  prompt is shown — this was the one surface that had been missed).
+- **Live-verified via Chrome, not just tests:** queued a job with explicit non-default
+  settings (`style_preset=cinematic`, `guidance_scale=5`, `896x1152`), clicked Edit, confirmed
+  the composer pre-filled the raw prompt + all three settings correctly, clicked Generate
+  again, and confirmed via a direct `image_jobs` Postgres query that the new job's `params`
+  carried the exact same values — proving the CRITICAL fix actually closes the gap, not just
+  that the panel renders correctly. Also live-verified delete (both a done/error row's
+  "permanently deleted" copy and a queued row's "removed from queue" copy) and the
+  edit-removes-from-queue-immediately behavior.
+- **Known gap, deliberately not closed this session:** the plan's §5 "Tests" section wants
+  rendered-component tests (icon visibility, delete-confirm flow, reorder-arrow calls,
+  settings-popover content) — the project has no `@testing-library/react` anywhere, so this
+  is a pre-existing, project-wide gap, not something newly introduced by G1. All of this
+  step's new frontend tests are pure-function-only, consistent with every other frontend
+  test file in the repo. Flagged as a candidate follow-up if missed regressions like the one
+  above keep happening.
+- 580 backend tests green (unchanged), `tsc` clean, 37 frontend tests green (unchanged by
+  the fix — the two bugs fixed weren't unit-testable without new test infra).
+
 ### [2026-07-17] — imageLab Q4 (detail/polish phase) dropped — decision, no code change
 
 User decision: drop Phase Q4 (`phase_Q4_detail_post.md` — two-pass hires fix, face

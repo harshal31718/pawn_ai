@@ -3,6 +3,7 @@ import type { ImageParams } from '../api/client'
 import { STYLE_PRESET_KEY_MAP, SUBJECT_TYPE_KEY_MAP } from '../types'
 import {
   configFor,
+  advancedFromParams,
   MAX_RANDOM_SEED,
   DEFAULT_STEPS,
   DEFAULT_GUIDANCE,
@@ -10,7 +11,7 @@ import {
 } from './advancedParamsConfig'
 
 export type { AdvancedState } from './advancedParamsConfig'
-export { DEFAULT_STEPS, DEFAULT_GUIDANCE }
+export { DEFAULT_STEPS, DEFAULT_GUIDANCE, advancedFromParams }
 
 export function initialAdvanced(modelId: string, forcedSeed?: number): AdvancedState {
   return configFor(modelId).initialAdvanced(forcedSeed)
@@ -31,6 +32,7 @@ export default function AdvancedParams({
   onStrengthEnabledChange,
   open,
   forcedSeed,
+  initial,
 }: {
   modelId: string
   onChange: (p: ImageParams) => void
@@ -41,9 +43,26 @@ export default function AdvancedParams({
   // action. `nonce` (not just `value`) drives the effect below, so reusing
   // the SAME seed value twice in a row still re-applies it.
   forcedSeed?: { value: number; nonce: number }
+  // G1: Refine/Edit prefill -- an existing job's params, seeded into this
+  // panel's state on mount only. Callers remount via a `key` (e.g. the
+  // source job's id) since this only takes effect once, at mount.
+  initial?: ImageParams
 }) {
   const config = configFor(modelId)
-  const [s, setS] = useState<AdvancedState>(() => config.initialAdvanced())
+  const [s, setS] = useState<AdvancedState>(() =>
+    initial ? advancedFromParams(modelId, initial) : config.initialAdvanced(),
+  )
+
+  // G1: `initial` only seeds local state on mount -- the parent's own
+  // `advParams` (what actually gets sent to Generate) is otherwise only ever
+  // populated via `onChange` from a user edit. Without this, Refine/Edit's
+  // pre-filled panel is cosmetic: it renders the source job's settings but
+  // Generate would send none of them until the user manually touches a field.
+  useEffect(() => {
+    if (!initial) return
+    onChange(config.deriveParams(s))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (forcedSeed === undefined) return

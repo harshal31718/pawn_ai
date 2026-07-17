@@ -220,6 +220,9 @@ export interface JobResult {
   via?: string | null
   error?: string | null
   params?: Record<string, unknown> | null
+  // G1: manual queue-reorder priority (ascending, nulls-last -- untouched
+  // rows keep plain FIFO-by-created_at). Only meaningful for queued jobs.
+  queue_pos?: number | null
   created_at?: string | null
   started_at?: string | null
   done_at?: string | null
@@ -307,6 +310,26 @@ export async function getJob(jobId: string): Promise<JobResult> {
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
+}
+
+/** G1: delete a job (queued/done/error). Rejects with a 409 detail message
+ *  for a running job, a job you don't own, or one already gone -- callers
+ *  surface that as an inline error rather than silently removing the row. */
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/generate/job/${encodeURIComponent(jobId)}`, {
+    method: 'DELETE',
+    headers: { ...authHeaders() },
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+/** G1: recompute queue priority for a session's queued jobs, in the given
+ *  order (index 0 = next to execute). `jobIds` must be exactly the
+ *  session's current queued-job set or the backend rejects it with a 409
+ *  (stale client state -- refetch and retry). */
+export async function reorderQueue(sessionId: string, jobIds: string[]): Promise<void> {
+  await postJson('/generate/jobs/reorder', { session_id: sessionId, job_ids: jobIds })
 }
 
 export async function runKaggleCube(input: number, signal?: AbortSignal): Promise<CubeResult> {

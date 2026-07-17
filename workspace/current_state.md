@@ -2,6 +2,36 @@
 
 Last updated: 2026-07-17
 
+**imageLab G1 — Generations tab: delete/edit/reorder queue — DONE, live-verified
+(2026-07-17).** Delete (queued/done/error rows, never running), reorder the queue
+(up/down arrows, single status-priority-sorted table), edit a queued job
+(delete-and-reload into the composer with full params — no `PATCH` route), a settings
+popover (non-default params), and an input-image tag. Backend: new `queue_pos` column
++ `DELETE /generate/job/{id}` / `POST /generate/jobs/reorder` routes + both warm-session
+notebooks' dequeue order updated + `original_prompt` broadened to cover suffix-only
+jobs. Frontend: `GenerationsPanel.tsx`'s 3-icon action row, reorder arrows, settings
+popover, input-image tag; `AdvancedParams.tsx` gained an `initial?: ImageParams` prop +
+`advancedFromParams` inverse mapping so Refine/Edit can pre-seed the panel;
+`ImageGenerator.tsx` gained `triggerEdit`. **Found this session's implementation was
+already code-complete but uncommitted** (picked up mid-flight); ran code-reviewer +
+build-validator, found and fixed 2 real bugs: (1) **CRITICAL** — the new `initial` prop
+only seeded local state on mount, never called `onChange`, so Refine/Edit's pre-filled
+Advanced panel was cosmetic-only — none of the carried-over settings actually reached
+the Generate request until the user touched a field by hand; fixed with a mount-only
+effect. (2) **WARN** — the row lightbox still showed the suffixed prompt instead of the
+raw user text. **Live-verified via Chrome**: queued a job with explicit
+`style_preset=cinematic`/`guidance_scale=5`/`896x1152`, edited it, confirmed the panel
+pre-filled correctly, generated again, and confirmed via a direct Postgres query that
+the new job's `params` carried the exact same values — proving the fix actually closes
+the gap end-to-end, not just that the panel renders right. Also live-verified delete
+(done/error vs queued confirm copy) and reorder arrows appearing on queued rows. Known
+gap, not closed this session: no `@testing-library/react` anywhere in the project, so
+the plan's component-level test requirements (icon visibility, delete-confirm flow,
+etc.) remain pure-function-only like every other frontend test file — pre-existing,
+project-wide gap. 580 backend tests green, `tsc` clean, 37 frontend tests green. See
+`workspace/plan/imageLab/phase_G1_generations_management.md` and `dev_log.md`'s
+2026-07-17 "imageLab G1" entry.
+
 **imageLab Q3.1 pass 2 — Vision-grounded prompt enhancer wired into generation
 routes + composer toggle — DONE (2026-07-17). Closes Q3.1.** Both image-
 generation entry points now call pass 1's `enhance_with_vision()`: new

@@ -281,20 +281,55 @@ done, per the user's instruction (see `workspace/plan/README.md`).
   vision model (`llama-4-scout`) is already registered. See this plan file's §2/§5 for
   the resolution detail. Implementation is tracked under imageLab Q3.1 above (pass 1
   done 2026-07-16, pass 2 not started) rather than duplicated here.
-- `[~]` **Generations tab management (G1)** — `workspace/plan/imageLab/phase_G1_generations_management.md`
-  (registered 2026-07-15, user-requested feature; **design finalized + all 5 open questions
-  resolved 2026-07-17, build starting**). Delete (queued/done/error; never running), reorder
-  the queue (up/down arrows, single table with a status-priority sort — no queue/history
-  split), edit a queued job (delete-and-reload into the composer with full params, not
-  inline text edit — no new `PATCH` route needed). Needs a new `queue_pos` column + 2 new
-  routes (`DELETE /generate/job/{id}`, `POST /generate/jobs/reorder`) + notebook
-  dequeue-order change + broadening the existing `original_prompt` column (Q3.1 pass 2) to
-  also cover suffix-only (non-enhanced) jobs (see plan §3/§4/§5 for the finalized design).
-  - `[ ]` G1.1 — backend: migration, `delete_job`/`reorder_queue`, 2 new routes,
-    `original_prompt` broadening, notebook one-liner. Not started.
-  - `[ ]` G1.2 — frontend: action-icon row (copy/edit/delete per status), up/down arrows,
-    settings popover, input-image tag, `triggerEdit` (shares `AdvancedParams` prefill with
-    `triggerRefine`), sort-comparator change. Not started.
+- `[x]` **Generations tab management (G1)** ✓ (2026-07-17) —
+  `workspace/plan/imageLab/phase_G1_generations_management.md`. Delete (queued/done/error;
+  never running), reorder the queue (up/down arrows, single table with a status-priority
+  sort), edit a queued job (delete-and-reload into the composer with full params via the
+  same `AdvancedParams` prefill mechanism as Refine), settings popover, input-image tag.
+  - `[x]` **G1.1 — backend** ✓. New `queue_pos double precision` column
+    (`postgres/migrations/2026-07_G1_image_jobs_queue_pos.sql`) + index; `delete_job`/
+    `reorder_queue` in `image_session.py` (user/status-scoped, transactional reorder);
+    `DELETE /generate/job/{id}` + `POST /generate/jobs/reorder` (no `PATCH` route, per the
+    locked delete-and-reload design); both warm-session notebooks' dequeue order changed to
+    `queue_pos.asc.nullslast,created_at.asc`; `original_prompt` broadened to cover
+    suffix-only jobs, not just enhancer-touched ones. New `test_generate_job_management.py`
+    + extensions to `test_generate.py`/`test_image_session.py`/`test_kaggle_session_templates.py`.
+    580 backend tests green.
+  - `[x]` **G1.2 — frontend** ✓. `GenerationsPanel.tsx`'s 3-icon action row (copy/edit/
+    delete, delete always rightmost, gated per status), up/down reorder arrows, settings
+    gear+popover, input-image tag, status-priority sort (queued→running→done/error).
+    `AdvancedParams.tsx` gained an `initial?: ImageParams` prop + `advancedFromParams`
+    inverse mapping so Refine/Edit can seed the panel; `ImageGenerator.tsx` gained
+    `triggerEdit` alongside the extended `triggerRefine`. New `GenerationsPanel.test.ts`
+    (pure-function `sortForDisplay`/`dequeueOrder` coverage). `tsc`/vitest clean (37 tests).
+  - **2 real bugs found by code-reviewer + fixed, then live-verified via Chrome + a direct
+    Postgres check of the created job row:**
+    1. **CRITICAL** — `AdvancedParams`'s `initial` prop only seeded local component state
+       on mount; it never called `onChange`, so `ImageGenerator.tsx`'s `advParams` (what
+       actually gets sent to Generate) stayed empty until the user manually touched a
+       field. Refine/Edit's pre-filled panel was cosmetic — none of the carried-over
+       settings (aspect ratio, style, guidance, etc.) reached the actual generation
+       request. Fixed with a mount-only `useEffect` that fires `onChange` once when
+       `initial` is provided. **Live-verified end-to-end**: queued a job with
+       `style_preset=cinematic, guidance_scale=5, 896x1152` via Advanced, clicked Edit,
+       confirmed the panel pre-filled correctly, clicked Generate again, and confirmed via
+       a direct `image_jobs` query that the new job's `params` carried the exact same
+       values — before the fix this would have silently defaulted.
+    2. **WARN** — the row lightbox (`onView`/thumbnail `alt`) still passed the suffixed
+       `job.prompt` instead of `job.original_prompt ?? job.prompt`, violating plan §1.8
+       ("prompt = user text only" everywhere it's displayed) on just that one surface
+       (line-1 display and copy were already correct). Fixed.
+  - **Known gap, not fixed this pass:** build-validator flagged that the plan's §5 "Tests"
+    section calls for rendered-component tests (icon visibility per status, delete-confirm
+    flow, edit call-sequence, reorder-arrow calls, settings-popover content) and
+    `AdvancedParams`/`ImageGenerator` tests for the refine/edit pre-apply behavior — the
+    project has no `@testing-library/react` (or equivalent) installed anywhere, so all
+    existing frontend tests, this diff's new ones included, are pure-function-only. Adding
+    real component-rendering test infra is a larger, project-wide undertaking out of scope
+    for this step; the CRITICAL bug above was instead caught by live Chrome verification.
+    A dedicated follow-up step to add `@testing-library/react` and close this gap would be
+    worth registering if this pattern keeps causing missed regressions.
+  - No security-auditor run (no secrets/config/auth touched).
 
 *(Superseded/archived this date: `plan_open_issues_2026-07-14.md` →
 `implemented_phases/plan_open_issues_2026-07-14_resolved.md`;

@@ -13,7 +13,7 @@ import {
   type EnhanceMode,
 } from '../api/client'
 import AdvancedParams from './AdvancedParams'
-import type { RefineHandler, ReuseSeedHandler } from '../types'
+import type { RefineHandler, ReuseSeedHandler, EditHandler } from '../types'
 
 export interface ModelDef {
   id: string
@@ -73,7 +73,7 @@ function elapsed(createdAt?: string | null): string {
 }
 
 const ImageGenerator = forwardRef<
-  { triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler },
+  { triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler; triggerEdit: EditHandler },
   {
     model: ModelDef
     isConnected: boolean
@@ -96,6 +96,12 @@ const ImageGenerator = forwardRef<
   const [enhanceMode, setEnhanceMode] = useState<EnhanceMode>('auto')
   const [headerDuration, setHeaderDuration] = useState(30)
   const [forcedSeed, setForcedSeed] = useState<{ value: number; nonce: number } | null>(null)
+  // G1: Refine/Edit prefill -- an existing job's params, seeded into
+  // AdvancedParams on mount. `refineKey` (the source job's id) forces a
+  // remount so a second Refine/Edit re-seeds even if the panel was already
+  // open with different values.
+  const [refineParams, setRefineParams] = useState<ImageParams | undefined>(undefined)
+  const [refineKey, setRefineKey] = useState<string | undefined>(undefined)
   const sessionBusy = busyAction !== null
   const [, setTick] = useState(0)
 
@@ -182,9 +188,25 @@ const ImageGenerator = forwardRef<
       })
       setPrompt('')
       setError(null)
+      // G1: carry the source job's additional settings into Advanced too --
+      // previously only the image was seeded, silently dropping whatever
+      // params the original job used.
+      setRefineParams((job.params as ImageParams | undefined) ?? undefined)
+      setRefineKey(job.job_id)
+      setIsAdvancedOpen(true)
     },
     triggerReuseSeed(seed: number) {
       setForcedSeed((prev) => ({ value: seed, nonce: (prev?.nonce ?? 0) + 1 }))
+      setIsAdvancedOpen(true)
+    },
+    triggerEdit(job: JobResult) {
+      // G1: unlike Refine, Edit never carries a source image -- the job
+      // being edited is still queued, so it has no output yet. The caller
+      // (GenerationsPanel) deletes the source job before calling this.
+      setPrompt(job.original_prompt ?? job.prompt ?? '')
+      setError(null)
+      setRefineParams((job.params as ImageParams | undefined) ?? undefined)
+      setRefineKey(job.job_id)
       setIsAdvancedOpen(true)
     },
   }))
@@ -235,6 +257,8 @@ const ImageGenerator = forwardRef<
     setError(null)
     setWatchIds(new Set())
     setInitImage(null)
+    setRefineParams(undefined)
+    setRefineKey(undefined)
   }, [model.id])
 
   const live = !!session?.alive
@@ -469,7 +493,15 @@ const ImageGenerator = forwardRef<
           </div>
         </div>
 
-        <AdvancedParams modelId={model.id} onChange={setAdvParams} showStrength={!!initImage} open={isAdvancedOpen} forcedSeed={forcedSeed ?? undefined} />
+        <AdvancedParams
+          key={refineKey}
+          modelId={model.id}
+          onChange={setAdvParams}
+          showStrength={!!initImage}
+          open={isAdvancedOpen}
+          forcedSeed={forcedSeed ?? undefined}
+          initial={refineParams}
+        />
 
         <textarea
           value={prompt}

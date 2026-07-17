@@ -102,6 +102,19 @@ def test_session_template_writes_never_raise_unhandled(session_notebooks):
         assert "def patch_job(job_id, fields):\n    _rest_patch(" in src, path
 
 
+def test_session_template_next_job_honors_queue_pos(session_notebooks):
+    """G1: manual queue reordering only works if the kernel's own dequeue
+    query respects queue_pos ahead of the plain created_at FIFO order --
+    otherwise the backend's reorder_queue() call would silently have no
+    effect on which job actually runs next."""
+    for path, nb in session_notebooks.items():
+        src = "".join(nb["cells"][0]["source"])
+        assert '"order": "queue_pos.asc.nullslast,created_at.asc"' in src, path
+        assert '"order": "created_at.asc"' not in src, (
+            f"{path}: old plain-FIFO order string should be fully replaced, not duplicated"
+        )
+
+
 def test_session_template_cell1_wraps_pip_install(session_notebooks):
     """cell-1's dependency install must report failure (status='error')
     instead of dying uncaught with zero trace, mirroring cell-2's model-load

@@ -581,6 +581,44 @@ def get_job(user_id: str, job_id: str) -> Optional[dict]:
     }
 
 
+def delete_job(user_id: str, job_id: str) -> bool:
+    """G1: delete a job (queued/done/error), scoped to its owner. Running jobs
+    are never deletable -- can't safely interrupt an in-flight Kaggle round-trip.
+    Returns False (caller maps to 409) if the job doesn't exist, isn't owned by
+    user_id, or is currently running."""
+    row = fetchone(
+        "delete from image_jobs where id = %s and user_id = %s and status != 'running' "
+        "returning id",
+        (job_id, user_id),
+    )
+    return row is not None
+
+
+def reorder_queue(user_id: str, session_id: str, job_ids: list[str]) -> bool:
+    """G1: recompute queue_pos for a session's queued jobs per the given order
+    (spaced integers -- simpler and safer than per-move fractional-index math
+    for queues this small). Validates job_ids is EXACTLY the session's current
+    queued-job set (owned by user_id) before writing anything -- returns False
+    (caller maps to 409) on any mismatch (stale client state: a job started,
+    finished, or was deleted between the client fetching the list and reordering
+    it, or a duplicate/foreign id)."""
+    with transaction() as tx:
+        rows = tx.fetchall(
+            "select id from image_jobs where user_id = %s and session_id = %s "
+            "and status = 'queued'",
+            (user_id, session_id),
+        )
+        current_ids = {str(r["id"]) for r in rows}
+        if len(job_ids) != len(set(job_ids)) or current_ids != set(job_ids):
+            return False
+        for index, job_id in enumerate(job_ids):
+            tx.execute(
+                "update image_jobs set queue_pos = %s where id = %s",
+                (1000 * (index + 1), job_id),
+            )
+    return True
+
+
 # --- Cold one-shot jobs ------------------------------------------------------
 # A cold job has session_id NULL: PAWN runs the existing blocking Kaggle
 # round-trip as a fire-and-forget background task and writes the result back
@@ -591,7 +629,7 @@ def get_job(user_id: str, job_id: str) -> Optional[dict]:
 # list stays light; bytes are fetched lazily via get_job when opened.
 _JOB_LIST_COLUMNS = (
     "id, session_id, model, prompt, original_prompt, enhanced_prompt, status, mime, via, error, params, "
-    "created_at, started_at, done_at"
+    "queue_pos, created_at, started_at, done_at"
 )
 
 
@@ -804,6 +842,7 @@ def list_jobs(user_id: str, model: Optional[str] = None, limit: int = 20) -> lis
             "via": r.get("via"),
             "error": r.get("error"),
             "params": r.get("params"),
+            "queue_pos": r.get("queue_pos"),
             "created_at": r.get("created_at"),
             "started_at": r.get("started_at"),
             "done_at": r.get("done_at"),

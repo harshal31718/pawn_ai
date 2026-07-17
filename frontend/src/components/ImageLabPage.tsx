@@ -10,7 +10,7 @@ import GenerationsPanel from './GenerationsPanel'
 import KaggleCredentials from './KaggleCredentials'
 import ImageGenerator, { type ModelDef, WARMUP_STATUSES } from './ImageGenerator'
 import { loadDeployed, saveDeployed } from '../store/deployedStore'
-import type { RefineHandler, ReuseSeedHandler } from '../types'
+import type { RefineHandler, ReuseSeedHandler, EditHandler } from '../types'
 
 interface Props {
   onClose: () => void
@@ -89,12 +89,15 @@ export default function ImageLabPage({ onClose }: Props) {
     }
   }
 
-  const generatorRef = useRef<{ triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler } | null>(null)
+  const generatorRef = useRef<{ triggerRefine: RefineHandler; triggerReuseSeed: ReuseSeedHandler; triggerEdit: EditHandler } | null>(null)
   const handleRefine: RefineHandler = useCallback((job, imageSrc) => {
     generatorRef.current?.triggerRefine(job, imageSrc)
   }, [])
   const handleReuseSeed: ReuseSeedHandler = useCallback((seed) => {
     generatorRef.current?.triggerReuseSeed(seed)
+  }, [])
+  const handleEdit: EditHandler = useCallback((job) => {
+    generatorRef.current?.triggerEdit(job)
   }, [])
 
   const activeModelJobs = allJobs.filter((j) => j.model === activeModelId)
@@ -239,6 +242,8 @@ export default function ImageLabPage({ onClose }: Props) {
             jobs={activeModelJobs}
             onRefine={handleRefine}
             onReuseSeed={handleReuseSeed}
+            onEdit={handleEdit}
+            onJobsChanged={refreshAllJobs}
           />
         </div>
 

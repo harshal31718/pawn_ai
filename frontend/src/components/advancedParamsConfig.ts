@@ -1,5 +1,11 @@
 import type { ImageParams } from '../api/client'
-import { STYLE_PRESET_KEY_MAP, SUBJECT_TYPE_KEY_MAP, type AdvancedState } from '../types'
+import {
+  STYLE_PRESET_KEY_MAP,
+  STYLE_PRESET_LABEL_MAP,
+  SUBJECT_TYPE_KEY_MAP,
+  SUBJECT_TYPE_LABEL_MAP,
+  type AdvancedState,
+} from '../types'
 
 export type { AdvancedState, ParamState } from '../types'
 
@@ -138,6 +144,40 @@ const CONFIGS: Record<string, ModelAdvancedConfig> = {
 
 export function configFor(modelId: string): ModelAdvancedConfig {
   return CONFIGS[modelId] ?? CONFIGS.sdxl
+}
+
+/**
+ * G1: inverse of deriveParams -- seeds an AdvancedState from an existing
+ * job's wire-format params, for Refine (which also carries a source image)
+ * and Edit (which doesn't). Only ImageParams fields that are actually set
+ * on the model enable their AdvancedState field; everything else falls back
+ * to the model's normal initial state, so re-opening the panel for a job
+ * that used pure defaults looks identical to a fresh composer.
+ */
+export function advancedFromParams(modelId: string, p: ImageParams): AdvancedState {
+  const cfg = configFor(modelId)
+  const s = cfg.initialAdvanced()
+
+  if (p.width != null && p.height != null) {
+    const ratioKey = Object.entries(cfg.resolutionBuckets).find(
+      ([, sz]) => sz.width === p.width && sz.height === p.height,
+    )?.[0]
+    if (ratioKey) s.aspectRatio = { enabled: true, value: ratioKey }
+  }
+  if (cfg.showSteps && p.num_inference_steps != null)
+    s.steps = { enabled: true, value: p.num_inference_steps }
+  if (cfg.showGuidance && p.guidance_scale != null)
+    s.guidanceScale = { enabled: true, value: p.guidance_scale }
+  if (cfg.showNegativePrompt && p.negative_prompt)
+    s.negativePrompt = { enabled: true, value: p.negative_prompt }
+  if (p.style_preset)
+    s.stylePreset = { enabled: true, value: STYLE_PRESET_LABEL_MAP[p.style_preset] ?? p.style_preset }
+  if (p.strength != null) s.strength = { enabled: true, value: p.strength }
+  if (p.seed != null) s.seed = { enabled: true, value: p.seed }
+  if (p.subject_type)
+    s.subjectType = { enabled: true, value: SUBJECT_TYPE_LABEL_MAP[p.subject_type] ?? p.subject_type }
+
+  return s
 }
 
 // Backward-compatible per-model lookup tables, now sourced from the config

@@ -81,6 +81,11 @@ class SessionExtendRequest(BaseModel):
     add_minutes: int = 30
 
 
+class ReorderQueueRequest(BaseModel):
+    session_id: str
+    job_ids: list[str]
+
+
 async def _resolve_init_image(
     init_image_b64: str | None,
     init_job_id: str | None,
@@ -140,6 +145,21 @@ async def _apply_prompt_enhancement(
     return result["prompt"], prompt, result["prompt"], result.get("negative")
 
 
+def _finalize_original_prompt(
+    original_prompt: str | None, pre_suffix_prompt: str, final_prompt: str
+) -> str | None:
+    """G1: broadens original_prompt (Q3.1 pass 2) to also cover suffix-only jobs
+    (style/subject-type preset appended, no enhancer run). If the enhancer already
+    set it, that's the true pre-enhancement raw text and takes precedence -- suffix
+    composition happening on top of an enhanced prompt doesn't change what the user
+    originally typed. Otherwise, falls back to the pre-suffix text only when suffix
+    composition actually changed the prompt, keeping the "None means nothing
+    changed" contract intact for plain jobs with no preset and no enhancement."""
+    if original_prompt is not None:
+        return original_prompt
+    return pre_suffix_prompt if final_prompt != pre_suffix_prompt else None
+
+
 @router.post("/connect")
 async def connect_kaggle(request: Request, req: ConnectRequest | None = None):
     user_id = request.state.user_id
@@ -173,10 +193,12 @@ async def generate_artifact(req: GenerateRequest, request: Request):
         prompt, original_prompt, enhanced_prompt, extra_negative = await _apply_prompt_enhancement(
             prompt, req.model, req.enhance_prompt, init_b64, request, user_id
         )
+        pre_suffix_prompt = prompt
         if req.params.style_preset:
             prompt += get_preset_suffix(req.params.style_preset, req.model)
         if req.params.subject_type:
             prompt += get_subject_type_suffix(req.params.subject_type, req.model)
+        original_prompt = _finalize_original_prompt(original_prompt, pre_suffix_prompt, prompt)
         params = req.params
         params_dict = params.model_dump()
         mutated = False
@@ -278,11 +300,13 @@ async def session_job(req: SessionJobRequest, request: Request):
         prompt, original_prompt, enhanced_prompt, extra_negative = await _apply_prompt_enhancement(
             prompt, session_model, req.enhance_prompt, init_b64, request, user_id
         )
+    pre_suffix_prompt = prompt
     if session_model:
         if req.params.style_preset:
             prompt += get_preset_suffix(req.params.style_preset, session_model)
         if req.params.subject_type:
             prompt += get_subject_type_suffix(req.params.subject_type, session_model)
+    original_prompt = _finalize_original_prompt(original_prompt, pre_suffix_prompt, prompt)
     params = req.params
     params_dict = params.model_dump()
     mutated = False
@@ -330,3 +354,32 @@ async def get_job(job_id: str, request: Request):
             status_code=status.HTTP_404_NOT_FOUND, detail="Job not found."
         )
     return job
+
+
+# --- G1: Generations tab management (delete, reorder) -----------------------
+
+
+@router.delete("/job/{job_id}")
+async def delete_job_route(job_id: str, request: Request):
+    user_id = request.state.user_id
+    ok = await run_in_threadpool(image_session.delete_job, user_id, job_id)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job not found, not yours, or currently running.",
+        )
+    return {"status": "deleted"}
+
+
+@router.post("/jobs/reorder")
+async def reorder_jobs(req: ReorderQueueRequest, request: Request):
+    user_id = request.state.user_id
+    ok = await run_in_threadpool(
+        image_session.reorder_queue, user_id, req.session_id, req.job_ids
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Queue changed since it was loaded -- refresh and try again.",
+        )
+    return {"status": "reordered"}

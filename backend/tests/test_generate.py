@@ -440,6 +440,43 @@ def test_generate_image_style_suffix_applied(client):
     assert "cinematic shot" in stored_prompt
 
 
+def test_generate_image_style_suffix_alone_sets_original_prompt(client):
+    """G1: original_prompt must capture the pre-suffix raw text even when the
+    enhancer never ran (enhance_prompt=off) -- broadens Q3.1 pass 2's
+    enhancement-only original_prompt so the Generations panel can always show
+    what the user actually typed, not the suffix-baked-in model prompt."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-style-orig", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={
+                "modality": "image", "prompt": "a city",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "off",
+            },
+        )
+    stored_prompt = mk.call_args.args[2]
+    original_prompt, enhanced_prompt = mk.call_args.args[4], mk.call_args.args[5]
+    assert stored_prompt.startswith("a city") and "cinematic shot" in stored_prompt
+    assert original_prompt == "a city"
+    assert enhanced_prompt is None
+
+
+def test_generate_image_no_suffix_no_enhancement_leaves_original_prompt_none(client):
+    """Nothing changed the prompt -> original_prompt stays None (no duplicate
+    of `prompt` stored for the common plain-generation case)."""
+    with patch(
+        "app.routes.generate.image_session.create_cold_job", return_value=("job-plain", True)
+    ) as mk, patch("app.routes.generate.image_session.run_cold_job"):
+        client.post(
+            "/generate",
+            json={"modality": "image", "prompt": "a city", "enhance_prompt": "off"},
+        )
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
+    assert stored_prompt == "a city"
+    assert original_prompt is None
+
+
 def test_generate_image_style_suffix_uses_flux_variant_for_flux_model(client):
     """Q3.3b: per-model suffix variants -- FLUX gets its natural-language
     phrasing, not SDXL's keyword-scaffold suffix, for the same style preset."""
@@ -669,9 +706,13 @@ def test_generate_image_enhance_composes_before_style_suffix(client):
             },
         )
     assert resp.status_code == 200
-    stored_prompt = mk.call_args.args[2]
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
     assert stored_prompt.startswith("a fluffy cat, 85mm lens")
     assert "cinematic shot" in stored_prompt
+    # G1: the enhancer's original_prompt (the true pre-enhancement raw text) must
+    # win over the suffix-composition fallback -- appending a style suffix on top
+    # of an already-enhanced prompt doesn't change what the user originally typed.
+    assert original_prompt == "a cat"
 
 
 # --- Q3.1 pass 2: vision-grounded prompt enhancer wiring (warm /session/job) ---
@@ -733,6 +774,58 @@ def test_session_job_enhance_auto_needs_model_lookup_even_without_preset(client)
             json={"session_id": "s1", "prompt": "a cat", "enhance_prompt": "auto"},
         )
     gm.assert_called_once_with("test-user-id", "s1")
+
+
+def test_session_job_style_suffix_alone_sets_original_prompt(client):
+    """G1: mirrors the cold-path test -- original_prompt captures the raw text
+    on the warm session path too when a suffix (not enhancement) is what
+    changed the stored prompt."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ), patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-enh-4"
+    ) as mk:
+        client.post(
+            "/generate/session/job",
+            json={
+                "session_id": "s1", "prompt": "a city",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "off",
+            },
+        )
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
+    assert stored_prompt.startswith("a city") and "cinematic shot" in stored_prompt
+    assert original_prompt == "a city"
+
+
+def test_session_job_enhance_composes_before_style_suffix(client):
+    """G1: mirrors the cold-path combined case (test_generate_image_enhance_
+    composes_before_style_suffix) on the warm session path -- when both the
+    enhancer AND a style suffix run, original_prompt must stay the enhancer's
+    true pre-enhancement raw text, not get clobbered by the suffix-only
+    fallback in _finalize_original_prompt."""
+    with patch(
+        "app.routes.generate.image_session.get_session_model", return_value="sdxl"
+    ), patch(
+        "app.routes.generate.image_session.submit_session_job", return_value="j-enh-5"
+    ) as mk, patch(
+        "app.core.vision_enhance.enhance_with_vision",
+        new=AsyncMock(return_value={
+            "prompt": "a fluffy cat, 85mm lens", "negative": None,
+            "used_model": "llama-4-scout", "degraded": False,
+        }),
+    ):
+        resp = client.post(
+            "/generate/session/job",
+            json={
+                "session_id": "s1", "prompt": "a cat",
+                "params": {"style_preset": "cinematic"}, "enhance_prompt": "always",
+            },
+        )
+    assert resp.status_code == 200
+    stored_prompt, original_prompt = mk.call_args.args[2], mk.call_args.args[4]
+    assert stored_prompt.startswith("a fluffy cat, 85mm lens")
+    assert "cinematic shot" in stored_prompt
+    assert original_prompt == "a cat"
 
 
 def test_session_job_init_image_b64_defaults_strength(client):

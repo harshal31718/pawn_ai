@@ -534,6 +534,64 @@ def test_get_job_missing_returns_none():
         assert image_session.get_job("user-1", "nope") is None
 
 
+# --- G1: delete + reorder -----------------------------------------------------
+
+
+def test_delete_job_returns_true_when_a_row_is_deleted():
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.delete_job("user-1", "j1") is True
+    delete_call = next(c for c in db.calls if c[0] == "fetchone" and "delete from image_jobs" in c[1])
+    assert "status != 'running'" in delete_call[1]
+    assert "returning id" in delete_call[1]
+    assert delete_call[2] == ("j1", "user-1")
+
+
+def test_delete_job_returns_false_when_no_row_matches():
+    """Covers not-found, not-owned, and currently-running -- all three collapse
+    to zero rows returned from the same guarded DELETE, and the route maps
+    False -> 409 uniformly (see phase_G1's design decision §4.3)."""
+    db = _FakeDB(rows={"image_jobs": []})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        assert image_session.delete_job("user-1", "j1") is False
+
+
+def test_reorder_queue_happy_path_recomputes_queue_pos_in_order():
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}, {"id": "j2"}, {"id": "j3"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        ok = image_session.reorder_queue("user-1", "s1", ["j3", "j1", "j2"])
+
+    assert ok is True
+    updates = [c for c in db.calls if c[0] == "execute" and "update image_jobs set queue_pos" in c[1]]
+    assert len(updates) == 3
+    assert [c[2] for c in updates] == [(1000, "j3"), (2000, "j1"), (3000, "j2")]
+
+
+def test_reorder_queue_rejects_mismatched_job_id_set():
+    """A stale client (a job started/finished/was deleted between fetch and
+    reorder, or a duplicate/foreign id) must be rejected with NO writes at
+    all -- not a partial reorder."""
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        ok = image_session.reorder_queue("user-1", "s1", ["j1", "j2"])
+
+    assert ok is False
+    assert not any(c[0] == "execute" and "queue_pos" in c[1] for c in db.calls)
+
+
+def test_reorder_queue_rejects_duplicate_ids():
+    db = _FakeDB(rows={"image_jobs": [{"id": "j1"}, {"id": "j2"}]})
+    p1, p2, p3, p4 = _patch_db(db)
+    with p1, p2, p3, p4:
+        ok = image_session.reorder_queue("user-1", "s1", ["j1", "j1"])
+
+    assert ok is False
+
+
 def test_get_session_status_none_when_absent():
     db = _FakeDB(rows={"image_sessions": []})
     p1, p2, p3, p4 = _patch_db(db)
