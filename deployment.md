@@ -281,6 +281,7 @@ sudo nginx -t && sudo systemctl reload nginx
 |---|---|---|
 | 80/443 | public | System Nginx |
 | 8001 / 3001 | `127.0.0.1` | PAWN backend / PostgREST |
+| 3002 | `127.0.0.1` | §9: local-dev PostgREST reverse-SSH tunnel endpoint (`/pgrst-dev/`) |
 | 5432 | none | Postgres — internal compose network only |
 
 Only 80/443 are internet-facing. Everything else is loopback; the internet
@@ -349,3 +350,98 @@ Against `https://pawnai.duckdns.org`:
   `scripts/promote-to-main.sh`). Do this **before** ever flipping the OAuth
   consent screen to Production/public, same trigger as the PostgREST item
   above.
+
+---
+
+## 9. Local-dev PostgREST tunnel (one-time VM setup)
+
+Local dev's Image Lab warm-Kaggle-session feature needs a running Kaggle
+kernel to reach the **developer's local** PostgREST instance (Kaggle can't
+reach `localhost`). This VM doubles as a stable, free relay point for that
+tunnel via a restricted SSH reverse-forward — **production itself is
+completely unaffected**; this section only adds a narrowly-scoped,
+reversible piece of infra that local dev tooling uses. Replaces the old
+`cloudflared` quick-tunnel (`docker-compose.yml`'s old `cloudflared`
+service), which minted a new random hostname on every restart, breaking
+any already-running Kaggle kernel and requiring a manual URL update every
+time. Do this once; it survives dev-machine restarts, sleep, and network
+blips automatically (Docker's `restart: unless-stopped` + ssh's own
+keepalive reconnect the tunnel with no URL change ever needed again).
+
+### 9.1 Generate a dedicated key on the VM
+
+Separate from the deploy key (`keys/pawn_oci.key`) — a leaked tunnel key
+must never be usable to administer the box, only to forward one port.
+
+```bash
+ssh -i keys/pawn_oci.key ubuntu@144.24.119.184
+ssh-keygen -t ed25519 -f ~/.ssh/pawn_tunnel_dev -N "" -C "pawn-dev-tunnel"
+cat ~/.ssh/pawn_tunnel_dev.pub   # copy this for §9.2
+```
+
+Before locking in the port, confirm `3002` is free (nothing already binds
+it — prod's own PostgREST uses `3001`):
+```bash
+ss -tlnp | grep 3002    # expect no output
+```
+
+### 9.2 Restrict the key
+
+Append one line to `~/.ssh/authorized_keys`:
+```
+command="echo 'PAWN dev tunnel only'",no-pty,no-agent-forwarding,no-X11-forwarding,no-user-rc,permitopen="127.0.0.1:3002" ssh-ed25519 AAAA...<pasted pubkey from §9.1>... pawn-dev-tunnel
+```
+This key can do nothing except open a forward to `127.0.0.1:3002` — no
+shell, no other host/port, no agent/X11 forwarding.
+
+### 9.3 New Nginx location
+
+Extend the existing `server {}` block in `/etc/nginx/sites-available/pawn`
+(§3.7), alongside the existing `/pgrst/` block — same `client_max_body_size`
+fix is REQUIRED here too, same failure mode as prod's own (a warm-session
+image PATCH-back is several MB; Nginx's 1m default silently wedges every
+dev job at "running" with an unsurfaced 413):
+```nginx
+    # Dev-only rendezvous: local-dev PostgREST reached via SSH reverse
+    # tunnel bound to 127.0.0.1:3002 (docker-compose.yml's pgrst-tunnel
+    # service + the restricted authorized_keys entry from §9.2).
+    location /pgrst-dev/ {
+        client_max_body_size 20m;
+        proxy_pass http://127.0.0.1:3002/;
+        proxy_set_header Host $host;
+    }
+```
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+No iptables/Security-List change needed — 443 is already open, and this is
+just a new `location` on the existing public HTTPS listener.
+
+### 9.4 Move the key to the dev machine
+
+Copy the **private** key (`~/.ssh/pawn_tunnel_dev`) off the VM into this
+repo's `secrets/pgrst_tunnel_key` (gitignored — see `secrets/pgrst_tunnel_key.example`
+for the expected format), then delete both key files from the VM's home
+directory — the VM only ever needs the public half, already in
+`authorized_keys`:
+```bash
+rm ~/.ssh/pawn_tunnel_dev ~/.ssh/pawn_tunnel_dev.pub
+```
+
+### 9.5 Start the dev-side tunnel and verify
+
+On the dev machine:
+```bash
+docker compose --profile tunnel up -d pgrst-tunnel
+docker compose logs -f pgrst-tunnel   # watch once for a clean connect
+```
+Then from the VM:
+```bash
+ss -tlnp | grep 3002                            # 127.0.0.1:3002 owned by sshd
+curl -s https://pawnai.duckdns.org/pgrst-dev/    # PostgREST root JSON via Nginx+TLS
+```
+Copy `docker-compose.override.yml.example` → `docker-compose.override.yml`
+(the fixed URL is already correct in the example) and
+`docker compose up -d backend` to pick up the env var. Test end-to-end by
+starting a real warm Kaggle session from the Image Lab UI and confirming a
+generation completes.
