@@ -7,5 +7,5 @@ See `.claude/CLAUDE.md` for the update protocol.
 
 | Branch | Commit ID | Timestamp | Message |
 |---|---|---|---|
-| `main` | `ae4f49f62b60b46541cf43fc521195d8b319b350` | 2026-07-04 12:33:28 +0530 | promote: dev -> main (docs stripped) |
+| `main` | `2e75d14d0e90b0e75e529047af8b55ebd727031c` | 2026-07-23 21:28:29 +0530 | promote: dev -> main (docs stripped) — deployed & live-verified on prod |
 | `dev` | `63099013ac6cfde37dea917c420933565db6525a` | 2026-07-23 20:35:39 +0530 | feat: Models tab Source column — show pool-available models to users |

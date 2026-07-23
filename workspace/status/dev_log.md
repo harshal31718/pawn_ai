@@ -6,6 +6,55 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-23] — DEPLOYED: PAWN 2.0 full release live on prod (pawnai.duckdns.org)
+
+Promoted `dev → main` and deployed the whole PAWN 2.0 stack to the prod VM
+(`144.24.119.184`, `/opt/pawn`). `main`: `22695be` → `2e75d14`. This is the
+big one — 13 commits / everything since the 2026-07-17 deploy: capability
+routing + registry (R1/C1-C5/R2/R3/1b), 2.0 Phases A-E, the auth/login change
+(email+password + change/forgot), provider registry, Providers page redesign,
+Settings cleanup, site-wide background effect, Models-tab Source column.
+
+Order followed (additive migrations first, then code):
+1. Applied the 3 new migrations to the prod DB live over SSH (piped local SQL
+   into `docker compose exec -T postgres psql`), verified before/after:
+   `users.password_hash`/`password_changed` columns, `endpoint_usage` table +
+   2 indexes, `pool_api_keys` table. All additive/idempotent, `ON_ERROR_STOP=1`.
+2. `pg_dump` backup taken on the VM (`pawn_prod_predeploy_2026-07-23_1559.sql`,
+   151M) before the code deploy.
+3. `scripts/promote-to-main.sh` (docs stripped, verified main doc-free + code
+   parity with dev) → `git push origin main` (+ pushed dev, origin/dev was
+   behind). VM: `git pull` → `npm ci && npm run build` → `docker compose
+   --env-file .env.prod -f docker-compose.prod.yml up -d --build`. Postgres
+   container stayed up (2 weeks, healthy) — no data touched.
+
+**Real config-drift bug caught and fixed live:** the VM's `.env.prod` predates
+Phase E.1 and was MISSING `PAWN_ENV` (compose warned "variable is not set",
+container ran it empty). Not a data-corruption emergency as first feared --
+the Drive/Kaggle isolation logic keys specifically off `== "dev"`, so an empty
+string already resolved to the correct PROD paths (Drive `PAWN`, Kaggle
+`pawn-cube-poc`) -- but the runbook expects it set explicitly and a future
+`== "prod"` check would break. Fixed: appended `PAWN_ENV=prod` to the VM's
+`.env.prod` (backed it up first), force-recreated the backend, re-verified
+`PAWN_ENV='prod'` with prod paths unchanged. Worth carrying `.env.prod`
+forward on the VM — `.env.prod.example` already has PAWN_ENV committed, only
+the VM's older copy had drifted.
+
+Verified at infra level: internal + external HTTPS `/health` → ok, clean
+uvicorn startup, new frontend bundle (`index-BW7s30Lx.js`) served over TLS,
+no backend errors. **Prod `pool_api_keys` starts EMPTY** (pool keys are
+DB-backed, not carried from dev) — everyone is BYOK-only until the admin
+(`admin.pawnai@gmail.com`) adds them via the Admin tab.
+
+**Still the user's hands (can't be done from here):** the smoke-test checklist
+— full OAuth login round-trip, link Drive, a BYOK chat over SSE, add pool keys
+via Admin, one Kaggle image-gen job. Also confirm the pre-existing-account
+password flow: those accounts now have `password_changed=false` + null
+`password_hash`; the change-password form no longer asks for a current
+password, so it should let them set one cleanly (verify).
+
+---
+
 ### [2026-07-23] — Models tab "Source" column: pool availability visible to users
 
 Follow-up to the Providers page redesign. The gap: the Models tab showed

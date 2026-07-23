@@ -2,6 +2,25 @@
 
 Last updated: 2026-07-23
 
+**DEPLOYED — full PAWN 2.0 release LIVE on prod (`pawnai.duckdns.org`),
+2026-07-23.** `main`: `22695be` → `2e75d14`. Everything since the 2026-07-17
+deploy (13 commits): capability routing + registry, 2.0 Phases A–E,
+auth/login change, provider registry, Providers page redesign, Settings
+cleanup, site-wide background effect, Models-tab Source column. Applied the 3
+new migrations to prod first (`users` password columns, `endpoint_usage`,
+`pool_api_keys` — all verified before/after), `pg_dump` backup taken (151M),
+promoted via `scripts/promote-to-main.sh`, deployed on the VM
+(`git pull` + frontend rebuild + `up -d --build`, Postgres untouched).
+Infra-verified: internal + external HTTPS `/health` ok, clean startup, new
+bundle served over TLS, no errors. **Caught + fixed a real config drift:** the
+VM's `.env.prod` was missing `PAWN_ENV` (predates Phase E.1) — prod paths were
+still correct by accident (isolation keys off `== "dev"`), but set it to
+`prod` explicitly and recreated the backend. **Prod `pool_api_keys` starts
+empty** (BYOK-only until admin adds pool keys via the Admin tab). Still needs
+the user's smoke-test: OAuth round-trip, Drive link, BYOK chat, admin pool
+keys, one Kaggle image gen, and the pre-existing-account password-set flow.
+See `dev_log.md`'s 2026-07-23 "DEPLOYED" entry.
+
 **Models tab "Source" column (pool visibility) — DONE (2026-07-23).** Follow-up
 to the Providers page redesign: users can now see which models are available
 via the operator's shared pool, not just their own BYOK keys. Backend
