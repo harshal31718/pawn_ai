@@ -781,6 +781,9 @@ export interface ProviderUsageRow {
   tpd_used: number
   tpd_remaining: number | null
   has_published_cap: boolean
+  // PAWN 2.0 Phase D.1: only set for key_source === "pool" -- this user's
+  // conservative, guaranteed-yours share of the endpoint's daily budget.
+  fair_share_remaining: number | null
 }
 
 export interface FreeTiersResponse {

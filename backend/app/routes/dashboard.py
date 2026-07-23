@@ -20,13 +20,23 @@ PAWN 2.0 Phase A.2 (2026-07-23): `_usable_key_source` is now BYOK-first,
 mirroring resolver.Resolver._resolve_key's reversed precedence -- a user
 with their own key is reported as "byok" even if the operator has also
 configured a pool key for that provider.
+
+PAWN 2.0 Phase D.1 (2026-07-23): pool-sourced rows now report a
+`fair_share_remaining` alongside the raw `tpd_remaining` -- the headline's
+old math (`tpd_limit - this user's own consumption`) is honest for a BYOK
+row (nobody else can touch that key) but overstates a POOL row, since
+`tpd_limit` is shared across every registered user, not this user's alone.
+`fair_share_remaining` is the conservative, guaranteed-yours floor
+(`tpd_limit / N - this user's own consumption`, matching
+`core.quota_share`'s fair-share divisor exactly) and is what the headline
+total sums for pool rows instead of the raw remaining.
 """
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
 from app.config import read_pool_key
-from app.core import key_store
+from app.core import key_store, quota_share
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -67,6 +77,12 @@ class ProviderUsageRow(BaseModel):
     tpd_used: int
     tpd_remaining: Optional[int]  # None when the provider publishes no cap
     has_published_cap: bool
+    # PAWN 2.0 Phase D.1: only set for key_source == "pool" -- this user's
+    # conservative, guaranteed-yours share of a capped endpoint's daily
+    # budget (tpd_limit / N - their own consumption today), matching
+    # core.quota_share's fair-share divisor. None for "byok" rows (fair-share
+    # doesn't apply -- a BYOK key isn't shared with anyone).
+    fair_share_remaining: Optional[int] = None
 
 
 class FreeTiersResponse(BaseModel):
@@ -111,9 +127,24 @@ async def get_free_tiers(request: Request) -> FreeTiersResponse:
             has_cap = ep.tpd_limit is not None
             remaining = max(ep.tpd_limit - snapshot["tokens_today"], 0) if has_cap else None
 
+            # PAWN 2.0 Phase D.1: pool-dedupe headline -- a pool row's raw
+            # `remaining` overstates what's actually this user's, since
+            # `tpd_limit` is shared. Fall open to the raw `remaining` on any
+            # quota_share error (fail-open, same posture as quota_share
+            # itself) rather than hiding the row.
+            fair_share_remaining = None
+            headline_contribution = remaining
+            if has_cap and key_source == "pool":
+                try:
+                    n = quota_share.registered_user_count()
+                    fair_share_remaining = max(int(ep.tpd_limit / n) - snapshot["tokens_today"], 0)
+                    headline_contribution = fair_share_remaining
+                except Exception:
+                    pass
+
             if has_cap:
                 any_capped = True
-                total_remaining += remaining
+                total_remaining += headline_contribution
             else:
                 uncapped_providers.add(ep.provider)
 
@@ -124,6 +155,7 @@ async def get_free_tiers(request: Request) -> FreeTiersResponse:
                     display_name=model.display_name,
                     provider=ep.provider,
                     key_source=key_source,
+                    fair_share_remaining=fair_share_remaining,
                     rpd_limit=ep.rpd_limit,
                     rpd_used=snapshot["requests_today"],
                     tpd_limit=ep.tpd_limit,

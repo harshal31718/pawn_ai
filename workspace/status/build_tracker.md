@@ -176,11 +176,35 @@ DB, needs B) → **C** → **D**. Phases below are listed A–E for reference, n
     never exercised end-to-end against a real second user; covered instead
     by C.5's unit tests with injected `N`, per the plan's own acknowledged
     verification gap for solo dev.
-- `[ ]` **Phase D — Providers page (OmniRoute functionality)**
-  - D.1 dashboard route: pool-dedupe headline, per-user remaining, credits/no-cap separate
-  - D.2 registry metadata additions if needed (`no_published_cap`, `signup_credit_tokens`)
-  - D.3 `ProvidersPage.tsx` → OmniRoute layout/logic, PAWN styling for now
-  - D.4 backend route test asserting honest aggregate math
+- `[x]` **Phase D — Providers page (OmniRoute functionality)** ✓ (2026-07-23)
+  - `[x]` D.1 `routes/dashboard.py`: pool-dedupe honest headline. New
+    `ProviderUsageRow.fair_share_remaining` (only set for `key_source ==
+    "pool"`) — `max(tpd_limit / N - this user's own consumption, 0)`,
+    matching `quota_share`'s fair-share divisor exactly. The headline sum
+    now uses `fair_share_remaining` for pool rows instead of the raw
+    `tpd_remaining` (which overstates a shared endpoint's true per-user
+    availability — a pool row's `tpd_limit` isn't this user's alone). BYOK
+    rows are untouched (`fair_share_remaining: null` — fair-share doesn't
+    apply to a key nobody else can touch). Fails open to the raw remaining
+    on any `quota_share` error, same posture as `quota_share.enforce` itself.
+  - `[ ]` D.2 registry metadata (`no_published_cap`, `signup_credit_tokens`)
+    — **deliberately not added.** `has_published_cap` (existing field)
+    already covers the no-cap case; PAWN's registry has no source of truth
+    for signup-credit amounts today, and inventing one would violate the
+    dashboard's own honest-math rule (never guess a number). Revisit only if
+    a real need for tracking signup credits materializes.
+  - `[x]` D.3 `ProvidersPage.tsx`: pool-sourced capped rows show "Your fair
+    share: Xk tokens" beneath the existing raw remaining line. `client.ts`'s
+    `ProviderUsageRow` interface gained the matching field.
+  - `[x]` D.4 New tests in `test_dashboard.py` (4): BYOK row has no
+    fair-share field, pool row reports the correct fair-share math (and it
+    never exceeds the raw remaining), headline sums fair-share not raw for
+    pool rows, quota_share error fails open to the raw remaining.
+  - 759 backend tests green (up from 755), `pytest -n auto` clean, `tsc
+    --noEmit` clean, `npm run build` clean. Live-verified via Chrome:
+    `/providers` renders correctly (all-BYOK in this dev environment since
+    no pool keys are configured locally — no fair-share note shown, as
+    expected; no regression).
 - `[~]` **Phase E — Dev/prod data isolation** (single-operator; independent of A–D)
   - `[x]` **E.1–E.3 — `PAWN_ENV` config + Drive root/Kaggle slug isolation** ✓
     (2026-07-23) `config.PAWN_ENV` (default `"dev"`, the safe side — see

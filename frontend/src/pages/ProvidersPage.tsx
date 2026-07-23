@@ -55,6 +55,14 @@ function ProviderCard({ row }: { row: ProviderUsageRow }) {
             {formatTokens(row.tpd_remaining ?? 0)} tokens left today · {formatTokens(row.tpd_used)} /{' '}
             {formatTokens(row.tpd_limit)}
           </p>
+          {/* PAWN 2.0 Phase D.3: pool rows show the honest, guaranteed-yours
+              share alongside the raw (shared) number above -- the raw
+              number overstates what's actually this user's on a pool key. */}
+          {row.key_source === 'pool' && row.fair_share_remaining != null && (
+            <p className="text-[10px] text-theme-text-muted">
+              Your fair share: {formatTokens(row.fair_share_remaining)} tokens
+            </p>
+          )}
         </>
       ) : (
         <p className="text-[10px] text-theme-text-muted italic">No published token cap</p>

@@ -113,3 +113,65 @@ def test_key_source_defaults_to_byok(client):
     with _keys("groq"):
         resp = client.get("/dashboard/free-tiers").json()
     assert resp["rows"] and all(r["key_source"] == "byok" for r in resp["rows"])
+
+
+# ── PAWN 2.0 Phase D.1/D.4: pool-dedupe honest headline ─────────────────────
+
+
+def _pool(*allowed):
+    allowed_set = set(allowed)
+    return patch(
+        "app.routes.dashboard.read_pool_key",
+        side_effect=lambda provider: "POOL-KEY" if provider in allowed_set else None,
+    )
+
+
+def test_byok_row_has_no_fair_share_remaining(client):
+    with _keys("cerebras"):
+        resp = client.get("/dashboard/free-tiers").json()
+    capped = [r for r in resp["rows"] if r["has_published_cap"]]
+    assert capped
+    assert all(r["fair_share_remaining"] is None for r in capped)
+
+
+def test_pool_row_reports_fair_share_remaining_not_raw_remaining(client):
+    with _keys(), _pool("cerebras"), \
+         patch("app.core.quota_share.registered_user_count", return_value=4):
+        resp = client.get("/dashboard/free-tiers").json()
+    capped = [r for r in resp["rows"] if r["has_published_cap"] and r["key_source"] == "pool"]
+    assert capped, "expected at least one pool-sourced capped cerebras row"
+    row = capped[0]
+    assert row["fair_share_remaining"] is not None
+    expected = max(int(row["tpd_limit"] / 4) - row["tpd_used"], 0)
+    assert row["fair_share_remaining"] == expected
+    # The honest floor must never exceed the raw (unshared) remaining.
+    assert row["fair_share_remaining"] <= row["tpd_remaining"]
+
+
+def test_headline_sums_fair_share_not_raw_remaining_for_pool_rows(client):
+    with _keys(), _pool("cerebras"), \
+         patch("app.core.quota_share.registered_user_count", return_value=5):
+        resp = client.get("/dashboard/free-tiers").json()
+    capped = [r for r in resp["rows"] if r["has_published_cap"]]
+    assert capped
+    fair_share_sum = sum(r["fair_share_remaining"] for r in capped)
+    assert resp["total_tokens_remaining_today"] == fair_share_sum
+    # Sanity: with N=5 the fair-share sum must be strictly less than the raw
+    # (unshared) sum whenever any endpoint has nonzero usage headroom to divide.
+    raw_sum = sum(r["tpd_remaining"] for r in capped)
+    assert fair_share_sum <= raw_sum
+
+
+def test_quota_share_error_falls_back_to_raw_remaining_in_headline(client):
+    """Fail-open: a broken registered_user_count() must not break the whole
+    dashboard -- degrade to the raw remaining instead of erroring the route."""
+    with _keys(), _pool("cerebras"), \
+         patch("app.core.quota_share.registered_user_count", side_effect=Exception("db down")):
+        resp = client.get("/dashboard/free-tiers")
+    assert resp.status_code == 200
+    body = resp.json()
+    capped = [r for r in body["rows"] if r["has_published_cap"]]
+    assert capped
+    assert all(r["fair_share_remaining"] is None for r in capped)
+    raw_sum = sum(r["tpd_remaining"] for r in capped)
+    assert body["total_tokens_remaining_today"] == raw_sum

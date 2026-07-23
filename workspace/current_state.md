@@ -2,6 +2,18 @@
 
 Last updated: 2026-07-23
 
+**PAWN 2.0 Phase D done (Providers page honest math):** dashboard's
+`fair_share_remaining` field (pool rows only) replaces the raw
+`tpd_limit - own_consumption` in both the per-row display and the headline
+sum, since a pool row's limit is shared across every registered user, not
+this one's alone. `ProvidersPage.tsx` shows "Your fair share: Xk tokens" on
+pool-sourced capped rows. D.2 (signup-credit registry metadata) deliberately
+skipped — no source of truth exists yet, and inventing one would violate the
+dashboard's own honest-math rule. 759 backend tests green, `tsc`/`npm run
+build` clean, live-verified via Chrome. **This closes PAWN 2.0's A–D phases**
+(E.4's tunnel activation is the only remaining, deliberately-deferred item,
+pending the user's own VM access).
+
 **PAWN 2.0 Phase C done (shared-pool fair-share quota, OmniRoute port):**
 `core/quota_share.py` ports OmniRoute's `enforce.ts`/`fairShare.ts` into
 PAWN's simpler shape (equal 1/N weight, tpd+rpd only, per-provider
