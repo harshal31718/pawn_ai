@@ -6,6 +6,105 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-23] — Provider registry, Providers page redesign, Settings cleanup, site-wide background effect
+
+Long rapid-iteration UI/architecture session, driven almost entirely by
+conversational back-and-forth with screenshots rather than an upfront spec.
+
+**Provider registry.** Designed and shipped a `Provider` schema
+(id/name/docs/signup links/auth_type/capabilities/aliases/type: byok|pool) to
+replace ~6 places where provider lists were hardcoded and duplicated across
+the codebase. Single `providers.json` (glob-loaded, so splitting into
+multiple files later needs zero code change) with 15 entries. New
+`app/registry/providers.py` loader; `key_store.py`/`pool_key_store.py`/
+`resolver.py` now import their provider sets from it instead of their own
+copies; `EndpointEntry.provider` switched from a hardcoded `Literal` to a
+validated `str`. New `GET /registry/providers` route. 14 new/updated tests,
+zero regressions in the rest of the suite. A companion `Model` schema was
+designed and documented (`workspace/schemas/model_schema.md`) but not
+implemented in code this session — Provider side only.
+
+**Providers page rebuilt around 3 tabs**: Models (one row per model, not per
+model+provider pair — aggregates every provider serving a model into one
+row), Providers (BYOK, moved out of Settings), and an admin-only Admin tab
+built on the existing `/admin/pool-keys` routes. The standalone `/admin`
+route and `AdminPage.tsx` were deleted once the Admin tab covered the same
+ground — the sidebar's Admin entry went with it, replaced by the top-right
+Admin pill routing to `/providers?tab=providers-pool`.
+
+**Sticky-header layout took two failed attempts before landing.** First
+tried `position: sticky` on the tab tray + search header so they'd stay
+fixed while the rows/table scrolled underneath. Attempt 1 used a
+hand-guessed pixel offset for where the header should stick relative to the
+tray — wrong, it overlapped the first row. Attempt 2 replaced the guess with
+a `ResizeObserver`-measured tray height exposed via a CSS custom property —
+fixed the overlap, but introduced a ghost-line/paint artifact once the user
+manually tuned the sticky `top` value live in the browser (classic
+`position: sticky` compositing quirk). **The user's own suggested fix was
+the right one**: drop `sticky` entirely and give the scrollable content its
+own nested `overflow-y-auto` region, with the tray + header in a genuinely
+static area above it. This needed `min-h-0` on both the flex wrapper and the
+inner scroll region — without it, a `flex-1` flex child won't actually
+constrain to the available height (defaults to `min-height: auto`), so it
+just grows to fit its content and the *whole page* scrolls instead of the
+intended inner div. Lesson: don't reach for `sticky` + manual offset math
+when a plain nested scroll container does the same job with none of the
+failure modes.
+
+**Sidebar**: merged the Settings button and the account-info (avatar/name/
+email) row into one clickable unit sharing a single click handler, but after
+the first pass applied the hover highlight to both rows, the user corrected
+it — the highlight should only show on the Settings row, account-info stays
+static on hover.
+
+**Settings page**: removed "Chat Defaults" (Default model now lives on the
+Providers page, in the tab tray as a `ModelSwitcher` with a static
+"Default Model" label via a new `triggerLabel` prop — reuses the existing
+dropdown/positioning logic instead of duplicating it). Merged Profile and
+Change Password into one card (photo+name+Edit / email+Sign out / Change
+Password+Clear Data), with Edit and Change Password each opening a small
+centered `SettingsDialog` (positioned `absolute` + `pt-14`, not viewport-
+`fixed`, so it centers within the settings content area excluding the
+floating navbar). Saving the display name now auto-closes its dialog.
+
+**Change Password no longer asks for the current password** — explicit user
+decision: since the caller is already authenticated (the session itself is
+the auth), re-verifying the old password added friction with no real
+security benefit for this personal single/few-user app, and this way the
+same flow doubles as a "forgot password" path too. Removed
+`current_password` from the request model and the verify step in
+`routes/account.py`; `changePassword()` client function dropped to one arg;
+rewrote `test_account.py` for the new 2-test contract. Only backend change
+this session — needed `docker compose up -d --build backend` since the
+backend image has no live source bind mount.
+
+**Background effect (grid + cursor-responsive) is now site-wide.**
+`InteractiveGridBackground` moved from `ChatPage.tsx` into `Layout.tsx`,
+rendered once behind the shared `<Outlet/>`, still gated by the one
+`backgroundEffect` toggle in Settings. Had to strip the opaque `bg-theme-bg`
+some pages (`ProvidersPage.tsx`, `SettingsPage.tsx`, `ImageLabPage.tsx`) set
+on their own root container, since that would've painted over and hidden
+the shared background on every route except chat.
+
+**Unrelated bug caught mid-session, not a regression:** `pytest` runs
+accumulate real usage rows in the dev Postgres `endpoint_usage` table
+(`rate_limiter.seed_from_store()` seeds from the real dev DB, not an
+isolated test DB), and after enough repeated runs this session, Gemini's
+daily quota crossed the 90% block threshold purely from test pollution,
+failing `test_chat_defaults_to_gemini`. Traced via direct SQL query, cleared
+the stray `test-user-id`/`u`/`''`-sentinel rows (real logged-in-user usage
+left untouched), test passes again. Flagging as a pre-existing test-
+isolation gap worth fixing properly at some point, not something this
+session broke.
+
+798 backend tests green (`pytest -n auto`), `tsc --noEmit`/`npm run build`
+clean throughout. Per the user's standing preference this session, no
+Chrome-based live verification was done by Claude — the user checked every
+visual change directly and reported issues back via screenshot, which is
+how both sticky-layout bugs above were actually caught.
+
+---
+
 ### [2026-07-23] — router_failover cleanup: pool secrets wired in, langgraph pinned
 
 Closed the two remaining follow-ups from the 2026-07-21 Phase 1b session.

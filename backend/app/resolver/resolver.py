@@ -5,28 +5,16 @@ from app.registry.schemas import ModelEntry
 from app.core.rate_limiter import EndpointRateLimiter
 from app.core.llm_core import _detect_provider, _provider_headers
 from app.constants import QUALITY_TIE_BAND, TASK_TYPE_TAGS
-
 # Bare provider names/aliases usable in place of a model_id (the "give me any
-# endpoint from this provider" path in Resolver.pick). Every provider that
-# appears in data/registry/endpoints.json must be a value here, or that path
-# silently returns nothing for it. Kept module-level (not a local inside pick)
-# so tests can assert it stays in sync with the shipped registry.
-PROVIDER_ALIASES: Dict[str, str] = {
-    "google": "google",
-    "gemini": "google",
-    "cerebras": "cerebras",
-    "groq": "groq",
-    "huggingface": "huggingface",
-    "github": "github",
-    "openrouter": "openrouter",
-    "mistral": "mistral",
-    "nvidia": "nvidia",
-    "nim": "nvidia",
-    "zhipu": "zhipu",
-    "glm": "zhipu",
-    "sambanova": "sambanova",
-    "kluster": "kluster",
-}
+# endpoint from this provider" path in Resolver.pick). 2026-07-23: derived
+# from the provider registry (data/registry/providers_*.json) instead of a
+# hand-kept copy -- every provider that appears in data/registry/
+# endpoints.json is now automatically a value here, so adding a 12th
+# provider no longer risks that path silently returning nothing for it.
+# Now also includes tavily/brave/kaggle (harmless -- they have no endpoints
+# in endpoints.json, so resolving to them here still yields an empty
+# candidate list and the same NoEndpointError as before).
+from app.registry.providers import PROVIDER_ALIASES
 
 
 class Resolver:

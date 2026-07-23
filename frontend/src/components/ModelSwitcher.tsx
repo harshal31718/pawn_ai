@@ -15,6 +15,12 @@ interface Props {
   onChange: (id: string) => void
   disabled?: boolean
   models: RegistryModel[]
+  // ProvidersPage's "Default Model" trigger: shows this literal, static
+  // label instead of the selected model's name (and hides the provider
+  // suffix span) -- same dropdown, different trigger text/style, so tab
+  // trays that want a fixed label don't have to duplicate the whole
+  // dropdown implementation.
+  triggerLabel?: string
 }
 
 const formatProviderName = (p: string) => {
@@ -34,7 +40,7 @@ const formatProviderList = (providers?: string[]) => {
   return `${firstTwo} +${providers.length - 2} more`
 }
 
-export default function ModelSwitcher({ selected, onChange, disabled, models }: Props) {
+export default function ModelSwitcher({ selected, onChange, disabled, models, triggerLabel }: Props) {
   const [isOpen, setIsOpen] = useState(false)
   const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({})
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -111,16 +117,25 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
           }
           setIsOpen(!isOpen)
         }}
-        className="
-          text-xs bg-theme-surface border border-theme-border rounded-md
-          px-2.5 py-0.5 text-theme-text cursor-pointer
-          hover:bg-theme-surface-hover focus:outline-none focus:ring-1 focus:ring-theme-border
-          disabled:opacity-50 disabled:cursor-not-allowed
-          transition-all flex items-center gap-1.5 active:scale-95 font-medium
-        "
+        className={
+          triggerLabel
+            ? `
+              text-[11px] font-semibold uppercase tracking-wide bg-theme-surface border border-theme-border/50 rounded-xl
+              px-4 py-1.5 text-theme-text-muted hover:text-theme-text cursor-pointer
+              focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed
+              transition-all flex items-center gap-1.5 active:scale-95
+            `
+            : `
+              text-xs bg-theme-surface border border-theme-border rounded-md
+              px-2.5 py-0.5 text-theme-text cursor-pointer
+              hover:bg-theme-surface-hover focus:outline-none focus:ring-1 focus:ring-theme-border
+              disabled:opacity-50 disabled:cursor-not-allowed
+              transition-all flex items-center gap-1.5 active:scale-95 font-medium
+            `
+        }
       >
-        <span>{buttonLabel}</span>
-        {selectedModel?.providers?.[0] && !disabled && (
+        <span>{triggerLabel ?? buttonLabel}</span>
+        {!triggerLabel && selectedModel?.providers?.[0] && !disabled && (
           <span className="text-theme-text-muted font-normal opacity-70">
             · {formatProviderName(selectedModel.providers[0])}
           </span>

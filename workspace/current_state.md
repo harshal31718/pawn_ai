@@ -2,6 +2,106 @@
 
 Last updated: 2026-07-23
 
+**Provider registry + Providers page redesign + Settings cleanup + site-wide
+background effect — DONE (2026-07-23).** Long UI/architecture session,
+frontend-only except one small backend change (password change no longer
+needs current-password).
+
+- **Provider registry (backend):** new `backend/data/registry/providers.json`
+  (single file, glob-loaded via `PROVIDERS_GLOB`, so re-splitting later needs
+  zero code change) — 15 entries (11 pool/chat providers, tavily, brave,
+  kaggle, google_drive), each with `id`/`name`/`official_docs_link`/
+  `signup_link`/`auth_type`/`capabilities`/`aliases`/`type: byok|pool`. New
+  `app/registry/providers.py` loader (`PROVIDERS`, `VALID_PROVIDER_IDS`,
+  `POOL_PROVIDER_IDS`, `PROVIDER_ALIASES`) replaces ~6 previously-hardcoded
+  lists: `key_store.VALID_PROVIDERS`, `pool_key_store.POOL_VALID_PROVIDERS`,
+  `resolver.PROVIDER_ALIASES`, and `EndpointEntry.provider`'s old `Literal`
+  (now a validated `str`, lazy-imported to dodge a circular import). New
+  `GET /registry/providers` route. 14 new/updated tests
+  (`test_registry_integrity.py`, `test_provider_registry.py`), zero
+  regressions. Design docs at `workspace/schemas/provider_schema.md`/
+  `model_schema.md` (Model schema is documented but NOT implemented in code
+  yet — Provider side only).
+- **Providers page (`ProvidersPage.tsx`) rebuilt around 3 tabs** — Models,
+  Providers (BYOK, moved from Settings), and an admin-only Admin tab (reuses
+  the existing `/admin/pool-keys` routes, no backend changes). Old standalone
+  `/admin` route + `AdminPage.tsx` deleted entirely (superseded by the Admin
+  tab); the sidebar's Admin nav entry removed too — the top-right "Admin"
+  pill now routes to `/providers?tab=providers-pool` instead.
+  - Shared `TabHeaderCard` component: col 1 = description + search bar, col
+    2 = green/uppercase headline number + label (tokens remaining / models
+    unlocked / users registered, one per tab).
+  - **Layout took two real iterations to get right.** First pass used
+    `position: sticky` for the tab tray + search header so they'd stay put
+    while rows/table scrolled — this produced two separate bugs (a
+    guessed pixel offset overlapping the first row; then a ghost-line/paint
+    artifact once the user manually re-tuned the sticky `top` value).
+    **Final fix, per the user's own suggested direction:** dropped `sticky`
+    entirely. The tray + active tab's search header now live in a truly
+    static (non-scrolling) flex area; only the rows/table below scroll,
+    inside their own nested `overflow-y-auto` region. Required `min-h-0` on
+    both the flex wrapper and the scroll region — the classic flexbox bug
+    where a `flex-1` child won't actually constrain to available height
+    (and thus won't scroll internally) without it, so the *page* scrolled
+    instead of just the intended inner div.
+  - Search state (`modelsSearch`/`providersSearch`/`adminSearch`) and the
+    admin registered-user count were lifted from `ApiKeysSection.tsx`/
+    `PoolKeysSection.tsx` up into `ProvidersPage.tsx` as controlled props,
+    once the header moved out of those components' own markup.
+  - New "Default Model" dropdown added to the tab tray's right corner —
+    `ModelSwitcher.tsx` gained an optional `triggerLabel` prop (shows a
+    static label instead of the selected model's name, hides the provider
+    suffix) so the existing dropdown/positioning logic could be reused
+    as-is rather than duplicated.
+- **Sidebar footer:** Settings button + account-info (avatar/name/email) rows
+  merged into one clickable `<button>` (either row opens Settings), but the
+  hover/active highlight effect is intentionally scoped to the Settings row
+  only — the account-info row stays visually static on hover, per explicit
+  correction after the first pass applied the highlight to both.
+- **Settings page (`SettingsPage.tsx`):** "Chat Defaults" (Default model)
+  section removed entirely (grid now 2 columns, was 3) since Default Model
+  now lives on the Providers page. Profile and Change Password merged into
+  one card: row 1 = avatar + name + "Edit" button, row 2 = email + Sign out,
+  row 3 = Change Password + Clear Data buttons. "Edit" and "Change Password"
+  each open a new `SettingsDialog` (centered via `absolute inset-0 pt-14`,
+  so it centers within the settings content area only, excluding the
+  floating navbar strip — not a viewport-`fixed` modal). Saving the name in
+  the Edit dialog now auto-closes it.
+- **Change Password no longer requires the current password** (explicit user
+  call — doubles as both "change" and "forgot" from within an already-
+  authenticated session): `PUT /account/password` dropped `current_password`
+  from the request body and the verify-then-replace check entirely, just
+  hashes and sets the new one. `changePassword()` API client signature
+  shrank to one arg. `test_account.py` rewritten for the new contract (2
+  tests, both passing). This is the one backend-touching change in an
+  otherwise frontend-only session — required a `docker compose up -d --build
+  backend` to pick up (the backend image has no live bind mount).
+- **Background effect (grid + cursor-responsive) is now site-wide**, not
+  chat-page-only: `InteractiveGridBackground` moved from `ChatPage.tsx` into
+  `Layout.tsx`, rendered once behind the shared `<Outlet/>` for every
+  authenticated route, still gated by the same `backgroundEffect` toggle.
+  Required removing the opaque `bg-theme-bg` some pages painted on their own
+  root container (`ProvidersPage.tsx`, `SettingsPage.tsx`,
+  `ImageLabPage.tsx`) — otherwise it would've been invisible behind them;
+  `ChatPage.tsx`/`ProjectPage.tsx`/`ProjectsGalleryPage.tsx` were already
+  transparent.
+- **Unrelated data-hygiene fix caught mid-session:** `test_chat_defaults_to_
+  gemini` started failing (`800 passed` → `799 passed, 1 failed`) after many
+  repeated `pytest` runs this session — traced to real accumulated test
+  pollution in the dev Postgres `endpoint_usage` table (`test-user-id`/`u`/
+  the `''` shared-user sentinel rows), since `rate_limiter.seed_from_store()`
+  seeds from the REAL dev database at every app/test startup, not an
+  isolated test DB. Pushed Gemini's daily quota to the 90% block threshold
+  purely from test-run accumulation. Cleared the 24 polluted rows (real
+  logged-in-user usage untouched); test passes again. This is a pre-existing
+  test-isolation gap, not a regression from this session's changes.
+
+798 backend tests green (`pytest -n auto`), `tsc --noEmit`/`npm run build`
+clean throughout. Not live-verified by Claude (project convention this
+session: user does all visual verification in-browser directly, reporting
+back issues via screenshot — this is how both sticky-layout bugs above were
+actually caught and fixed).
+
 **Login change — split Sign In/Sign Up + email-password + change password +
 nudge — DONE (2026-07-23), full stack.** Backend: password auto-generated +
 Argon2id-hashed on a user's TRUE first Google signup only (never on

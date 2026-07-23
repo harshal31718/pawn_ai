@@ -768,6 +768,28 @@ export async function fetchRegistryModels(): Promise<RegistryModel[]> {
   return res.json()
 }
 
+// 2026-07-23: single source of truth for "what is a provider" -- replaces
+// ApiKeysSection.tsx's old hardcoded PROVIDERS/MORE_PROVIDERS/SEARCH_PROVIDERS
+// arrays and the duplicated formatProviderName() functions elsewhere.
+export interface ProviderEntry {
+  id: string
+  name: string
+  official_docs_link: string
+  signup_link: string
+  auth_type: 'bearer_key' | 'oauth' | 'credentials' | 'none'
+  capabilities: ('chat' | 'image' | 'internet' | 'kaggle')[]
+  aliases: string[]
+  type: 'byok' | 'pool'
+  free_tier_note: string | null
+}
+
+export async function fetchRegistryProviders(): Promise<ProviderEntry[]> {
+  const res = await fetch(`${BASE_URL}/registry/providers`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
 // R3: Providers page (free-tier budget dashboard)
 export interface ProviderUsageRow {
   endpoint_id: string
@@ -784,6 +806,14 @@ export interface ProviderUsageRow {
   // PAWN 2.0 Phase D.1: only set for key_source === "pool" -- this user's
   // conservative, guaranteed-yours share of the endpoint's daily budget.
   fair_share_remaining: number | null
+  // Models-test table (2026-07-23): per-minute usage, plus this endpoint's
+  // priority among the model's other endpoints (lower = tried first) so a
+  // one-row-per-model view can pick the "primary" endpoint's numbers.
+  rpm_limit: number | null
+  rpm_used: number
+  tpm_limit: number | null
+  tpm_used: number
+  priority: number
 }
 
 export interface FreeTiersResponse {
@@ -898,16 +928,14 @@ export async function getAdminStats(): Promise<{ registered_users: number }> {
   return res.json()
 }
 
-// Login-change plan (2026-07-23): PUT /account/password.
-// Deliberately does NOT use handle401 -- a 401 here means "current password
-// is incorrect" (an expected, inline-displayable error the user typed wrong),
-// not "your session expired". Calling handle401 would incorrectly log the
-// user out and reload the page on a simple typo.
-export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+// Login-change plan (2026-07-23): PUT /account/password. No current-password
+// check server-side -- the active session is the authentication, so this
+// doubles as both "change" and "forgot" from within Settings.
+export async function changePassword(newPassword: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/account/password`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    body: JSON.stringify({ new_password: newPassword }),
   })
   if (!res.ok) throw new Error(await errorDetail(res))
 }

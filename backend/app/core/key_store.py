@@ -18,6 +18,12 @@ from typing import List, Optional
 from app.config import SHARED_DB_DSN
 from app.core.crypto import decrypt, encrypt
 from app.db import postgres_client
+# Providers a user may supply a key for -- 2026-07-23: derived from the
+# provider registry (data/registry/providers_*.json) instead of a hand-kept
+# copy. Includes "kaggle" now (didn't before) -- harmless, since the
+# dedicated /keys/kaggle route is registered before the generic
+# /keys/{provider} catch-all and always intercepts that literal path first.
+from app.registry.providers import VALID_PROVIDER_IDS as VALID_PROVIDERS
 
 
 # PAWN 2.0 Phase E.4: user_api_keys lives on SHARED_DB_DSN (defaults to
@@ -35,27 +41,6 @@ def fetchall(sql, params=()):
 
 def fetchone(sql, params=()):
     return postgres_client.fetchone(sql, params, dsn=SHARED_DB_DSN)
-
-# Providers a user may supply a key for (mirrors the resolver/secret names).
-VALID_PROVIDERS = {
-    "google",
-    "groq",
-    "cerebras",
-    "huggingface",
-    "github",
-    "openrouter",
-    # Free-tier expansion (R1, 2026-07-21). All OpenAI-compatible with plain
-    # bearer auth -- no provider-specific code needed in llm_core.py.
-    "mistral",
-    "nvidia",
-    "zhipu",
-    "sambanova",
-    "kluster",
-    # Web search (agent tools, Phase A / A.3) — not LLM providers, same BYOK
-    # storage/UX. Preference order when both are configured: tavily, then brave.
-    "tavily",
-    "brave",
-}
 
 # Short-lived in-memory cache of decrypted keys. resolver.pick() calls get_key()
 # several times per chat (once per reasoning step / provider), and it runs inside

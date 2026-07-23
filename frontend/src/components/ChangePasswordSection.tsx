@@ -48,13 +48,15 @@ function PasswordField({
 const MIN_PASSWORD_LENGTH = 8
 
 /** Login-change plan (2026-07-23): Settings → Change Password. Own file,
- *  mirroring how ApiKeysSection.tsx is already split out. Client-side
- *  validation mirrors the backend (new === confirm, length >= 8) before the
- *  round-trip; on success also patches AuthContext's user state so
- *  PasswordNudgeModal doesn't reappear before the next full reload. */
+ *  mirroring how ApiKeysSection.tsx is already split out. No current-password
+ *  field -- the backend no longer asks for it (the active session is the
+ *  auth), so this doubles as both "change" and "forgot" from within
+ *  Settings. Client-side validation mirrors the backend (new === confirm,
+ *  length >= 8) before the round-trip; on success also patches AuthContext's
+ *  user state so PasswordNudgeModal doesn't reappear before the next full
+ *  reload. */
 export default function ChangePasswordSection() {
   const { updateUser } = useAuth()
-  const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
@@ -73,8 +75,7 @@ export default function ChangePasswordSection() {
     }
     setBusy(true)
     try {
-      await changePassword(current, next)
-      setCurrent('')
+      await changePassword(next)
       setNext('')
       setConfirm('')
       updateUser({ password_changed: true })
@@ -88,39 +89,28 @@ export default function ChangePasswordSection() {
   }
 
   return (
-    <section>
-      <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-3">
-        Change Password
-      </h2>
-      <div className="bg-theme-surface border border-theme-border/50 rounded-xl p-3 space-y-2">
-        <PasswordField
-          value={current}
-          onChange={setCurrent}
-          placeholder="Current password"
-          autoComplete="current-password"
-        />
-        <PasswordField
-          value={next}
-          onChange={setNext}
-          placeholder="New password"
-          autoComplete="new-password"
-        />
-        <PasswordField
-          value={confirm}
-          onChange={setConfirm}
-          placeholder="Confirm new password"
-          autoComplete="new-password"
-        />
-        {error && <p className="text-[10px] text-red-500">{error}</p>}
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={busy || !current || !next || !confirm}
-          className="w-full text-xs px-3 py-1.5 bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-        >
-          {saved ? 'Saved' : busy ? 'Saving…' : 'Change Password'}
-        </button>
-      </div>
-    </section>
+    <div className="space-y-2">
+      <PasswordField
+        value={next}
+        onChange={setNext}
+        placeholder="New password"
+        autoComplete="new-password"
+      />
+      <PasswordField
+        value={confirm}
+        onChange={setConfirm}
+        placeholder="Confirm new password"
+        autoComplete="new-password"
+      />
+      {error && <p className="text-[10px] text-red-500">{error}</p>}
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={busy || !next || !confirm}
+        className="w-full text-xs px-3 py-1.5 bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+      >
+        {saved ? 'Saved' : busy ? 'Saving…' : 'Change Password'}
+      </button>
+    </div>
   )
 }

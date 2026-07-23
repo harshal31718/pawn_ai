@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useOutletContext } from 'react-router-dom'
-import { fetchFreeTiers, type FreeTiersResponse, type ProviderUsageRow } from '../api/client'
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
+import { fetchFreeTiers, getAdminStats, type FreeTiersResponse, type ProviderUsageRow } from '../api/client'
+import { useAppContext } from '../contexts/AppContext'
+import { useAuth } from '../contexts/AuthContext'
+import ApiKeysSection from '../components/ApiKeysSection'
+import PoolKeysSection from '../components/PoolKeysSection'
+import TabHeaderCard from '../components/TabHeaderCard'
+import ModelSwitcher from '../components/ModelSwitcher'
 import type { LayoutContext } from './Layout'
+
+type ProvidersTab = 'models' | 'providers' | 'providers-pool'
 
 /** Same small local formatter used in ModelSwitcher.tsx / Message.tsx --
  *  project convention is a per-file copy of this pure function rather than a
@@ -31,48 +39,97 @@ function BudgetBar({ used, limit }: { used: number; limit: number }) {
   )
 }
 
-/** One provider/endpoint card. Each card is self-contained (own border,
- *  own padding) so the parent can lay them out in a responsive grid --
- *  1 column on mobile, more on wider screens -- instead of a single long
- *  divided list that wastes desktop width. */
-function ProviderCard({ row }: { row: ProviderUsageRow }) {
+/** Models tab table. One row per MODEL (not per model+provider pair): a
+ *  model with several provider endpoints (e.g. llama-3.3-70b has 7) still
+ *  gets exactly one row, with every provider serving it listed together in
+ *  the Providers column. TPM/RPM/the progress bar all come from the
+ *  "primary" endpoint -- the one with the lowest `priority` number, i.e.
+ *  the one the resolver actually tries first -- since those numbers are
+ *  inherently per-endpoint and one row can't show all of them at once. */
+function groupRowsByModel(rows: ProviderUsageRow[]) {
+  const byModel = new Map<string, ProviderUsageRow[]>()
+  for (const row of rows) {
+    const group = byModel.get(row.model_id)
+    if (group) group.push(row)
+    else byModel.set(row.model_id, [row])
+  }
+  return Array.from(byModel.values()).map((group) => {
+    const primary = [...group].sort((a, b) => a.priority - b.priority)[0]
+    const providers = group.map((r) => r.provider)
+    return { modelId: primary.model_id, displayName: primary.display_name, providers, primary }
+  })
+}
+
+function ModelsTable({ rows, search }: { rows: ProviderUsageRow[]; search: string }) {
+  const allModels = groupRowsByModel(rows)
+  const query = search.trim().toLowerCase()
+  const models = query
+    ? allModels.filter(
+      (m) =>
+        m.displayName.toLowerCase().includes(query) ||
+        m.providers.some((p) => p.toLowerCase().includes(query) || formatProviderName(p).toLowerCase().includes(query)),
+    )
+    : allModels
+
+  if (allModels.length === 0) {
+    return (
+      <p className="p-3 text-xs text-theme-text-muted">
+        No provider keys configured yet. Add one under the Providers tab to see models here.
+      </p>
+    )
+  }
+
+  if (models.length === 0) {
+    return <p className="p-3 text-xs text-theme-text-muted">No models match "{search}".</p>
+  }
+
   return (
-    <div className="bg-theme-surface border border-theme-border/50 rounded-xl p-3 space-y-1.5 min-w-0">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-theme-text truncate">{row.display_name}</p>
-          <p className="text-[10px] text-theme-text-muted truncate">{formatProviderName(row.provider)}</p>
-        </div>
-        <span className="text-[9px] font-semibold uppercase tracking-wide text-theme-text-muted bg-theme-bg/60 px-1.5 py-0.5 rounded-full shrink-0 select-none">
-          {row.key_source}
-        </span>
-      </div>
-
-      {row.has_published_cap && row.tpd_limit ? (
-        <>
-          <BudgetBar used={row.tpd_used} limit={row.tpd_limit} />
-          <p className="text-[10px] text-theme-text-muted">
-            {formatTokens(row.tpd_remaining ?? 0)} tokens left today · {formatTokens(row.tpd_used)} /{' '}
-            {formatTokens(row.tpd_limit)}
-          </p>
-          {/* PAWN 2.0 Phase D.3: pool rows show the honest, guaranteed-yours
-              share alongside the raw (shared) number above -- the raw
-              number overstates what's actually this user's on a pool key. */}
-          {row.key_source === 'pool' && row.fair_share_remaining != null && (
-            <p className="text-[10px] text-theme-text-muted">
-              Your fair share: {formatTokens(row.fair_share_remaining)} tokens
-            </p>
-          )}
-        </>
-      ) : (
-        <p className="text-[10px] text-theme-text-muted italic">No published token cap</p>
-      )}
-
-      {row.rpd_limit != null && (
-        <p className="text-[9px] text-theme-text-muted">
-          {row.rpd_used} / {row.rpd_limit} requests today
-        </p>
-      )}
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-theme-border/50 text-[10px] uppercase tracking-wide text-theme-text">
+            <th className="text-left font-semibold px-3 py-2">Name</th>
+            <th className="text-left font-semibold px-3 py-2">Providers</th>
+            <th className="text-left font-semibold px-3 py-2 cursor-help" title="Tokens per minute">TPM</th>
+            <th className="text-left font-semibold px-3 py-2 cursor-help" title="Requests per minute">RPM</th>
+            <th className="text-left font-semibold px-3 py-2 cursor-help" title="Requests per day">RPD</th>
+            <th className="text-left font-semibold px-3 py-2 w-40">Rate Limit</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-theme-border/30">
+          {models.map(({ modelId, displayName, providers, primary }) => (
+            <tr key={modelId}>
+              <td className="px-3 py-2 font-medium text-theme-text whitespace-nowrap">{displayName}</td>
+              <td className="px-3 py-2 text-theme-text-muted">
+                {providers.length <= 2
+                  ? providers.map(formatProviderName).join(', ')
+                  : `${providers.slice(0, 2).map(formatProviderName).join(', ')}, +${providers.length - 2}`}
+              </td>
+              <td className="px-3 py-2 text-theme-text-muted whitespace-nowrap">
+                {primary.tpm_limit != null ? `${formatTokens(primary.tpm_used)} / ${formatTokens(primary.tpm_limit)}` : '—'}
+              </td>
+              <td className="px-3 py-2 text-theme-text-muted whitespace-nowrap">
+                {primary.rpm_limit != null ? `${primary.rpm_used} / ${primary.rpm_limit}` : '—'}
+              </td>
+              <td className="px-3 py-2 text-theme-text-muted whitespace-nowrap">
+                {primary.rpd_limit != null ? `${primary.rpd_used} / ${primary.rpd_limit}` : '—'}
+              </td>
+              <td className="px-3 py-2">
+                {primary.has_published_cap && primary.tpd_limit ? (
+                  <div className="space-y-1">
+                    <BudgetBar used={primary.tpd_used} limit={primary.tpd_limit} />
+                    <p className="text-[9px] text-theme-text-muted whitespace-nowrap">
+                      {formatTokens(primary.tpd_remaining ?? 0)} left
+                    </p>
+                  </div>
+                ) : (
+                  <span className="text-[10px] text-theme-text-muted">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -91,9 +148,26 @@ function ProviderCard({ row }: { row: ProviderUsageRow }) {
 export default function ProvidersPage() {
   const navigate = useNavigate()
   const { isSidebarOpen, setIsSidebarOpen } = useOutletContext<LayoutContext>()
+  const { refreshKeys, availableModels, defaultModel, handleSaveDefaultModel, providers } = useAppContext()
+  const { user } = useAuth()
+  const [searchParams] = useSearchParams()
+  const initialTab = searchParams.get('tab')
+  const [tab, setTab] = useState<ProvidersTab>(
+    initialTab === 'providers' || initialTab === 'providers-pool' ? initialTab : 'models',
+  )
   const [data, setData] = useState<FreeTiersResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [modelsSearch, setModelsSearch] = useState('')
+  const [providersSearch, setProvidersSearch] = useState('')
+  const [adminSearch, setAdminSearch] = useState('')
+  const [registeredUsers, setRegisteredUsers] = useState<number | null>(null)
+
+  // Counts for each tab's col-2 search placeholder -- computed straight from
+  // the registry (already in context), no extra fetch needed.
+  const providerRowsCount =
+    providers.filter((p) => p.capabilities.includes('chat') || p.capabilities.includes('internet')).length + 2 // + Drive + Kaggle
+  const poolProvidersCount = providers.filter((p) => p.type === 'pool').length
 
   async function refresh() {
     setError(null)
@@ -111,8 +185,24 @@ export default function ProvidersPage() {
     refresh()
   }, [])
 
+  useEffect(() => {
+    if (!user?.is_admin) return
+    getAdminStats()
+      .then((stats) => setRegisteredUsers(stats.registered_users))
+      .catch(() => { })
+  }, [user?.is_admin])
+
+  // Re-sync the active tab if the ?tab= param changes while this page is
+  // already mounted (e.g. clicking the Admin pill while already on
+  // /providers doesn't remount the component, so the initial useState value
+  // alone wouldn't pick up the new param).
+  useEffect(() => {
+    const t = searchParams.get('tab')
+    if (t === 'providers' || t === 'providers-pool') setTab(t)
+  }, [searchParams])
+
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-theme-bg">
+    <div className="flex-1 flex flex-col h-full overflow-hidden relative">
       {/* Floating Top Header -- identical pill chip to SettingsPage.tsx's/
           ImageLabPage.tsx's ("< Providers", nothing else inside the chip). */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center justify-between w-full">
@@ -147,57 +237,97 @@ export default function ProvidersPage() {
         </div>
       </header>
 
-      <div className="h-full overflow-y-auto pt-14">
-      <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 pb-12 space-y-6">
-        <p className="text-xs text-theme-text-muted leading-relaxed">
-          Your free-tier budget across every provider you've configured a key for.
-        </p>
-
-        {loading && <p className="text-xs text-theme-text-muted">Loading…</p>}
-        {error && <p className="text-xs text-red-500">{error}</p>}
-
-        {data && (
-          <>
-            {/* Headline budget -- None means "no capped endpoint configured",
-                distinct from 0 (exhausted). Rendered as two different, honest
-                states rather than collapsing both into "0 tokens". */}
-            <div className="bg-theme-surface border border-theme-border/50 rounded-xl p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-1">
-                Free tokens remaining today
-              </p>
-              {data.total_tokens_remaining_today != null ? (
-                <p className="text-2xl sm:text-3xl font-semibold text-theme-text">
-                  {formatTokens(data.total_tokens_remaining_today)}
-                </p>
-              ) : (
-                <p className="text-xs text-theme-text-muted italic">
-                  No endpoints with a published daily token cap yet — add a key for a
-                  provider that publishes one (e.g. Groq, Cerebras) to see a number here.
-                </p>
-              )}
-              {data.uncapped_providers.length > 0 && (
-                <p className="text-[10px] text-theme-text-muted mt-2">
-                  Also configured, no published cap:{' '}
-                  {data.uncapped_providers.map(formatProviderName).join(', ')}
-                </p>
-              )}
+      {/* Tab tray + the active tab's search header live in a truly static
+          (non-scrolling) area -- no `sticky`, no z-index/offset math, no
+          scroll-triggered repaint. Only the rows/table below scroll, inside
+          their own independent overflow-y-auto region. */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden pt-14">
+        <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 pt-3 space-y-3 shrink-0">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-1 bg-theme-surface border border-theme-border/50 rounded-xl p-1 w-fit">
+              {(
+                [
+                  'models',
+                  'providers',
+                  // Admin-only -- gated the same way Sidebar.tsx gates its Admin
+                  // nav entry (UX only; the real control is backend
+                  // require_admin on every /admin/pool-keys route).
+                  ...(user?.is_admin ? (['providers-pool'] as const) : []),
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTab(t)}
+                  className={`px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-lg transition-colors cursor-pointer ${tab === t
+                    ? 'bg-theme-bg text-theme-text'
+                    : 'text-theme-text-muted hover:text-theme-text'
+                    }`}
+                >
+                  {t === 'models' ? 'Models' : t === 'providers' ? 'Providers (BYOK)' : 'Admin'}
+                </button>
+              ))}
             </div>
 
-            {data.rows.length === 0 ? (
-              <p className="text-xs text-theme-text-muted">
-                No provider keys configured yet. Add one in Settings to see your free-tier
-                budget here.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {data.rows.map((row) => (
-                  <ProviderCard key={row.endpoint_id} row={row} />
-                ))}
+            <ModelSwitcher
+              selected={defaultModel}
+              onChange={handleSaveDefaultModel}
+              models={availableModels}
+              triggerLabel="Default Model"
+            />
+          </div>
+
+          {tab === 'models' ? (
+            <TabHeaderCard
+              message="One row per model, TPM/RPM/daily budget from its primary (highest-priority) provider."
+              search={modelsSearch}
+              onSearchChange={setModelsSearch}
+              searchPlaceholder="Search models…"
+              value={data?.total_tokens_remaining_today != null ? formatTokens(data.total_tokens_remaining_today) : '—'}
+              label="Tokens remaining today"
+            />
+          ) : tab === 'providers' ? (
+            <TabHeaderCard
+              message="Bring your own providers. Keys are encrypted and never shown again after saving."
+              search={providersSearch}
+              onSearchChange={setProvidersSearch}
+              searchPlaceholder={`Search ${providerRowsCount} providers…`}
+              value={data ? new Set(data.rows.map((r) => r.model_id)).size : '—'}
+              label="Models Unlocked"
+            />
+          ) : (
+            <TabHeaderCard
+              message="Manage the pool providers"
+              search={adminSearch}
+              onSearchChange={setAdminSearch}
+              searchPlaceholder={`Search ${poolProvidersCount} providers…`}
+              value={registeredUsers ?? '—'}
+              label="Users Registered"
+            />
+          )}
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 pt-3 pb-12">
+            {tab === 'models' ? (
+              <div className="bg-theme-surface border border-theme-border/50 rounded-xl overflow-hidden">
+                {loading && <p className="p-3 text-xs text-theme-text-muted">Loading…</p>}
+                {error && <p className="p-3 text-xs text-red-500">{error}</p>}
+                {data && <ModelsTable rows={data.rows} search={modelsSearch} />}
               </div>
+            ) : tab === 'providers' ? (
+              <ApiKeysSection
+                search={providersSearch}
+                onKeysChanged={() => {
+                  refreshKeys()
+                  refresh()
+                }}
+              />
+            ) : (
+              <PoolKeysSection search={adminSearch} />
             )}
-          </>
-        )}
-      </div>
+          </div>
+        </div>
       </div>
     </div>
   )

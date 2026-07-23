@@ -1,5 +1,43 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Literal, List, Optional
+
+
+class ProviderEntry(BaseModel):
+    """2026-07-23: single source of truth for "what is a provider" --
+    replaces what used to be separately hardcoded in
+    key_store.VALID_PROVIDERS, pool_key_store.POOL_VALID_PROVIDERS,
+    resolver.PROVIDER_ALIASES, and this file's own EndpointEntry.provider
+    Literal. See workspace/schemas/provider_schema.md for the design
+    discussion this came out of."""
+    id: str
+    name: str
+    official_docs_link: str
+    signup_link: str
+    # bearer_key: single Authorization header token (every LLM/search provider
+    # today). credentials: a structured payload, not one token (Kaggle's
+    # username+api_token pair). oauth reserved for a future provider.
+    auth_type: Literal["bearer_key", "oauth", "credentials", "none"]
+    # A provider may span more than one -- kept a list rather than the
+    # narrower per-endpoint concern of "which models does it serve".
+    capabilities: List[Literal["chat", "image", "internet", "kaggle"]]
+    # Alternate names that resolve to this id (e.g. "gemini" -> "google").
+    aliases: List[str] = []
+    # pool: the operator MAY share their own key for this provider as a
+    # fallback for keyless users (subject to quota_share's fair division).
+    # byok: bring-your-own-key only, no pool sharing exists for it -- this is
+    # a mechanism distinction, not a cost one; whether a byok provider is
+    # free or paid is the user's own concern, never tracked here.
+    type: Literal["byok", "pool"]
+    # Short human-readable free-tier description (e.g. "Free tier: 30 RPM /
+    # 14.4K RPD") for signup-hint copy on the Providers page -- borrowed from
+    # OmniRoute's providers.ts `freeNote` field after a comparison pass.
+    # Optional/null: not every provider has a snappy one-line summary.
+    free_tier_note: Optional[str] = None
+    # Date string (matches EndpointEntry.last_verified's convention) -- docs/
+    # signup links and free-tier notes rot; this is the field a
+    # registry-refresh-style automation pass would update.
+    last_verified: str
+
 
 class ModelEntry(BaseModel):
     id: str
@@ -26,18 +64,28 @@ class ModelEntry(BaseModel):
 class EndpointEntry(BaseModel):
     id: str
     model_id: str
-    # Must stay in sync with key_store.VALID_PROVIDERS and resolver.pick()'s
-    # provider_map. Adding a provider to data/registry/endpoints.json without
-    # adding it here fails registry load with a Pydantic ValidationError.
-    provider: Literal[
-        "google", "cerebras", "groq", "huggingface", "github", "openrouter",
-        "mistral", "nvidia", "zhipu", "sambanova", "kluster",
-    ]
+    # 2026-07-23: was a hardcoded Literal (required a code change + Pydantic
+    # edit to add a 12th provider); now a plain str, validated at runtime
+    # against the single-source-of-truth data/registry/providers.json
+    # instead of a compile-time enum. Same safety (an unknown provider still
+    # fails registry load), one step later -- at JSON parse time, not
+    # Python-import time.
+    provider: str
     provider_model_id: str
     base_url: str
     priority: int
     rpm_limit: Optional[int] = None
     rpd_limit: Optional[int] = None
+
+    @field_validator("provider")
+    @classmethod
+    def _provider_must_exist(cls, v: str) -> str:
+        # Lazy import: registry.providers imports THIS module (ProviderEntry),
+        # so importing it back at module load would cycle.
+        from app.registry.providers import VALID_PROVIDER_IDS
+        if v not in VALID_PROVIDER_IDS:
+            raise ValueError(f"Unknown provider '{v}' -- not in data/registry/providers.json")
+        return v
     tpm_limit: Optional[int] = None
     tpd_limit: Optional[int] = None
     active: bool

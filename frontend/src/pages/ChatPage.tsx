@@ -4,7 +4,6 @@ import type { Message, Segment, TraceEntry } from '../types'
 import ChatWindow from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
 import type { Mode } from '../components/ModePicker'
-import InteractiveGridBackground from '../components/InteractiveGridBackground'
 import { useAppContext } from '../contexts/AppContext'
 import {
   streamChat,
@@ -76,11 +75,9 @@ export default function ChatPage() {
   const location = useLocation()
   const { isSidebarOpen, setIsSidebarOpen, store } = useOutletContext<LayoutContext>()
   const {
-    isDark,
     availableModels,
     models,
     displayName,
-    backgroundEffect,
     defaultModel,
   } = useAppContext()
 
@@ -553,7 +550,6 @@ export default function ChatPage() {
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden relative">
-      {backgroundEffect && <InteractiveGridBackground darkMode={isDark} />}
       {/* Top gradient flush */}
       <div className="absolute top-0 left-0 right-0 h-10 z-25 pointer-events-none">
         <div className="absolute inset-0 bg-gradient-to-b from-theme-bg via-theme-bg/85 to-transparent" />

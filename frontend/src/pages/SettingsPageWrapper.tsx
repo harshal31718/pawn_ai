@@ -13,10 +13,6 @@ export default function SettingsPage() {
     setTheme,
     displayName,
     handleSaveDisplayName,
-    availableModels,
-    defaultModel,
-    handleSaveDefaultModel,
-    refreshKeys,
     userBubbleColor,
     handleChangeUserBubble,
     aiBubbleColor,
@@ -34,10 +30,6 @@ export default function SettingsPage() {
       onChangeTheme={setTheme}
       displayName={displayName}
       onSaveDisplayName={handleSaveDisplayName}
-      models={availableModels}
-      defaultModel={defaultModel}
-      onSaveDefaultModel={handleSaveDefaultModel}
-      onKeysChanged={refreshKeys}
       userBubbleColor={userBubbleColor}
       onChangeUserBubble={handleChangeUserBubble}
       aiBubbleColor={aiBubbleColor}

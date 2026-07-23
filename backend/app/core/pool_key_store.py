@@ -13,6 +13,11 @@ from typing import Optional
 from app.config import SHARED_DB_DSN
 from app.core.crypto import decrypt, encrypt
 from app.db import postgres_client
+# LLM providers eligible for a pool key -- 2026-07-23: derived from the
+# provider registry (data/registry/providers_*.json, `type: "pool"`) instead
+# of a hand-kept copy. Same set as before (excludes tavily/brave/kaggle --
+# pool sharing is LLM-quota-specific).
+from app.registry.providers import POOL_PROVIDER_IDS as POOL_VALID_PROVIDERS
 
 
 # PAWN 2.0 Phase E.4: pool_api_keys lives on SHARED_DB_DSN, same reasoning as
@@ -27,23 +32,6 @@ def fetchall(sql, params=()):
 
 def fetchone(sql, params=()):
     return postgres_client.fetchone(sql, params, dsn=SHARED_DB_DSN)
-
-# LLM providers eligible for a pool key -- mirrors the 11 Docker secrets
-# wired in docker-compose.yml (Phase 1b). Deliberately excludes tavily/brave
-# (search keys, not LLM providers -- pool sharing is LLM-quota-specific).
-POOL_VALID_PROVIDERS = {
-    "google",
-    "groq",
-    "cerebras",
-    "huggingface",
-    "github",
-    "openrouter",
-    "mistral",
-    "nvidia",
-    "zhipu",
-    "sambanova",
-    "kluster",
-}
 
 # Same short-TTL-cache-with-explicit-eviction pattern as key_store._KEY_CACHE --
 # pool keys are read on every LLM call that might use the pool, so a Postgres

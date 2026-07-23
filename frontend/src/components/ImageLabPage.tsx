@@ -103,7 +103,7 @@ export default function ImageLabPage({ onClose }: Props) {
   const activeModelJobs = allJobs.filter((j) => j.model === activeModelId)
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-theme-bg pt-16">
+    <div className="flex-1 flex flex-col h-full overflow-hidden relative pt-16">
       {/* Floating Top Header */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center justify-between w-full">
         <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">

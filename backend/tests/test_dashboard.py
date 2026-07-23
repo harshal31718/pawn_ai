@@ -175,3 +175,35 @@ def test_quota_share_error_falls_back_to_raw_remaining_in_headline(client):
     assert all(r["fair_share_remaining"] is None for r in capped)
     raw_sum = sum(r["tpd_remaining"] for r in capped)
     assert body["total_tokens_remaining_today"] == raw_sum
+
+
+# ── Models-test table (2026-07-23): rpm/tpm/priority ────────────────────────
+
+
+def test_rows_carry_rpm_and_tpm_fields(client):
+    with _keys("cerebras"):
+        resp = client.get("/dashboard/free-tiers").json()
+    assert resp["rows"]
+    row = resp["rows"][0]
+    for field in ("rpm_limit", "rpm_used", "tpm_limit", "tpm_used", "priority"):
+        assert field in row
+
+
+def test_rpm_usage_reflects_real_recorded_calls(client):
+    with _keys("cerebras"):
+        before = client.get("/dashboard/free-tiers").json()
+        row_before = before["rows"][0]
+
+        rl = app.state.rate_limiter
+        rl.record_call(row_before["endpoint_id"], token_count=0, user_id="test-user-id")
+
+        after = client.get("/dashboard/free-tiers").json()
+        row_after = next(r for r in after["rows"] if r["endpoint_id"] == row_before["endpoint_id"])
+    assert row_after["rpm_used"] == row_before["rpm_used"] + 1
+
+
+def test_priority_matches_registry_endpoint_priority(client):
+    with _keys("cerebras"):
+        resp = client.get("/dashboard/free-tiers").json()
+    assert resp["rows"]
+    assert all(isinstance(r["priority"], int) for r in resp["rows"])

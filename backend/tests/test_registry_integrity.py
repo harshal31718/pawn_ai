@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from app.core import key_store
-from app.registry.schemas import EndpointEntry, ModelEntry
+from app.registry.schemas import EndpointEntry, ModelEntry, ProviderEntry
 
 REGISTRY_SRC = Path(__file__).resolve().parent.parent / "data" / "registry"
 
@@ -38,6 +38,21 @@ def raw_models():
 @pytest.fixture(scope="module")
 def raw_endpoints():
     return _load("endpoints.json")
+
+
+@pytest.fixture(scope="module")
+def raw_providers():
+    """Every providers*.json file, flattened -- mirrors registry/providers.py's
+    own glob-and-merge, but reads the shipped files directly rather than
+    going through the loader (same reasoning as raw_models/raw_endpoints
+    above). Currently one file (providers.json, 2026-07-23 -- merged back
+    from a per-capability split once the catalogue proved small enough that
+    the split wasn't earning its complexity); the glob still supports
+    re-splitting later with zero code change."""
+    entries = []
+    for path in sorted(REGISTRY_SRC.glob("providers*.json")):
+        entries.extend(json.loads(path.read_text(encoding="utf-8")))
+    return entries
 
 
 def test_every_shipped_model_validates(raw_models):
@@ -196,3 +211,64 @@ def test_every_shipped_endpoint_declares_key_source_explicitly(raw_endpoints):
     """
     missing = sorted(e["id"] for e in raw_endpoints if "key_source" not in e)
     assert missing == [], f"endpoints missing an explicit key_source: {missing}"
+
+
+# ── Provider registry (2026-07-23) ──────────────────────────────────────────
+
+
+def test_every_shipped_provider_validates(raw_providers):
+    """Each providers_*.json row parses as a ProviderEntry."""
+    for row in raw_providers:
+        ProviderEntry(**row)
+
+
+def test_no_duplicate_provider_ids_across_files(raw_providers):
+    """The loader (registry/providers.py) raises on this at import time --
+    this test gives the same failure a clear, direct message instead of a
+    startup crash traceback."""
+    ids = [p["id"] for p in raw_providers]
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    assert dupes == [], f"duplicate provider ids across providers_*.json files: {dupes}"
+
+
+def test_no_alias_collides_with_another_providers_id_or_alias(raw_providers):
+    """An alias must resolve unambiguously -- it can't equal another
+    provider's own id (which one would "gemini" mean?), and two providers
+    can't both claim the same alias string."""
+    ids = {p["id"] for p in raw_providers}
+    alias_owners: dict[str, str] = {}
+    problems = []
+    for p in raw_providers:
+        for alias in p.get("aliases", []):
+            if alias in ids:
+                problems.append(f"{p['id']}'s alias {alias!r} collides with a real provider id")
+            elif alias in alias_owners and alias_owners[alias] != p["id"]:
+                problems.append(
+                    f"alias {alias!r} claimed by both {alias_owners[alias]!r} and {p['id']!r}"
+                )
+            else:
+                alias_owners[alias] = p["id"]
+    assert problems == [], problems
+
+
+def test_every_endpoint_provider_exists_in_the_provider_registry(raw_endpoints, raw_providers):
+    """Referential integrity: endpoints.json's `provider` field must reference
+    a real provider id -- this is what EndpointEntry's field_validator
+    enforces at load time (test_every_shipped_endpoint_validates already
+    exercises that indirectly); this test gives a direct, readable failure
+    listing exactly which ids are missing instead of a validation traceback."""
+    provider_ids = {p["id"] for p in raw_providers}
+    used = {e["provider"] for e in raw_endpoints}
+    missing = sorted(used - provider_ids)
+    assert missing == [], f"endpoints.json references unknown provider ids: {missing}"
+
+
+def test_pool_type_providers_match_pool_key_store(raw_providers):
+    """pool_key_store.POOL_VALID_PROVIDERS is derived from providers.py's
+    POOL_PROVIDER_IDS -- this asserts the shipped data's own `type: "pool"`
+    rows are exactly that set, catching a drift if providers.py's derivation
+    logic ever changes without the data being reviewed."""
+    from app.core import pool_key_store
+
+    pool_ids = {p["id"] for p in raw_providers if p["type"] == "pool"}
+    assert pool_ids == pool_key_store.POOL_VALID_PROVIDERS

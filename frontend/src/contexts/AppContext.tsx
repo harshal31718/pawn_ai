@@ -2,8 +2,10 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import {
   AUTO_MODEL_ID,
   fetchRegistryModels,
+  fetchRegistryProviders,
   getKeys,
   healthCheck,
+  type ProviderEntry,
   type RegistryModel,
 } from '../api/client'
 import { useThemePreference } from '../hooks/useThemePreference'
@@ -19,6 +21,7 @@ interface AppContextValue {
 
   /* Models & Providers */
   models: RegistryModel[]
+  providers: ProviderEntry[]
   configuredProviders: string[]
   availableModels: RegistryModel[]
   refreshKeys: () => void
@@ -50,6 +53,7 @@ export function AppContextProvider({ children, userName }: { children: ReactNode
 
   /* ── Models & Providers ── */
   const [models, setModels] = useState<RegistryModel[]>([])
+  const [providers, setProviders] = useState<ProviderEntry[]>([])
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([])
 
   const availableModels = models.filter((m) =>
@@ -72,6 +76,10 @@ export function AppContextProvider({ children, userName }: { children: ReactNode
         setModels(data)
       })
       .catch((err) => console.error('Failed to fetch registry models:', err))
+
+    fetchRegistryProviders()
+      .then(setProviders)
+      .catch((err) => console.error('Failed to fetch registry providers:', err))
 
     refreshKeys()
   }, [])
@@ -166,6 +174,7 @@ export function AppContextProvider({ children, userName }: { children: ReactNode
     setTheme,
     isDark,
     models,
+    providers,
     configuredProviders,
     availableModels,
     refreshKeys,

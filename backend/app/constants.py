@@ -33,6 +33,22 @@ ENDPOINTS_FILE    = REGISTRY_DIR / "endpoints.json"
 # registry-refresh, isolated per test worker); presets aren't, so they don't
 # need or want that isolation.
 IMAGE_PRESETS_FILE = Path(__file__).resolve().parent.parent / "data" / "registry" / "image_presets.json"
+# Provider registry (2026-07-23): same reasoning as IMAGE_PRESETS_FILE above --
+# static reference data (which providers exist, their auth type/capabilities/
+# pool-eligibility), not per-request-mutable state, so no seeding step and no
+# per-test-worker isolation copy. Single source of truth replacing what used
+# to be separately hardcoded in key_store.VALID_PROVIDERS,
+# pool_key_store.POOL_VALID_PROVIDERS, resolver.PROVIDER_ALIASES, and
+# EndpointEntry.provider's old Pydantic Literal.
+#
+# 2026-07-23: kept as ONE file (providers.json) while the catalogue is small
+# (~15 providers) -- an earlier pass split this into one file per capability
+# (providers_chat.json/providers_internet.json/...), but that's unnecessary
+# complexity at this size. The loader (registry/providers.py) globs
+# providers*.json, so re-splitting later (if the catalogue grows toward
+# 200+) needs zero code change -- just moving JSON objects into more files.
+PROVIDERS_DIR = Path(__file__).resolve().parent.parent / "data" / "registry"
+PROVIDERS_GLOB = "providers*.json"
 MEMORY_DIR        = DATA_DIR / "memory"
 MEMORY_DB         = MEMORY_DIR / "memory.db"
 RATE_LIMITS_DIR   = DATA_DIR / "rate_limits"

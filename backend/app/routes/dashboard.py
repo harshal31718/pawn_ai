@@ -77,6 +77,19 @@ class ProviderUsageRow(BaseModel):
     tpd_used: int
     tpd_remaining: Optional[int]  # None when the provider publishes no cap
     has_published_cap: bool
+    # Models-test table (2026-07-23): per-minute usage was already tracked by
+    # rate_limiter (requests_this_minute/tokens_this_minute) but never
+    # exposed here -- only the daily rpd/tpd fields were. Same
+    # None-vs-published-cap honesty as the tpd fields above.
+    rpm_limit: Optional[int]
+    rpm_used: int
+    tpm_limit: Optional[int]
+    tpm_used: int
+    # This endpoint's priority among the model's other endpoints (lower =
+    # tried first by the resolver) -- lets a client group rows by model_id
+    # and pick the "primary" endpoint for a one-row-per-model view without
+    # a second round-trip.
+    priority: int
     # PAWN 2.0 Phase D.1: only set for key_source == "pool" -- this user's
     # conservative, guaranteed-yours share of a capped endpoint's daily
     # budget (tpd_limit / N - their own consumption today), matching
@@ -162,6 +175,11 @@ async def get_free_tiers(request: Request) -> FreeTiersResponse:
                     tpd_used=snapshot["tokens_today"],
                     tpd_remaining=remaining,
                     has_published_cap=has_cap,
+                    rpm_limit=ep.rpm_limit,
+                    rpm_used=snapshot["requests_this_minute"],
+                    tpm_limit=ep.tpm_limit,
+                    tpm_used=snapshot["tokens_this_minute"],
+                    priority=ep.priority,
                 )
             )
 
