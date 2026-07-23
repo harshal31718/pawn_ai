@@ -37,39 +37,42 @@ class Resolver:
     def _resolve_key(self, ep, user_id: Optional[str]) -> str:
         """Resolve the API key for an endpoint.
 
-        Phase 1b: two possible sources, gated by `ep.key_source`.
+        Three possible sources, gated by `ep.key_source`.
           - "byok"   (default): only the user's own Settings-configured key.
-            Unchanged from pre-Phase-1b behavior.
           - "pool":  only the operator's shared free-tier key
             (`config.read_pool_key`); the user's own BYOK key for this
             provider, if any, is deliberately ignored.
-          - "either": try the pool key FIRST, fall back to the user's BYOK key.
-            This precedence (pool before BYOK) is a deliberate 2026-07-21 call —
-            it conserves each user's own provider-side limits by spending the
-            operator's shared pool first, rather than the more obvious
-            "use what's yours before touching the shared pot" ordering.
+          - "either": try the user's own BYOK key FIRST, fall back to the
+            operator's shared pool key. **BYOK-first** (PAWN 2.0 Phase A.1,
+            2026-07-23) — reverses Phase 1b's pool-first default: the pool is
+            now a fallback for keyless users only, so a user who brings their
+            own key never touches the shared pot.
 
         Returns "" when no usable key exists for this endpoint under its
         key_source policy.
         """
         key_source = getattr(ep, "key_source", "byok")
 
-        if key_source in ("pool", "either"):
-            # Import here (not at module load) to keep config.py's secret
-            # reads lazy and mockable in tests, matching key_store's own
-            # deferred-import convention below.
+        if key_source == "pool":
             from app.config import read_pool_key
-            pool_key = read_pool_key(ep.provider)
-            if pool_key:
-                return pool_key
-            if key_source == "pool":
-                return ""
+            return read_pool_key(ep.provider) or ""
 
-        if not user_id:
+        # "byok" and "either" both check the user's own key first.
+        byok_key = ""
+        if user_id:
+            # Import here to avoid a hard dependency on Supabase at import time / in tests.
+            from app.core import key_store
+            byok_key = key_store.get_key(user_id, ep.provider) or ""
+        if byok_key:
+            return byok_key
+        if key_source != "either":
             return ""
-        # Import here to avoid a hard dependency on Supabase at import time / in tests.
-        from app.core import key_store
-        return key_store.get_key(user_id, ep.provider) or ""
+
+        # Import here (not at module load) to keep config.py's secret
+        # reads lazy and mockable in tests, matching key_store's own
+        # deferred-import convention above.
+        from app.config import read_pool_key
+        return read_pool_key(ep.provider) or ""
 
     def pick(self, model_id: str, user_id: Optional[str] = None) -> List[Tuple[str, str, Dict[str, str], str, str]]:
         """

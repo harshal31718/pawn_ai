@@ -2,6 +2,14 @@
 
 Last updated: 2026-07-23
 
+**PAWN 2.0 Phase A done (BYOK-first precedence flip):**
+`resolver._resolve_key` and `dashboard._usable_key_source` now check the
+user's own BYOK key before the operator's pool for `either` endpoints
+(reverses Phase 1b's pool-first default) — the pool is a fallback for
+keyless users only. 696 backend tests green, live-verified via Chrome
+(`/providers` renders correctly, all-BYOK as expected with no pool keys
+configured locally).
+
 **PAWN 2.0 Phase E.1–E.3 done (dev/prod env isolation):** `config.PAWN_ENV`
 (`dev`/`prod`, safe default `dev`) drives `constants.DRIVE_ROOT_NAME`
 (`"PAWN-dev"`/`"PAWN"`, wired through `drive.py`'s `get_or_create_root()`) and

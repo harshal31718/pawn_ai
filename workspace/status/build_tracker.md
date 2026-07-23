@@ -23,11 +23,27 @@ decisions + per-step done-criteria). Successor to `router_failover/` (done). Bra
 first, protects prod while testing on dev) → **A** → **B** → **E.4–E.5** (shared keys
 DB, needs B) → **C** → **D**. Phases below are listed A–E for reference, not build order.
 
-- `[ ]` **Phase A — BYOK-first precedence flip** (ships first, isolated)
-  - A.1 `resolver._resolve_key`: BYOK before pool for `either`
-  - A.2 `dashboard._usable_key_source`: mirror new order
-  - A.3 update stale "pool-first" docstrings/comments
-  - A.4 `test_pool_keys.py`: reverse fallback expectations + keyed-user-never-uses-pool regression
+- `[x]` **Phase A — BYOK-first precedence flip** ✓ (2026-07-23)
+  `resolver.Resolver._resolve_key`: for `key_source == "either"`, checks the
+  user's own BYOK key first (short-circuits, never even reading the pool key
+  when present), falls back to `read_pool_key(ep.provider)` only when the
+  user holds no key — reverses Phase 1b's pool-first default.
+  `dashboard._usable_key_source` mirrors the same order so the badge reports
+  `"byok"` whenever the user holds a key, even if a pool key also exists for
+  that provider. Updated the stale "pool-first, user's 2026-07-21 call"
+  docstrings in both files plus `registry/schemas.py`'s `key_source` field
+  comment. `test_pool_keys.py`: `test_either_prefers_pool_when_both_available`
+  → `test_either_prefers_byok_when_both_available`,
+  `test_either_falls_back_to_byok_when_pool_unconfigured` →
+  `test_either_falls_back_to_pool_when_byok_unconfigured`, new
+  `test_keyed_user_never_consumes_the_pool` regression (asserts `get_key` is
+  actually the thing that resolved the key, not just that the return value
+  matches), dashboard's `test_pool_preferred_over_byok_in_key_source_label` →
+  `test_byok_preferred_over_pool_in_key_source_label`. 696 backend tests green
+  (up from 695), `pytest -n auto` clean, `tsc --noEmit` clean. Live-verified
+  via Chrome: `/providers` renders correctly post-flip (all rows show `BYOK`
+  badges, as expected — no pool keys are configured in this dev environment,
+  so the flip has no visible row-label change here, but nothing regressed).
 - `[ ]` **Phase B — Admin role + DB-backed pool keys + admin page**
   - B.1 `require_admin` dependency (hardcoded `admin.pawnai@gmail.com`)
   - B.2 `pool_api_keys` table + migration + `schema.sql` DDL

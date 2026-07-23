@@ -15,6 +15,11 @@ Phase 1b: a row now appears if the user can reach the endpoint through EITHER
 key source, and `key_source` reports which one is actually in play for them
 right now (see `_usable_key_source`) -- a user with no BYOK keys at all can
 still see rows here if the operator has configured pool keys.
+
+PAWN 2.0 Phase A.2 (2026-07-23): `_usable_key_source` is now BYOK-first,
+mirroring resolver.Resolver._resolve_key's reversed precedence -- a user
+with their own key is reported as "byok" even if the operator has also
+configured a pool key for that provider.
 """
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -27,19 +32,23 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 def _usable_key_source(ep, user_id: str) -> Optional[str]:
-    """Phase 1b: which key source THIS user is actually drawing on for `ep`,
-    or None if neither is available. Mirrors resolver.Resolver._resolve_key's
-    precedence exactly (pool first for "pool"/"either", since that's the
-    user's locked 2026-07-21 call) -- kept as a separate, parallel
-    implementation rather than importing the resolver, since this route only
-    needs a yes/no + label, not a real key, and doesn't want a dependency on
-    Resolver's constructor (registry + rate_limiter) for that.
+    """Which key source THIS user is actually drawing on for `ep`, or None if
+    neither is available. Mirrors resolver.Resolver._resolve_key's precedence
+    exactly -- kept as a separate, parallel implementation rather than
+    importing the resolver, since this route only needs a yes/no + label, not
+    a real key, and doesn't want a dependency on Resolver's constructor
+    (registry + rate_limiter) for that.
+
+    **BYOK-first** (PAWN 2.0 Phase A.2, 2026-07-23): reverses Phase 1b's
+    pool-first order -- a user with their own key for "either" endpoints is
+    reported as "byok", never "pool", even when the operator has also
+    configured a pool key for that provider.
     """
     key_source = getattr(ep, "key_source", "byok")
-    if key_source in ("pool", "either") and read_pool_key(ep.provider):
-        return "pool"
     if key_source != "pool" and key_store.get_key(user_id, ep.provider):
         return "byok"
+    if key_source in ("pool", "either") and read_pool_key(ep.provider):
+        return "pool"
     return None
 
 

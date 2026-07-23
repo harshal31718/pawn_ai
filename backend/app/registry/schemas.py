@@ -50,10 +50,11 @@ class EndpointEntry(BaseModel):
     #               (`config.read_pool_key`); ignores any BYOK key the user
     #               may hold for this provider. Not used by any endpoint yet;
     #               a lever for forcing specific models onto the pool later.
-    #   "either" -- may use either. Precedence is POOL FIRST, BYOK fallback
-    #               (user's explicit 2026-07-21 call, made to conserve users'
-    #               own provider-side limits ahead of the operator's shared
-    #               ones) -- see resolver.Resolver._resolve_key.
+    #   "either" -- may use either. Precedence is BYOK FIRST, pool fallback
+    #               (PAWN 2.0 Phase A.1, 2026-07-23 -- reverses Phase 1b's
+    #               pool-first default: the pool is a fallback for keyless
+    #               users only, so a user's own key is never displaced by the
+    #               shared pot) -- see resolver.Resolver._resolve_key.
     key_source: Literal["byok", "pool", "either"] = "byok"
 
 class ModelResponse(BaseModel):

@@ -58,21 +58,34 @@ def test_pool_only_never_falls_back_to_byok():
         assert r._resolve_key(_ep("pool"), "u1") == ""
 
 
-def test_either_prefers_pool_when_both_available():
-    """The user's locked 2026-07-21 precedence call: pool FIRST, BYOK as
-    fallback -- conserves each user's own provider-side limits by spending the
-    operator's shared pool ahead of them."""
+def test_either_prefers_byok_when_both_available():
+    """PAWN 2.0 Phase A.1 precedence (2026-07-23, reverses Phase 1b): BYOK
+    FIRST, pool as fallback -- a user who brings their own key is never
+    displaced onto the shared pool, which exists only for keyless users."""
     r = _resolver()
     with patch("app.core.key_store.get_key", return_value="byok-key"), \
+         patch("app.config.read_pool_key", return_value="pool-key"):
+        assert r._resolve_key(_ep("either"), "u1") == "byok-key"
+
+
+def test_either_falls_back_to_pool_when_byok_unconfigured():
+    r = _resolver()
+    with patch("app.core.key_store.get_key", return_value=None), \
          patch("app.config.read_pool_key", return_value="pool-key"):
         assert r._resolve_key(_ep("either"), "u1") == "pool-key"
 
 
-def test_either_falls_back_to_byok_when_pool_unconfigured():
+def test_keyed_user_never_consumes_the_pool():
+    """Regression for Phase A.1: even when the pool key is checked first in
+    a naive implementation, a user who holds their own key for this provider
+    must resolve to it -- never silently spend the shared pool's quota on
+    their behalf."""
     r = _resolver()
-    with patch("app.core.key_store.get_key", return_value="byok-key"), \
-         patch("app.config.read_pool_key", return_value=None):
-        assert r._resolve_key(_ep("either"), "u1") == "byok-key"
+    with patch("app.core.key_store.get_key", return_value="byok-key") as get_key, \
+         patch("app.config.read_pool_key", return_value="pool-key") as read_pool:
+        result = r._resolve_key(_ep("either"), "u1")
+    assert result == "byok-key"
+    get_key.assert_called_once()
 
 
 def test_either_empty_when_neither_available():
@@ -163,16 +176,16 @@ def test_pool_key_alone_surfaces_a_row_with_no_byok_key(client):
     assert all(r["key_source"] == "pool" for r in google_rows)
 
 
-def test_pool_preferred_over_byok_in_key_source_label(client):
-    """Matches the resolver's precedence: when both a BYOK key and a pool key
-    are available for the same provider, the row must report "pool" (what's
-    actually being drawn on), not "byok"."""
+def test_byok_preferred_over_pool_in_key_source_label(client):
+    """Matches the resolver's PAWN 2.0 Phase A.2 precedence: when both a BYOK
+    key and a pool key are available for the same provider, the row must
+    report "byok" (what's actually being drawn on), not "pool"."""
     with _keys("google"), _pool("google"):
         resp = client.get("/dashboard/free-tiers")
     body = resp.json()
     google_rows = [r for r in body["rows"] if r["provider"] == "google"]
     assert google_rows
-    assert all(r["key_source"] == "pool" for r in google_rows)
+    assert all(r["key_source"] == "byok" for r in google_rows)
 
 
 def test_byok_row_reported_when_no_pool_key_configured(client):
