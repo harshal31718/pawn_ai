@@ -21,6 +21,7 @@ os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from google.auth.transport.requests import Request as GRequest
 from google.oauth2.credentials import Credentials
@@ -28,9 +29,11 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, FRONTEND_URL, OAUTH_REDIRECT_URI
+from app.core import login_rate_limiter
 from app.core.admin import is_admin
 from app.core.crypto import encrypt
 from app.core.jwt_utils import create_token, decode_token
+from app.core.password_utils import generate_password, hash_password, verify_password
 from app.db.postgres_client import execute, fetchone
 
 import jwt as pyjwt
@@ -90,6 +93,47 @@ async def login():
     return {"auth_url": auth_url}
 
 
+class LoginPasswordRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/login-password")
+async def login_password(req: LoginPasswordRequest, request: Request):
+    """Email+password login (login-change plan, 2026-07-23) -- stays under
+    /auth/ (public, like /login and /callback), deliberately not behind
+    AuthMiddleware since no token exists yet.
+
+    Generic 401 on any failure (unknown email OR wrong password) -- an
+    identical message either way, so the response carries no
+    user-enumeration signal.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    email = req.email.strip().lower()
+
+    if login_rate_limiter.is_blocked(client_ip, email):
+        raise HTTPException(429, "Too many failed attempts. Try again later.")
+
+    row = fetchone(
+        "select user_id, email, name, picture, password_hash, password_changed "
+        "from users where email = %s",
+        (email,),
+    )
+    if not row or not row.get("password_hash") or not verify_password(req.password, row["password_hash"]):
+        login_rate_limiter.record_failure(client_ip, email)
+        raise HTTPException(401, "Invalid email or password")
+
+    login_rate_limiter.record_success(client_ip, email)
+    user_id = row["user_id"]
+    token = create_token(user_id, row["email"])
+    user_json = {
+        "id": user_id, "email": row["email"], "name": row.get("name", ""),
+        "picture": row.get("picture", ""), "is_admin": is_admin(row["email"]),
+        "password_changed": row["password_changed"],
+    }
+    return {"token": token, "user": user_json}
+
+
 @router.get("/callback")
 async def callback(code: str, request: Request):
     """Exchange OAuth code for tokens, upsert user, issue JWT."""
@@ -114,16 +158,25 @@ async def callback(code: str, request: Request):
     name = user_info.get("name", "")
     picture = user_info.get("picture", "")
 
+    # Login-change plan (2026-07-23): generate+hash a password up front
+    # (cheap even when discarded on a re-login) and detect a TRUE first
+    # insert via `xmax = 0` so Google re-logins never touch password_hash/
+    # password_changed -- only the very first insert for this user_id sets them.
+    generated_password = generate_password()
+    password_hash = hash_password(generated_password)
+
     # Upsert user profile
-    execute(
+    row = fetchone(
         """
-        insert into users (user_id, email, name, picture)
-        values (%s, %s, %s, %s)
+        insert into users (user_id, email, name, picture, password_hash, password_changed)
+        values (%s, %s, %s, %s, %s, false)
         on conflict (user_id) do update
           set email = excluded.email, name = excluded.name, picture = excluded.picture
+        returning (xmax = 0) as inserted, password_changed
         """,
-        (user_id, email, name, picture),
+        (user_id, email, name, picture, password_hash),
     )
+    is_new_user, password_changed = row["inserted"], row["password_changed"]
 
     # Store encrypted Drive tokens
     expires_at = None
@@ -153,13 +206,20 @@ async def callback(code: str, request: Request):
     # PAWN 2.0 Phase B.1: carried on the callback redirect payload (not just
     # /auth/me) since the frontend persists THIS shape to localStorage as its
     # long-lived AuthUser and never re-fetches /auth/me after login.
-    user_json = json.dumps(
-        {"id": user_id, "email": email, "name": name, "picture": picture, "is_admin": is_admin(email)}
-    )
+    user_json = json.dumps({
+        "id": user_id, "email": email, "name": name, "picture": picture,
+        "is_admin": is_admin(email), "password_changed": password_changed,
+    })
 
     # Redirect frontend to handle token storage
     from urllib.parse import quote
     redirect_url = f"{_FRONTEND_URL}/?token={token}&user={quote(user_json)}"
+    if is_new_user:
+        # One-time plaintext reveal -- the frontend's GeneratedPasswordModal
+        # shows this once then strips it via the existing unconditional
+        # history.replaceState({}, '', '/') call, same mechanism already
+        # used to remove `token`/`user` from the URL after the callback.
+        redirect_url += f"&generated_password={quote(generated_password)}"
     return RedirectResponse(redirect_url)
 
 
@@ -175,7 +235,14 @@ async def me(request: Request):
     except pyjwt.PyJWTError:
         raise HTTPException(401, "Invalid token")
 
-    row = fetchone("select * from users where user_id = %s", (payload["sub"],))
+    # Login-change plan (2026-07-23): explicit column list, not `select *` --
+    # `password_hash` must never be returned to the client, regardless of
+    # future column additions to `users`.
+    row = fetchone(
+        "select user_id, email, name, picture, password_changed, created_at "
+        "from users where user_id = %s",
+        (payload["sub"],),
+    )
     if not row:
         raise HTTPException(404, "User not found")
     # PAWN 2.0 Phase B.1: frontend keys off this backend flag rather than

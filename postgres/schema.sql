@@ -14,11 +14,15 @@ create extension if not exists pgcrypto;  -- gen_random_uuid() (image_sessions/i
 -- ---------------------------------------------------------------------------
 
 create table if not exists users (
-  user_id    text primary key,          -- Google OAuth "sub" claim
-  email      text unique not null,
-  name       text,
-  picture    text,
-  created_at timestamptz default now()
+  user_id          text primary key,    -- Google OAuth "sub" claim
+  email            text unique not null,
+  name             text,
+  picture          text,
+  created_at       timestamptz default now(),
+  -- Login-change plan (2026-07-23): auto-generated at true first-insert only
+  -- (Google re-logins never touch this) -- see routes/auth.py's callback.
+  password_hash    text,
+  password_changed boolean not null default false
 );
 
 create table if not exists user_drive_tokens (

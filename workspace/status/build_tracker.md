@@ -11,6 +11,57 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
+## Login change — split Sign In/Sign Up + email-password + change password + nudge (registered 2026-07-23)
+
+Plan: `workspace/plan/architecture_2.0/login_change.md` (gitignored, local-only —
+user-authored, full design + 14-step sequencing already locked). Backend fully
+first, then frontend, matching gate-scoping rules. Security-sensitive (auth,
+password hashing) — security-auditor runs on every backend step.
+
+- `[x]` **1 — Migration + `password_utils.py` + `argon2-cffi`** ✓ (2026-07-23)
+  `postgres/migrations/2026-07_users_password.sql` (`password_hash text`,
+  `password_changed boolean not null default false`) + matching
+  `schema.sql` DDL, applied to local dev Postgres. New
+  `core/password_utils.py`: `generate_password()` (ambiguous-char-excluded
+  alphabet), `hash_password()`/`verify_password()` (Argon2id via
+  `argon2-cffi`, added to `requirements.txt`). New `test_password_utils.py`
+  (8 tests). 767 backend tests green (up from 759).
+- `[x]` **2 — `login_rate_limiter.py`** ✓ (2026-07-23) In-memory,
+  `(ip, email)`-keyed (email matched case-insensitively), sliding 15-minute
+  window via `collections.deque`, blocks at 8 failures, `record_success`
+  clears history. New `test_login_rate_limiter.py` (7 tests, monkeypatched
+  `time.time()` for the window-expiry case, matching
+  `test_rate_limiter.py`'s existing convention). 774 backend tests green
+  (up from 767).
+- `[x]` **3 — `auth.py`** ✓ (2026-07-23) `/callback` now generates+hashes a
+  password on every call (cheap even when discarded) but only persists it on
+  a TRUE first insert (`returning (xmax = 0) as inserted, password_changed`
+  -- Google re-logins never touch `password_hash`/`password_changed` since
+  they're absent from `do update set`). Redirect appends
+  `&generated_password=` only when `is_new_user`. New `POST
+  /auth/login-password` (generic 401 for both wrong-password and
+  unknown-email, gated by the new `login_rate_limiter`). `/me` now selects
+  an explicit column list (never `password_hash`) and returns
+  `password_changed`. New tests in `test_auth.py` (13: `/me` password fields
+  + 4 login-password cases including the rate-limit 429). 779 backend tests
+  green (up from 774).
+- `[x]` **4 — `account.py`** ✓ (2026-07-23) New `routes/account.py`:
+  `PUT /account/password` (behind `AuthMiddleware`, `request.state.user_id`
+  already set) verifies current password, rejects new passwords under 8
+  chars, else updates the hash and sets `password_changed = true`.
+  Registered in `main.py`. New `test_account.py` (4 tests). 783 backend
+  tests green (up from 779), `pytest -n auto` clean. **Backend is now fully
+  done for this plan** — moving to frontend (steps 5-10).
+- `[ ]` **5 — `AuthContext.tsx`**: `password_changed`, `applySession`, `loginWithPassword`, generated-password state
+- `[ ]` **6 — `client.ts`**: `changePassword`
+- `[ ]` **7 — `SignInPage.tsx`** + `/login` route + `LandingPage.tsx` cross-link
+- `[ ]` **8 — `GeneratedPasswordModal.tsx`** + mount point
+- `[ ]` **9 — `ChangePasswordSection.tsx`** + `SettingsPage.tsx` wiring
+- `[ ]` **10 — `PasswordNudgeModal.tsx`** + `Layout.tsx` mount
+- `[ ]` **11 — Full cross-stack gate** (backend pytest + frontend tsc/build) + live Chrome verification of the manual checklist (plan §Verification, 11 items)
+
+---
+
 ## PAWN 2.0 — Multi-user shared pool + admin + OmniRoute quota-share (registered 2026-07-23)
 
 Plan: `workspace/plan/architecture_2.0/00_overview.md` (read it first — full locked

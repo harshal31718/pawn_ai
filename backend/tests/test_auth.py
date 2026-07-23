@@ -95,3 +95,90 @@ def test_me_404_when_user_row_missing(client):
     with patch("app.routes.auth.fetchone", return_value=None):
         resp = client.get("/auth/me", headers=_auth(token))
     assert resp.status_code == 404
+
+
+def test_me_reports_password_changed_and_never_leaks_the_hash(client):
+    token = create_token("user-1", "u1@example.com")
+    row = {
+        "user_id": "user-1", "email": "u1@example.com", "name": "U1",
+        "password_changed": True,
+    }
+    with patch("app.routes.auth.fetchone", return_value=row):
+        resp = client.get("/auth/me", headers=_auth(token))
+    body = resp.json()
+    assert body["password_changed"] is True
+    assert "password_hash" not in body
+
+
+# ── Login-change plan (2026-07-23): POST /auth/login-password ──────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limiter():
+    from app.core import login_rate_limiter
+    login_rate_limiter._failures.clear()
+    yield
+    login_rate_limiter._failures.clear()
+
+
+def test_login_password_succeeds_with_correct_password(client):
+    from app.core.password_utils import hash_password
+
+    row = {
+        "user_id": "user-1", "email": "u1@example.com", "name": "U1", "picture": "",
+        "password_hash": hash_password("correct-password"), "password_changed": False,
+    }
+    with patch("app.routes.auth.fetchone", return_value=row):
+        resp = client.post(
+            "/auth/login-password",
+            json={"email": "u1@example.com", "password": "correct-password"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["token"]
+    assert body["user"]["email"] == "u1@example.com"
+    assert body["user"]["password_changed"] is False
+    assert "password_hash" not in body["user"]
+
+
+def test_login_password_rejects_wrong_password(client):
+    from app.core.password_utils import hash_password
+
+    row = {
+        "user_id": "user-1", "email": "u1@example.com", "name": "U1", "picture": "",
+        "password_hash": hash_password("correct-password"), "password_changed": False,
+    }
+    with patch("app.routes.auth.fetchone", return_value=row):
+        resp = client.post(
+            "/auth/login-password",
+            json={"email": "u1@example.com", "password": "wrong-password"},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid email or password"
+
+
+def test_login_password_rejects_unknown_email_with_identical_message(client):
+    with patch("app.routes.auth.fetchone", return_value=None):
+        resp = client.post(
+            "/auth/login-password",
+            json={"email": "nobody@example.com", "password": "anything"},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid email or password"
+
+
+def test_login_password_rate_limited_after_max_failures(client):
+    from app.core.login_rate_limiter import MAX_FAILURES
+
+    with patch("app.routes.auth.fetchone", return_value=None):
+        for _ in range(MAX_FAILURES):
+            resp = client.post(
+                "/auth/login-password",
+                json={"email": "target@example.com", "password": "wrong"},
+            )
+            assert resp.status_code == 401
+        final = client.post(
+            "/auth/login-password",
+            json={"email": "target@example.com", "password": "wrong"},
+        )
+    assert final.status_code == 429

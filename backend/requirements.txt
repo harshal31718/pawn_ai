@@ -27,3 +27,7 @@ google-auth-httplib2
 PyJWT
 # Chat agent refinement (Phase A / A.3): fetch_url's readable-text extraction.
 trafilatura
+# Login-change plan (2026-07-23): Argon2id password hashing for email+password
+# login. crypto.py's AES-256-GCM (above) is reversible symmetric encryption --
+# wrong primitive for passwords.
+argon2-cffi
