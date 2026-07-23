@@ -55,7 +55,7 @@ const MIN_PASSWORD_LENGTH = 8
  *  length >= 8) before the round-trip; on success also patches AuthContext's
  *  user state so PasswordNudgeModal doesn't reappear before the next full
  *  reload. */
-export default function ChangePasswordSection() {
+export default function ChangePasswordSection({ onSuccess }: { onSuccess?: () => void }) {
   const { updateUser } = useAuth()
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -81,6 +81,8 @@ export default function ChangePasswordSection() {
       updateUser({ password_changed: true })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
+      // Auto-close the dialog on success (matches the Edit dialog's behavior).
+      onSuccess?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to change password.')
     } finally {
