@@ -6,11 +6,22 @@ OLLAMA_URL = os.getenv("PAWN_OLLAMA_URL", "http://localhost:11434")
 
 
 def _resolve_gemini_key(user_id: str | None) -> str:
-    """Return the user's Google BYOK key (from Settings), or "" if none."""
-    if not user_id:
-        return ""
+    """Return the Google key to embed with: the user's own BYOK key first,
+    falling back to the operator's shared pool key -- the same BYOK-first,
+    pool-fallback precedence the chat resolver uses (see
+    resolver._resolve_key_and_source / dashboard._key_source_availability).
+
+    2026-07-23: previously BYOK-only, so a keyless user relying entirely on the
+    pool got working chat but broken memory embeddings ("No Google API key
+    configured for embeddings") -- an inconsistency between the two paths.
+    """
     from app.core import key_store
-    return key_store.get_key(user_id, "google") or ""
+    from app.config import read_pool_key
+    if user_id:
+        byok = key_store.get_key(user_id, "google")
+        if byok:
+            return byok
+    return read_pool_key("google") or ""
 
 
 async def _gemini_embed(text: str, api_key: str) -> list[float]:

@@ -379,7 +379,7 @@ export default function SettingsPage({
 
       {showChangePassword && (
         <SettingsDialog title="Change Password" onClose={() => setShowChangePassword(false)}>
-          <ChangePasswordSection />
+          <ChangePasswordSection onSuccess={() => setShowChangePassword(false)} />
         </SettingsDialog>
       )}
     </div>

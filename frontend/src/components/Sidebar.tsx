@@ -403,13 +403,13 @@ export default function Sidebar({
                         deleteConfirmId === conv.id ? (
                           <div
                             onClick={(e) => e.stopPropagation()}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 bg-theme-bg border border-theme-border rounded-lg shadow-lg px-1.5 h-7 z-50 animate-in fade-in zoom-in-95 duration-100"
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 bg-theme-bg border border-theme-border rounded-md shadow-lg px-1 h-5 z-50 animate-in fade-in zoom-in-95 duration-100"
                           >
-                            <span className="text-[10px] text-theme-text-muted font-medium select-none pr-0.5">Delete?</span>
+                            <span className="text-[9px] text-theme-text-muted font-medium select-none pr-0.5">Delete?</span>
                             <button
                               type="button"
                               onClick={() => setDeleteConfirmId(null)}
-                              className="px-2 h-5 min-w-[36px] rounded border border-theme-border hover:bg-theme-surface-hover text-theme-text text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
+                              className="px-1.5 h-3.5 min-w-[28px] rounded border border-theme-border hover:bg-theme-surface-hover text-theme-text text-[9px] font-semibold transition-colors active:scale-95 cursor-pointer flex items-center justify-center"
                             >
                               No
                             </button>
@@ -419,7 +419,7 @@ export default function Sidebar({
                                 onDelete(conv.id)
                                 setDeleteConfirmId(null)
                               }}
-                              className="px-2 h-5 min-w-[36px] rounded bg-red-600 hover:bg-red-700 text-white border border-red-700 text-[10px] font-semibold transition-colors active:scale-95 cursor-pointer"
+                              className="px-1.5 h-3.5 min-w-[28px] rounded bg-red-600 hover:bg-red-700 text-white border border-red-700 text-[9px] font-semibold transition-colors active:scale-95 cursor-pointer flex items-center justify-center"
                             >
                               Yes
                             </button>
