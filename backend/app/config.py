@@ -5,7 +5,12 @@ from pathlib import Path
 
 def read_secret(name: str) -> str | None:
     path = Path(f"/run/secrets/{name}")
-    if path.exists():
+    # is_file(), not exists(): a Docker secret whose host source file is
+    # missing can get bind-mounted as an empty directory (seen on Docker
+    # Desktop/Windows) rather than failing `docker compose up` outright --
+    # exists() would be True for that directory and read_text() would raise
+    # IsADirectoryError instead of falling through to the env-var fallback.
+    if path.is_file():
         return path.read_text(encoding="utf-8-sig").strip()
     return os.getenv(name.upper())
 
@@ -30,6 +35,17 @@ def read_pool_key(provider: str) -> str | None:
     `secrets/pool_<provider>_api_key.example`."""
     return read_secret(f"pool_{provider}_api_key")
 
+
+# PAWN 2.0 Phase E.1: which deployment this process is. Not a secret — a plain
+# label read once at startup that drives Drive-folder/Kaggle-slug isolation
+# (constants.py) so the same Google account can be used for local/staging
+# testing and production without the two writing into the same folders/kernels.
+# Default is the SAFE side: "dev". docker-compose.prod.yml (both staging and
+# prod .env files) sets this explicitly alongside its many other required
+# values, so prod is never running on an implicit default in practice — but an
+# ad-hoc/local run that forgets to set it lands on the isolated "PAWN-dev/"
+# root instead of silently writing into real production data.
+PAWN_ENV = os.getenv("PAWN_ENV", "dev")
 
 # Self-hosted Postgres (application database) — replaces Supabase.
 POSTGRES_DSN = read_secret("postgres_dsn")

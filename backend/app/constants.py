@@ -1,7 +1,27 @@
 import os
 from pathlib import Path
 
+from app.config import PAWN_ENV
+
 DATA_DIR = Path(os.getenv("PAWN_DATA_DIR", "/app/data"))
+
+# --- PAWN 2.0 Phase E: dev/prod isolation on shared Drive + Kaggle accounts --
+# Drive and Kaggle are tied to the operator's Google/Kaggle ACCOUNT, not the
+# deployment, so local/staging testing and production would otherwise collide
+# when logged in with the same account. `PAWN_ENV` (config.py) is the single
+# switch; everything below derives from it.
+
+# storage/drive.py's get_or_create_root() is the one chokepoint all Drive data
+# (chats, projects, uploads) hangs off — scoping the root name here isolates
+# all of it in one change.
+DRIVE_ROOT_NAME = "PAWN-dev" if PAWN_ENV == "dev" else "PAWN"
+
+
+def kaggle_slug(base: str) -> str:
+    """Suffix a Kaggle kernel/dataset slug with '-dev' outside prod, so dev/staging
+    generations run on separate kernels instead of clobbering prod's live ones in
+    the same Kaggle account."""
+    return f"{base}-dev" if PAWN_ENV == "dev" else base
 
 REGISTRY_DIR      = DATA_DIR / "registry"
 MODELS_FILE       = REGISTRY_DIR / "models.json"
@@ -37,13 +57,13 @@ KAGGLE_HTTP_TIMEOUT_SECONDS = 30
 KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS = 300
 
 # Per-user kernel slug suffixes (full slug is "<username>/<suffix>").
-KAGGLE_CUBE_SLUG = "pawn-cube-poc"
+KAGGLE_CUBE_SLUG = kaggle_slug("pawn-cube-poc")
 
 # --- Warm/persistent Kaggle image sessions (Plan v5 / Phase W) ---------------
 # W.0 CPU echo notebook that proves the persistent loop + PostgREST rendezvous.
 KAGGLE_SESSION_POC_TEMPLATE = KAGGLE_TEMPLATES_DIR / "session_poc" / "notebook.ipynb"
 # Single slug for the W.0 POC kernel (full slug "<username>/<suffix>").
-KAGGLE_SESSION_SLUG = "pawn-session-poc"
+KAGGLE_SESSION_SLUG = kaggle_slug("pawn-session-poc")
 # How often the persistent kernel polls PostgREST for work / writes a heartbeat.
 KAGGLE_SESSION_POLL_INTERVAL_SECONDS = 3
 # A 'ready' session whose heartbeat is older than this is considered dead.

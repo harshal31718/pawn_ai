@@ -164,7 +164,7 @@ def test_generate_image_dispatch_uses_registry():
 
     flux = IMAGE_MODELS["flux"]
     assert out["model"] == "flux"
-    assert captured["kernel_name"] == flux.slug == "pawn-image-flux"
+    assert captured["kernel_name"] == flux.slug  # env-scoped (PAWN 2.0 E.3), not a bare literal
     assert captured["dataset_sources"] == [flux.dataset]
     assert captured["accelerator"] == flux.accelerator
     assert captured["enable_gpu"] is True
@@ -198,7 +198,8 @@ def test_connect_kaggle_warmup_is_dataset_free():
          patch("app.core.generate.kaggle.deploy_kernel", side_effect=fake_deploy):
         generate.connect_kaggle("user-1", "flux")
 
-    assert captured["kernel_name"] == "pawn-image-flux"
+    from app.core.image_models import IMAGE_MODELS
+    assert captured["kernel_name"] == IMAGE_MODELS["flux"].slug  # env-scoped (PAWN 2.0 E.3)
     assert captured["dataset_sources"] == []
     assert captured["enable_gpu"] is False
 

@@ -118,7 +118,7 @@ def test_start_session_sdxl_uses_gpu_serve_loop():
     assert captured["enable_internet"] is True
     assert captured["dataset_sources"] == [sdxl.dataset]
     assert captured["accelerator"] == sdxl.accelerator
-    assert captured["kernel_name"] == sdxl.session_slug == "pawn-sdxl-session"
+    assert captured["kernel_name"] == sdxl.session_slug  # env-scoped (PAWN 2.0 E.3), not a bare literal
 
 
 def test_start_session_injects_postgrest_url_never_dsn():
@@ -175,7 +175,7 @@ def test_start_session_flux_uses_gpu_and_dataset():
         image_session.start_session("user-1", "flux", 60, None)
 
     flux = IMAGE_MODELS["flux"]
-    assert captured["kernel_name"] == flux.session_slug == "pawn-flux-session"
+    assert captured["kernel_name"] == flux.session_slug  # env-scoped (PAWN 2.0 E.3), not a bare literal
     assert captured["enable_gpu"] is True
     assert captured["dataset_sources"] == [flux.dataset]
     assert captured["accelerator"] == flux.accelerator
@@ -780,7 +780,7 @@ def test_get_session_status_probe_terminal_status_flips_early():
         out = image_session.get_session_status("user-1", "flux")
     assert out["status"] == "error"
     assert out["error"] and "no longer running" in out["error"] and "'error'" in out["error"]
-    mock_probe.assert_called_once_with("alice", "tok", "pawn-flux-session")
+    mock_probe.assert_called_once_with("alice", "tok", image_models.IMAGE_MODELS["flux"].session_slug)
 
 
 def test_get_session_status_probe_complete_status_also_flips():

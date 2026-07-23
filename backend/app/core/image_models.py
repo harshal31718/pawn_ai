@@ -22,6 +22,7 @@ from app.constants import (
     IMAGE_SESSION_STARTUP_TIMEOUT_SECONDS,
     KAGGLE_RUN_TIMEOUT_SECONDS,
     KAGGLE_TEMPLATES_DIR,
+    kaggle_slug,
 )
 from app.exceptions import UnknownModelError
 
@@ -141,7 +142,7 @@ IMAGE_MODELS: dict[str, ImageModel] = {
     "sdxl": ImageModel(
         id="sdxl",
         label="SDXL",
-        slug="pawn-image-sdxl",
+        slug=kaggle_slug("pawn-image-sdxl"),
         template=KAGGLE_TEMPLATES_DIR / "image_sdxl" / "notebook.ipynb",
         dataset="steubk/stable-diffusion-xl-base-1-0",
         accelerator="NvidiaTeslaT4",
@@ -149,7 +150,7 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         # Warm session: load SDXL once (~1–2 min on a single T4), then serve images
         # in seconds from the Supabase work-loop.
         session_template=KAGGLE_TEMPLATES_DIR / "image_sdxl_session" / "notebook.ipynb",
-        session_slug="pawn-sdxl-session",
+        session_slug=kaggle_slug("pawn-sdxl-session"),
         session_gpu=True,
         resolution_buckets=_SDXL_NATIVE_BUCKETS,
         scheduler="dpmpp_2m_sde_karras",
@@ -187,7 +188,7 @@ IMAGE_MODELS: dict[str, ImageModel] = {
     "flux": ImageModel(
         id="flux",
         label="FLUX.1-schnell",
-        slug="pawn-image-flux",
+        slug=kaggle_slug("pawn-image-flux"),
         template=KAGGLE_TEMPLATES_DIR / "image_flux" / "notebook.ipynb",
         dataset="guillaumegaillard/flux1-schnell-diffusers",
         accelerator="NvidiaTeslaT4",
@@ -195,7 +196,7 @@ IMAGE_MODELS: dict[str, ImageModel] = {
         run_timeout=900,
         # The real warm path: load FLUX once, then serve many prompts in seconds.
         session_template=KAGGLE_TEMPLATES_DIR / "image_flux_session" / "notebook.ipynb",
-        session_slug="pawn-flux-session",
+        session_slug=kaggle_slug("pawn-flux-session"),
         session_gpu=True,
         resolution_buckets=_SDXL_NATIVE_BUCKETS,
         # Bug found live 2026-07-17: FLUX's warm-session notebook has a

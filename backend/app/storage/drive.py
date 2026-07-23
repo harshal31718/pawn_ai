@@ -1,10 +1,11 @@
 """Google Drive storage layer.
 
 DriveStorage wraps the Drive v3 API for PAWN's per-user file operations.
-All paths are relative to a user's PAWN/ root folder in Drive.
+All paths are relative to a user's PAWN root folder in Drive — "PAWN/" in
+production, "PAWN-dev/" elsewhere (constants.DRIVE_ROOT_NAME, Phase E.2).
 
 Folder structure created on first use (Phase M — memory scoping):
-  PAWN/
+  PAWN/ (or PAWN-dev/)
     conversations/
       chats/
         {conv_id}/
@@ -42,6 +43,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+from app.constants import DRIVE_ROOT_NAME
 
 # Hard socket timeout (seconds) for every Drive HTTP round-trip. Without this,
 # a stalled connection hangs the calling thread indefinitely ("no replies").
@@ -191,7 +193,10 @@ class DriveStorage:
     _ROOT_LOOKUP_PAGE_SIZE = 10
 
     def get_or_create_root(self) -> str:
-        """Return (or create) the PAWN/ root folder in the user's Drive.
+        """Return (or create) PAWN's root folder in the user's Drive — the name is
+        env-scoped (constants.DRIVE_ROOT_NAME: "PAWN" in prod, "PAWN-dev" outside it,
+        Phase E.2) so dev/staging testing and production never write into each
+        other's data even when the same Google account is used for both.
 
         Deterministic root selection: orders by createdTime ascending and
         always picks the OLDEST matching folder. Without an explicit
@@ -212,7 +217,11 @@ class DriveStorage:
                 return self._root_id
 
             # Search in root
-            q = "name = 'PAWN' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            root_name = DRIVE_ROOT_NAME
+            q = (
+                f"name = '{root_name}' and 'root' in parents and "
+                "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            )
             result = self._files().list(
                 q=q, fields="files(id)", pageSize=self._ROOT_LOOKUP_PAGE_SIZE, orderBy="createdTime",
             ).execute()
@@ -222,14 +231,14 @@ class DriveStorage:
                 if len(files) > 1:
                     ids = ", ".join(f["id"] for f in files)
                     print(
-                        f"Drive: user {self._user_id} has {len(files)} duplicate 'PAWN' root "
+                        f"Drive: user {self._user_id} has {len(files)} duplicate '{root_name}' root "
                         f"folders ({ids}) -- using the oldest ({files[0]['id']}) deterministically. "
                         "Manual merge recommended (see plan_open_issues_2026-07-14.md §2.2).",
                         file=sys.stderr,
                     )
                 self._root_id = files[0]["id"]
             else:
-                meta = {"name": "PAWN", "mimeType": self._MIME_FOLDER}
+                meta = {"name": root_name, "mimeType": self._MIME_FOLDER}
                 folder = self._files().create(body=meta, fields="id").execute()
                 self._root_id = folder["id"]
 

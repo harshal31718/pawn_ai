@@ -26,6 +26,10 @@ services:
       - pool_sambanova_api_key
       - pool_zhipu_api_key
     environment:
+      # PAWN 2.0 Phase E.1: explicit even though "dev" is already config.py's
+      # default — this local compose is the primary place isolation matters
+      # (same Google account as prod), so make it self-evident, not implicit.
+      - PAWN_ENV=dev
       # Public URL for the self-hosted PostgREST instance (D.4) — non-secret,
       # injected into warm Kaggle-session payloads. Blank by default: the
       # D.3/D.4 migration off Supabase (whose REST URL was always public,

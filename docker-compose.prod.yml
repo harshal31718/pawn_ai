@@ -30,6 +30,10 @@ services:
       - jwt_secret
     environment:
       # All non-secret, env-file driven, per-environment (see .env.*.example).
+      # PAWN 2.0 Phase E.1: staging sets PAWN_ENV=dev, prod sets PAWN_ENV=prod —
+      # isolates Drive folders + Kaggle slugs even though staging/prod already
+      # get separate Postgres/secrets (comment at the top of .env.staging.example).
+      - PAWN_ENV=${PAWN_ENV}
       - CORS_ORIGINS=${CORS_ORIGINS}
       - FRONTEND_URL=${FRONTEND_URL}
       - OAUTH_REDIRECT_URI=${OAUTH_REDIRECT_URI}

@@ -11,6 +11,96 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
+## PAWN 2.0 — Multi-user shared pool + admin + OmniRoute quota-share (registered 2026-07-23)
+
+Plan: `workspace/plan/architecture_2.0/00_overview.md` (read it first — full locked
+decisions + per-step done-criteria). Successor to `router_failover/` (done). Branch
+`dev`, additive only, **no `main` deploy this round** — test on `dev` + local
+`docker compose`. OmniRoute reference cloned (gitignored) at
+`workspace/reference/OmniRoute/`. Build step-by-step with pauses.
+
+**Recommended build order** (see plan §Phases): **E.1–E.3** (Drive/Kaggle isolation —
+first, protects prod while testing on dev) → **A** → **B** → **E.4–E.5** (shared keys
+DB, needs B) → **C** → **D**. Phases below are listed A–E for reference, not build order.
+
+- `[ ]` **Phase A — BYOK-first precedence flip** (ships first, isolated)
+  - A.1 `resolver._resolve_key`: BYOK before pool for `either`
+  - A.2 `dashboard._usable_key_source`: mirror new order
+  - A.3 update stale "pool-first" docstrings/comments
+  - A.4 `test_pool_keys.py`: reverse fallback expectations + keyed-user-never-uses-pool regression
+- `[ ]` **Phase B — Admin role + DB-backed pool keys + admin page**
+  - B.1 `require_admin` dependency (hardcoded `admin.pawnai@gmail.com`)
+  - B.2 `pool_api_keys` table + migration + `schema.sql` DDL
+  - B.3 `pool_key_store` module (encrypted, TTL cache, reuse `core.crypto`)
+  - B.4 `read_pool_key()` → DB-first, secret fallback (drop `@lru_cache`)
+  - B.5 `admin.py` routes (CRUD + enable/disable + `/admin/stats` for `N`)
+  - B.6 frontend `AdminPage.tsx` + email-gated sidebar entry + `client.ts`
+- `[ ]` **Phase C — Shared-pool fair-share quota (OmniRoute port)**
+  - C.0 study `src/lib/quota/*` in the clone; write `01_quota_share_port.md` mapping
+  - C.1 registered-user count `N` (lazy at day start)
+  - C.2 shared aggregate counter (reuse R2 `endpoint_usage.user_id=''` sentinel)
+  - C.3 `quota_share.py`: 1/N, generous<80%/strict>=80%, hard/soft/burst, tpd+rpd
+  - C.4 wire into pool path only; hard-block → `fallback_models`
+  - C.5 `test_quota_share.py` porting OmniRoute scenarios
+- `[ ]` **Phase D — Providers page (OmniRoute functionality)**
+  - D.1 dashboard route: pool-dedupe headline, per-user remaining, credits/no-cap separate
+  - D.2 registry metadata additions if needed (`no_published_cap`, `signup_credit_tokens`)
+  - D.3 `ProvidersPage.tsx` → OmniRoute layout/logic, PAWN styling for now
+  - D.4 backend route test asserting honest aggregate math
+- `[~]` **Phase E — Dev/prod data isolation** (single-operator; independent of A–D)
+  - `[x]` **E.1–E.3 — `PAWN_ENV` config + Drive root/Kaggle slug isolation** ✓
+    (2026-07-23) `config.PAWN_ENV` (default `"dev"`, the safe side — see
+    `config.py`'s inline rationale). `constants.DRIVE_ROOT_NAME`
+    (`"PAWN-dev"`/`"PAWN"`) wired through `drive.py`'s single
+    `get_or_create_root()` chokepoint (query + create-body both env-scoped).
+    `constants.kaggle_slug()` helper suffixes `KAGGLE_CUBE_SLUG`,
+    `KAGGLE_SESSION_SLUG`, and both `IMAGE_MODELS` cold/session slugs
+    (sdxl+flux) with `-dev` outside prod. `.env.prod.example` sets
+    `PAWN_ENV=prod`, `.env.staging.example` sets `PAWN_ENV=dev` (staging
+    shares the operator's Google/Kaggle account with prod, same isolation
+    need as local dev), local `docker-compose.yml` sets it explicitly too.
+    New `tests/test_constants.py` (3 tests) + a new Drive-root test in
+    `test_drive_storage.py`; 3 existing Kaggle-slug tests
+    (`test_generate.py`/`test_image_session.py`) loosened from bare literals
+    to compare against the registry's own (now env-scoped) value.
+    **Found mid-flight, on this session's first real `docker compose exec
+    backend pytest` run of this work (it had been sitting uncommitted from an
+    earlier, interrupted session) — 2 real, pre-existing bugs, neither caused
+    by E.1–E.3 itself:**
+    1. **`config.read_secret()` used `path.exists()`, not `path.is_file()`.**
+       On this Docker Desktop/Windows host, a Docker secret whose source file
+       doesn't exist gets bind-mounted as an empty **directory** rather than
+       failing `docker compose up` — `exists()` is true for that directory,
+       so `read_text()` raised `IsADirectoryError` instead of falling
+       through to the env-var fallback. Broke every test touching
+       `_resolve_key`/dashboard/resolver (~35 failures). Fixed to
+       `is_file()`.
+    2. **Stale test mocks post-R2** in `test_chat.py`/`test_summarize.py`:
+       6 `capturing_stream(url, model, messages, headers)` mocks (no
+       `**kwargs`) didn't accept the `on_usage` kwarg R2 added to the real
+       `stream_llm` — every call raised `TypeError`, silently wrapped into a
+       generic `ProviderError` by `chat.py`'s catch-all, which the tests then
+       misread as "stream never got called". Exact same bug class already
+       documented as fixed in `test_normalize_fallback.py` (see the Phase 1b
+       "Real pytest finally ran" note above) — these 6 were a second,
+       previously-missed pocket of it. Fixed by adding `**kwargs` to all 6.
+    3. **Also found (infra, not code):** local dev Postgres was missing the
+       R2 `endpoint_usage` migration — applied
+       `postgres/migrations/2026-07_R2_endpoint_usage.sql` by hand. The other
+       4 pending migration files were already applied (verified via `\d` on
+       each affected table before applying anything, to avoid a needless
+       re-run of the destructive `memory_scoping` migration, which was
+       correctly skipped — `memory_chunks` already had the M-shape columns).
+    **695 backend tests green** (up from 689 pre-fix, 68 originally failing
+    on the corrupted secrets + stale-mock state before either fix), both
+    `pytest -q` and `pytest -q -n auto` clean. `npx tsc --noEmit` clean
+    (frontend untouched by E.1–E.3). No live Chrome verification yet this
+    session (see E.5).
+  - `[ ]` E.4 `SHARED_DB_DSN` (keys-only shared; defaults to `POSTGRES_DSN`) + dev Postgres tunnel — depends on Phase B, deferred until B lands
+  - `[ ]` E.5 verify: chats/gens/usage isolate; keys shared+sync; no dev image in prod gallery — needs E.4
+
+---
+
 ## Deployment — `dev` → `main` release, DEPLOYED to prod (2026-07-17)
 
 `[x]` **Release: 48-commit batch (chat F-1–F-11, imageLab Q1/Q3/G1, today's 2

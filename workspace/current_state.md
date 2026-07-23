@@ -2,6 +2,30 @@
 
 Last updated: 2026-07-23
 
+**PAWN 2.0 Phase E.1–E.3 done (dev/prod env isolation):** `config.PAWN_ENV`
+(`dev`/`prod`, safe default `dev`) drives `constants.DRIVE_ROOT_NAME`
+(`"PAWN-dev"`/`"PAWN"`, wired through `drive.py`'s `get_or_create_root()`) and
+`constants.kaggle_slug()` (suffixes `-dev` onto `KAGGLE_CUBE_SLUG`,
+`KAGGLE_SESSION_SLUG`, and both SDXL/FLUX cold+session Kaggle slugs outside
+prod). `.env.prod.example`/`.env.staging.example`/local `docker-compose.yml`
+all set it explicitly. Two real pre-existing bugs found and fixed along the
+way (neither caused by this work): `config.read_secret()` used `path.exists()`
+instead of `is_file()` — a Docker secret with a missing source file gets
+bind-mounted as an empty directory on this Docker Desktop/Windows host,
+raising `IsADirectoryError` instead of falling through to the env-var
+fallback; and 6 mock `stream_llm` replacements in
+`test_chat.py`/`test_summarize.py` were missing `**kwargs`, silently dropping
+R2's `on_usage` callback with a `TypeError` masked as a generic
+`ProviderError` (same bug class as a previously-documented fix, a second
+missed pocket of it). Also applied the previously-pending
+`2026-07_R2_endpoint_usage.sql` migration to local dev Postgres (the other 4
+pending migration files turned out already applied). 695 backend tests green
+(up from 68-failing before either fix), `pytest -n auto` clean, `tsc --noEmit`
+clean, live-verified via Chrome (real chat round-trip through Google, no
+console errors). E.4–E.5 (shared keys DB) deferred until Phase B lands, per
+the plan's own dependency order. See `workspace/plan/architecture_2.0/00_overview.md`
+(gitignored, local-only) and `build_tracker.md`'s PAWN 2.0 section.
+
 **Model routing is capability-first (C1–C5) + free-tier registry expanded
 (R1) + token-accurate quota (R2) + free-tier dashboard (R3) + two-tier
 BYOK/pool keys (Phase 1b) — all `[x]` in `build_tracker.md`, real-pytest

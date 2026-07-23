@@ -125,7 +125,7 @@ def test_chat_forwards_full_history(client):
     """Backend must forward the complete message array to the LLM, not just the last turn."""
     captured_messages: list = []
 
-    async def capturing_stream(url, model, messages, headers):
+    async def capturing_stream(url, model, messages, headers, **kwargs):
         captured_messages.extend(messages)
         yield "ok"
 
@@ -153,7 +153,7 @@ def test_chat_defaults_to_gemini(client):
     """When no provider is given, the request uses gemini (the default)."""
     captured_urls: list = []
 
-    async def capturing_stream(url, model, messages, headers):
+    async def capturing_stream(url, model, messages, headers, **kwargs):
         captured_urls.append(url)
         yield "ok"
 
@@ -173,7 +173,7 @@ def test_chat_routes_to_groq(client):
     """provider='groq' must route to the Groq API endpoint."""
     captured_urls: list = []
 
-    async def capturing_stream(url, model, messages, headers):
+    async def capturing_stream(url, model, messages, headers, **kwargs):
         captured_urls.append(url)
         yield "ok"
 
@@ -193,7 +193,7 @@ def test_chat_routes_to_cerebras(client):
     """provider='cerebras' must route to the Cerebras API endpoint."""
     captured_urls: list = []
 
-    async def capturing_stream(url, model, messages, headers):
+    async def capturing_stream(url, model, messages, headers, **kwargs):
         captured_urls.append(url)
         yield "ok"
 

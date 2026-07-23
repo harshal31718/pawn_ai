@@ -49,7 +49,7 @@ def test_chat_truncates_context_to_last_10_messages(client, fake_drive):
 
     captured_messages = []
 
-    async def capturing_stream(url, model, messages, headers):
+    async def capturing_stream(url, model, messages, headers, **kwargs):
         captured_messages.extend(messages)
         yield "Response"
 
@@ -86,7 +86,7 @@ def test_chat_prepends_summary_context(client, fake_drive):
 
     captured_messages = []
 
-    async def capturing_stream(url, model, messages, headers):
+    async def capturing_stream(url, model, messages, headers, **kwargs):
         captured_messages.extend(messages)
         yield "Response"
 
