@@ -2,6 +2,16 @@
 
 Last updated: 2026-07-23
 
+**DEPLOY #2 (2026-07-23, live) — post-deploy fix batch.** `main`: `6fe867c` →
+`4e93afb`. (1) Embeddings pool-key fallback — `memory/embed.py` was BYOK-only,
+breaking memory for keyless/pool users; now BYOK-first with pool fallback like
+chat. (2) Change Password dialog auto-closes on save. (3) Sidebar
+delete-confirm popup shrunk to fit inside the row (was overflowing). 801
+backend tests green, deployed + live-verified (health, new bundle, PAWN_ENV,
+routing all confirmed). Chat-Gemini failure diagnosed as NOT quota (0 usage
+recorded) — likely the "Generative Language API" not enabled on the Google
+key's GCP project; flagged for the user to enable console-side.
+
 **POST-DEPLOY HOTFIX (2026-07-23, live) — Nginx was missing backend route
 prefixes.** Prod smoke-test surfaced 3 failures (password change → 405,
 Providers usage + admin pool keys → "could not load"), all one root cause: the

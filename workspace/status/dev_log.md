@@ -6,6 +6,35 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-23] — DEPLOY #2: post-deploy fix batch (embeddings pool fallback + 2 UI)
+
+Second prod deploy same day (`main` `6fe867c` → `4e93afb`), batching the
+issues found during the first deploy's smoke-test:
+1. **Embeddings pool-key fallback (real bug).** `memory/embed.py:_resolve_
+   gemini_key` was BYOK-only — a keyless user relying on the operator's pool
+   got working chat but broken memory embeddings ("No Google API key
+   configured for embeddings"). Now BYOK-first with pool fallback, matching
+   the chat resolver's precedence. Found via prod backend logs.
+2. **Change Password dialog auto-closes on save** (added `onSuccess` to
+   `ChangePasswordSection`, same pattern as the Edit dialog).
+3. **Sidebar delete-confirm** ("Delete? No Yes") was `h-7` (28px) inside a
+   `h-6` (24px) row → overflowing; shrunk to `h-5` popup / `h-3.5` buttons.
+
+Gate: 801 backend tests green, frontend build clean. Deployed via promote →
+VM `git pull` + frontend rebuild + backend `up -d --build`. Health OK
+(internal+external), PAWN_ENV still prod, new bundle served, `/account/
+password` still backend-routed (the Nginx hotfix is VM-local, unaffected by
+the code deploy). First health poll raced the backend's startup (uvicorn not
+up yet) — retried with backoff, came up clean.
+
+**Diagnosed but NOT an app bug (user's side):** the chat Gemini failure is
+NOT rate-limit — prod `endpoint_usage` shows 0 gemini requests today, so the
+calls fail *before* completing (instant failover to Groq pool, which works).
+Almost certainly the "Generative Language API" isn't enabled on the Google
+key's GCP project (→ 403). Flagged for the user to enable console-side.
+
+---
+
 ### [2026-07-23] — POST-DEPLOY HOTFIX: Nginx missing backend route prefixes (live)
 
 Right after the 2.0 deploy, the user's prod smoke-test hit three failures:
