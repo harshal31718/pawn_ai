@@ -36,6 +36,19 @@ create table if not exists user_api_keys (
   primary key (user_id, provider)
 );
 
+-- PAWN 2.0 Phase B.2: operator-owned shared pool keys, admin-editable live
+-- (no restart). One row per provider, no user_id -- distinct from
+-- user_api_keys above (per-user BYOK). saturation_pct is nullable: null means
+-- "use quota_share's global 80% default" (Phase C), a real value overrides it
+-- per-provider.
+create table if not exists pool_api_keys (
+  provider       text primary key,
+  key_enc        text not null,        -- AES-256-GCM encrypted, same as user_api_keys
+  enabled        boolean not null default true,
+  saturation_pct int,                  -- null -> global default (80)
+  updated_at     timestamptz default now()
+);
+
 -- Phase M (memory scoping) — redefined from the original cross-chat-visible
 -- design (Step 15 / SM-1). scope_type/scope_id give hard isolation: a chunk
 -- is only ever visible to queries within its own scope ('chat', scope_id =

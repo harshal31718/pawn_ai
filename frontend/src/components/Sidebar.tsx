@@ -7,7 +7,7 @@ import KebabMenu from './KebabMenu'
 import ProjectSection from './ProjectSection'
 import SearchResults from './SearchResults'
 import SidebarTitleRow from './SidebarTitleRow'
-import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, GaugeIcon } from './icons'
+import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, GaugeIcon, ShieldIcon } from './icons'
 
 interface Props {
   conversations: CachedConversation[]
@@ -26,6 +26,9 @@ interface Props {
   onOpen: () => void
   displayName: string
   email?: string
+  // PAWN 2.0 Phase B.6: UX-only gate (backend require_admin is the real
+  // control) -- shows the Admin nav entry only for the admin account.
+  isAdmin?: boolean
 }
 
 type PendingDialog =
@@ -49,6 +52,7 @@ export default function Sidebar({
   onOpen,
   displayName,
   email,
+  isAdmin,
 }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -76,6 +80,7 @@ export default function Sidebar({
   const isProjectsActive = location.pathname.startsWith('/project')
   const isSettingsActive = location.pathname === '/settings'
   const isProvidersActive = location.pathname === '/providers'
+  const isAdminActive = location.pathname === '/admin'
 
   // P.3: search spans everything (standalone + project-scoped chats, and
   // project names themselves) -- it used to only filter standaloneConversations,
@@ -176,6 +181,11 @@ export default function Sidebar({
 
   const handleOpenProviders = () => {
     navigate('/providers')
+    onClose()
+  }
+
+  const handleOpenAdmin = () => {
+    navigate('/admin')
     onClose()
   }
 
@@ -487,6 +497,39 @@ export default function Sidebar({
             as the nav rows above); only the "Settings" label and the name/
             email column animate width+opacity. */}
         <div className="border-t border-theme-border/40 pt-2 pb-2 shrink-0 select-none">
+          {/* PAWN 2.0 Phase B.6: Admin entry, gated on isAdmin (UX only --
+              the real control is backend require_admin). Sits above
+              Providers, same footer-row pattern. */}
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={handleOpenAdmin}
+              title={!isOpen ? 'Admin' : undefined}
+              className="
+                group relative z-0 w-full h-7 flex items-center px-2 rounded-xl text-theme-text-muted hover:text-theme-text
+                transition-all active:scale-95 cursor-pointer overflow-hidden
+              "
+            >
+              <span
+                className={`
+                  absolute -z-10 inset-y-0 left-2 w-7 rounded-xl
+                  ${isAdminActive ? 'bg-black/25 dark:bg-black/40' : 'group-hover:bg-theme-surface-hover'}
+                `}
+              />
+              <span className="w-7 h-7 shrink-0 flex items-center justify-center">
+                <ShieldIcon className={`w-4 h-4 transition-colors ${isAdminActive ? 'text-theme-text' : 'group-hover:text-theme-text'}`} />
+              </span>
+              <span
+                className={`
+                  text-xs font-semibold text-theme-text text-left truncate transition-all duration-300 ease-in-out
+                  ${isOpen ? 'opacity-100 max-w-[10rem] ml-1' : 'opacity-0 max-w-0 ml-0'}
+                `}
+              >
+                Admin
+              </span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleOpenProviders}

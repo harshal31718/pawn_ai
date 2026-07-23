@@ -244,3 +244,9 @@ TRACE_MAX_ENTRIES = 50
 # stubborn gap can't run away the request.
 VERIFY_MAX_REVISIONS = 2
 
+# --- PAWN 2.0 Phase B: admin role ---------------------------------------------
+# Hardcoded, not a DB flag or JWT claim (plan's locked design, §Phase B/B.1) --
+# a single-operator deployment doesn't need a real role system yet. See
+# core/admin.py's require_admin/is_admin.
+ADMIN_EMAIL = "admin.pawnai@gmail.com"
+

@@ -28,6 +28,7 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, FRONTEND_URL, OAUTH_REDIRECT_URI
+from app.core.admin import is_admin
 from app.core.crypto import encrypt
 from app.core.jwt_utils import create_token, decode_token
 from app.db.postgres_client import execute, fetchone
@@ -149,7 +150,12 @@ async def callback(code: str, request: Request):
     # Issue session JWT
     token = create_token(user_id, email)
 
-    user_json = json.dumps({"id": user_id, "email": email, "name": name, "picture": picture})
+    # PAWN 2.0 Phase B.1: carried on the callback redirect payload (not just
+    # /auth/me) since the frontend persists THIS shape to localStorage as its
+    # long-lived AuthUser and never re-fetches /auth/me after login.
+    user_json = json.dumps(
+        {"id": user_id, "email": email, "name": name, "picture": picture, "is_admin": is_admin(email)}
+    )
 
     # Redirect frontend to handle token storage
     from urllib.parse import quote
@@ -172,6 +178,9 @@ async def me(request: Request):
     row = fetchone("select * from users where user_id = %s", (payload["sub"],))
     if not row:
         raise HTTPException(404, "User not found")
+    # PAWN 2.0 Phase B.1: frontend keys off this backend flag rather than
+    # duplicating the magic admin email client-side (core.admin.is_admin).
+    row["is_admin"] = is_admin(row.get("email"))
     return row
 
 

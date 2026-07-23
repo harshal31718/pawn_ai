@@ -65,3 +65,33 @@ def test_drive_status_false_when_scope_declined(client):
         resp = client.get("/auth/drive/status", headers=_auth(token))
     assert resp.status_code == 200
     assert resp.json() == {"connected": False}
+
+
+# ── PAWN 2.0 Phase B.1: GET /auth/me carries an is_admin flag ───────────────
+
+
+def test_me_reports_is_admin_false_for_a_regular_user(client):
+    token = create_token("user-1", "u1@example.com")
+    row = {"user_id": "user-1", "email": "u1@example.com", "name": "U1"}
+    with patch("app.routes.auth.fetchone", return_value=row):
+        resp = client.get("/auth/me", headers=_auth(token))
+    assert resp.status_code == 200
+    assert resp.json()["is_admin"] is False
+
+
+def test_me_reports_is_admin_true_for_the_admin_email(client):
+    from app.constants import ADMIN_EMAIL
+
+    token = create_token("admin-1", ADMIN_EMAIL)
+    row = {"user_id": "admin-1", "email": ADMIN_EMAIL, "name": "Admin"}
+    with patch("app.routes.auth.fetchone", return_value=row):
+        resp = client.get("/auth/me", headers=_auth(token))
+    assert resp.status_code == 200
+    assert resp.json()["is_admin"] is True
+
+
+def test_me_404_when_user_row_missing(client):
+    token = create_token("user-404", "gone@example.com")
+    with patch("app.routes.auth.fetchone", return_value=None):
+        resp = client.get("/auth/me", headers=_auth(token))
+    assert resp.status_code == 404

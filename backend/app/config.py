@@ -1,5 +1,4 @@
 import os
-from functools import lru_cache
 from pathlib import Path
 
 
@@ -17,22 +16,32 @@ def read_secret(name: str) -> str | None:
 
 # Phase 1b: operator-supplied shared free-tier key pool. Distinct from
 # key_store.py's per-user encrypted BYOK keys -- this is the SAME key for
-# every user of this deployment, supplied by whoever runs the container via
-# Docker secrets (never Postgres, never the frontend). "Self-hosted pool" per
-# the plan's locked design: the operator uses their own free-tier signups, so
-# this is personal free-tier consumption from the operator's perspective, not
-# proxying inference to strangers on someone else's key -- re-examine this
-# design before ever pointing one shared instance at the public internet.
+# every user of this deployment. "Self-hosted pool" per the plan's locked
+# design: the operator uses their own free-tier signups, so this is personal
+# free-tier consumption from the operator's perspective, not proxying
+# inference to strangers on someone else's key -- re-examine this design
+# before ever pointing one shared instance at the public internet.
 #
-# `lru_cache` is safe (not just an optimization): secrets are read from files
-# mounted at container start, or env vars set at process start -- neither
-# changes without a restart, which invalidates the cache along with it.
-@lru_cache(maxsize=None)
+# PAWN 2.0 Phase B.4 (2026-07-23): DB-first, Docker secret as a bootstrap
+# fallback. The `@lru_cache` Phase 1b had here is REMOVED -- it blocked live
+# admin edits from ever taking effect (a cached None/stale key would survive
+# forever). pool_key_store's own short-TTL cache (with explicit eviction on
+# write) replaces it, so this is no longer a hot-path concern.
+#
+# Import-cycle guard: config.py must NOT import pool_key_store at module
+# top -- config -> pool_key_store -> postgres_client -> config would cycle.
+# Lazy import inside the function instead, same convention
+# resolver._resolve_key already uses for `from app.config import read_pool_key`.
 def read_pool_key(provider: str) -> str | None:
-    """Read the operator's shared pool key for `provider`, or None if the
-    operator hasn't configured one. Looked up as secret name
-    `pool_<provider>_api_key` (e.g. `pool_groq_api_key`), matching
-    `secrets/pool_<provider>_api_key.example`."""
+    """Read the operator's shared pool key for `provider`: Postgres
+    (`pool_key_store`, admin-editable live) first, falling back to the Docker
+    secret `pool_<provider>_api_key` (Phase 1b bootstrap, matching
+    `secrets/pool_<provider>_api_key.example`) if no DB row exists. Returns
+    None if neither is configured, or if the DB row exists but is disabled."""
+    from app.core import pool_key_store
+    db_config = pool_key_store.get_pool_config(provider)
+    if db_config is not None:
+        return pool_key_store.get_pool_key(provider)
     return read_secret(f"pool_{provider}_api_key")
 
 

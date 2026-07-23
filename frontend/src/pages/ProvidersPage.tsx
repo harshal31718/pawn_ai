@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { fetchFreeTiers, type FreeTiersResponse, type ProviderUsageRow } from '../api/client'
 import type { LayoutContext } from './Layout'
 
@@ -81,6 +81,7 @@ function ProviderCard({ row }: { row: ProviderUsageRow }) {
  *  the headline total only ever sums endpoints with a PUBLISHED token cap --
  *  providers with no cap are listed separately, never folded in as a guess. */
 export default function ProvidersPage() {
+  const navigate = useNavigate()
   const { isSidebarOpen, setIsSidebarOpen } = useOutletContext<LayoutContext>()
   const [data, setData] = useState<FreeTiersResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -103,18 +104,20 @@ export default function ProvidersPage() {
   }, [])
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 pt-6 sm:pt-8 pb-12 space-y-6">
-        <div className="flex items-center gap-2">
+    <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-theme-bg">
+      {/* Floating Top Header -- identical pill chip to SettingsPage.tsx's/
+          ImageLabPage.tsx's ("< Providers", nothing else inside the chip). */}
+      <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center justify-between w-full">
+        <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">
           {/* Mobile-only reopen affordance -- on narrow screens the sidebar is
               a full-width overlay that closes on navigation (see Sidebar.tsx's
               handleOpenProviders), so without this there'd be no way back to
-              it from here. Mirrors ChatPage.tsx's header toggle exactly. */}
+              it from here. Mirrors SettingsPage.tsx's own toggle. */}
           {!isSidebarOpen && (
             <button
               type="button"
               onClick={() => setIsSidebarOpen(true)}
-              className="md:hidden -ml-1 p-2 rounded-lg text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text focus:outline-none transition-colors shrink-0"
+              className="md:hidden rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
               title="Open sidebar"
             >
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
@@ -122,13 +125,25 @@ export default function ProvidersPage() {
               </svg>
             </button>
           )}
-          <div className="min-w-0">
-            <h1 className="text-lg font-semibold text-theme-text">Providers</h1>
-            <p className="text-xs text-theme-text-muted mt-1 leading-relaxed">
-              Your free-tier budget across every provider you've configured a key for.
-            </p>
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/chat')}
+            className="rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
+            title="Back to chat"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+          <h1 className="text-xs font-semibold text-theme-text select-none">Providers</h1>
         </div>
+      </header>
+
+      <div className="h-full overflow-y-auto pt-14">
+      <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 pb-12 space-y-6">
+        <p className="text-xs text-theme-text-muted leading-relaxed">
+          Your free-tier budget across every provider you've configured a key for.
+        </p>
 
         {loading && <p className="text-xs text-theme-text-muted">Loading…</p>}
         {error && <p className="text-xs text-red-500">{error}</p>}
@@ -174,6 +189,7 @@ export default function ProvidersPage() {
             )}
           </>
         )}
+      </div>
       </div>
     </div>
   )

@@ -31,11 +31,25 @@ export default function Layout() {
         onOpen={() => setIsSidebarOpen(true)}
         displayName={displayName}
         email={user?.email || ''}
+        isAdmin={user?.is_admin}
       />
       {/* Content area — relative so the global toggle can be absolutely positioned */}
       <div className="flex-1 relative overflow-hidden">
-        {/* Global dark mode toggle — visible on every route */}
-        <div className="absolute top-4 right-4 z-30 pointer-events-none">
+        {/* Global dark mode toggle (+ admin badge) — visible on every route */}
+        <div className="absolute top-4 right-4 z-30 pointer-events-none flex items-center gap-2">
+          {/* PAWN 2.0 Phase B: admin badge, same pill-chip visual language as
+              SettingsPage.tsx's/ImageLabPage.tsx's floating header chip.
+              Purely informational (not a nav control) -- the real gate is
+              backend require_admin; this just confirms which account you're
+              logged in as. */}
+          {user?.is_admin && (
+            <span
+              className="h-7 flex items-center px-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto text-[11px] font-semibold uppercase tracking-wide text-theme-text-muted select-none"
+              title="Signed in as the PAWN admin account"
+            >
+              Admin
+            </span>
+          )}
           <button
             type="button"
             onClick={() => setTheme(isDark ? 'light' : 'dark')}

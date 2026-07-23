@@ -118,22 +118,43 @@ def test_endpoint_missing_key_source_attribute_defaults_to_byok():
 
 
 # ── config.read_pool_key ─────────────────────────────────────────────────────
+# PAWN 2.0 Phase B.4: DB-first (pool_key_store), Docker-secret/env-var as a
+# bootstrap fallback when no DB row exists for the provider. No more
+# @lru_cache to clear -- pool_key_store's own short-TTL cache replaced it.
 
 
 def test_read_pool_key_reads_env_var_fallback(monkeypatch):
     from app.config import read_pool_key
-    read_pool_key.cache_clear()
     monkeypatch.setenv("POOL_TESTPROV_API_KEY", "secret-value")
-    assert read_pool_key("testprov") == "secret-value"
-    read_pool_key.cache_clear()
+    with patch("app.core.pool_key_store.get_pool_config", return_value=None):
+        assert read_pool_key("testprov") == "secret-value"
 
 
 def test_read_pool_key_none_when_unconfigured(monkeypatch):
     from app.config import read_pool_key
-    read_pool_key.cache_clear()
     monkeypatch.delenv("POOL_UNSETPROV_API_KEY", raising=False)
-    assert read_pool_key("unsetprov") is None
-    read_pool_key.cache_clear()
+    with patch("app.core.pool_key_store.get_pool_config", return_value=None):
+        assert read_pool_key("unsetprov") is None
+
+
+def test_read_pool_key_prefers_db_row_over_secret_or_env(monkeypatch):
+    """DB-first: even when a Docker secret/env var is also configured, an
+    existing (enabled) DB row wins."""
+    from app.config import read_pool_key
+    monkeypatch.setenv("POOL_TESTPROV_API_KEY", "env-value")
+    with patch("app.core.pool_key_store.get_pool_config", return_value={"enabled": True}), \
+         patch("app.core.pool_key_store.get_pool_key", return_value="db-value"):
+        assert read_pool_key("testprov") == "db-value"
+
+
+def test_read_pool_key_none_when_db_row_disabled_even_with_secret_fallback(monkeypatch):
+    """A disabled DB row is a deliberate admin choice -- must not silently
+    fall through to the Docker-secret bootstrap value."""
+    from app.config import read_pool_key
+    monkeypatch.setenv("POOL_TESTPROV_API_KEY", "env-value")
+    with patch("app.core.pool_key_store.get_pool_config", return_value={"enabled": False}), \
+         patch("app.core.pool_key_store.get_pool_key", return_value=None):
+        assert read_pool_key("testprov") is None
 
 
 # ── dashboard: per-row key_source reflects what's actually usable ──────────

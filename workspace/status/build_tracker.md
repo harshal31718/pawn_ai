@@ -44,13 +44,64 @@ DB, needs B) → **C** → **D**. Phases below are listed A–E for reference, n
   via Chrome: `/providers` renders correctly post-flip (all rows show `BYOK`
   badges, as expected — no pool keys are configured in this dev environment,
   so the flip has no visible row-label change here, but nothing regressed).
-- `[ ]` **Phase B — Admin role + DB-backed pool keys + admin page**
-  - B.1 `require_admin` dependency (hardcoded `admin.pawnai@gmail.com`)
-  - B.2 `pool_api_keys` table + migration + `schema.sql` DDL
-  - B.3 `pool_key_store` module (encrypted, TTL cache, reuse `core.crypto`)
-  - B.4 `read_pool_key()` → DB-first, secret fallback (drop `@lru_cache`)
-  - B.5 `admin.py` routes (CRUD + enable/disable + `/admin/stats` for `N`)
-  - B.6 frontend `AdminPage.tsx` + email-gated sidebar entry + `client.ts`
+- `[x]` **Phase B — Admin role + DB-backed pool keys + admin page** ✓ (2026-07-23)
+  - B.1 `core/admin.py`: `ADMIN_EMAIL` in `constants.py`, `is_admin(email)`,
+    `require_admin` FastAPI dependency (403 via `request.state.email`).
+    `/auth/me` and the OAuth `/auth/callback` redirect payload both carry
+    `is_admin` now — the frontend never duplicates the magic email.
+  - B.2 `pool_api_keys` table (`provider` PK, `key_enc`, `enabled`,
+    `saturation_pct` nullable → global 80% default, `updated_at`) in both
+    `schema.sql` and a new manual migration
+    `postgres/migrations/2026-07_pool_api_keys.sql` (applied to local dev).
+  - B.3 `core/pool_key_store.py`: mirrors `key_store.py`'s encrypt/decrypt +
+    short-TTL-cache-with-explicit-eviction pattern, one row per provider (no
+    `user_id`). New `POOL_VALID_PROVIDERS` (the same 11 providers already
+    wired as Docker secrets).
+  - B.4 `config.read_pool_key()` rewritten DB-first (`pool_key_store`),
+    Docker-secret/env-var fallback only when no DB row exists. **Removed the
+    Phase 1b `@lru_cache`** — it would have permanently frozen the pre-DB
+    value and blocked every future live admin edit. Lazy `pool_key_store`
+    import inside the function (avoids a `config → pool_key_store →
+    postgres_client → config` cycle, same convention `resolver._resolve_key`
+    already used).
+  - B.5 `routes/admin.py`: `GET/PUT/DELETE/PATCH /admin/pool-keys[/{provider}]`
+    + `GET /admin/stats` (registered-user count, refined into `N`'s real
+    lazy-cached form in Phase C.1), all behind `Depends(require_admin)` at
+    the router level. Registered in `main.py`.
+  - B.6 `pages/AdminPage.tsx` (pool-key CRUD, enable/disable, registered-user
+    count — mirrors `ApiKeysSection.tsx`'s row pattern, not reused directly
+    since pool rows need an enable toggle BYOK rows don't), new `ShieldIcon`,
+    `Sidebar.tsx` Admin entry gated on a new `isAdmin` prop (threaded from
+    `Layout.tsx`'s `user.is_admin`), 6 new `client.ts` functions, `/admin`
+    route in `App.tsx`.
+  - **Also this step (user-requested UI consistency fixes, applied across
+    all three utility pages):** `ProvidersPage.tsx` and `AdminPage.tsx` both
+    now use the exact same floating pill-chip header as `SettingsPage.tsx`
+    (`< Providers` / `< Admin`, chevron + title only, no page subtitle inside
+    the chip — the descriptive text moved into the scrollable body). New
+    global admin badge in `Layout.tsx` (same pill visual language, next to
+    the dark-mode toggle, visible on every route) when `user.is_admin`.
+  - 729 backend tests green (up from 696: +6 `test_admin.py`, +9
+    `test_admin_routes.py`, +8 `test_pool_key_store.py`, +4 new/updated
+    `test_pool_keys.py` B.4 cases, +3 `test_auth.py` `/auth/me` cases),
+    `pytest -n auto` clean, `tsc --noEmit` clean, `npm run build` clean.
+    **Live-verified for real, not just unit-tested:** minted a real JWT for
+    `admin.pawnai@gmail.com` and drove every `/admin/*` route against the
+    live backend + Postgres via `curl` — PUT persisted an encrypted row
+    (confirmed via direct `psql`), GET listed it, PATCH disabled it, DELETE
+    removed it (confirmed table empty again after). Also Chrome-verified the
+    non-admin path: the current logged-in account (not the admin email) gets
+    a graceful in-page "may not have admin access" message on `/admin`
+    (backend 403s every request, exactly as designed) with no Admin entry in
+    the sidebar, and `/providers`' new pill header renders correctly.
+    A real gotcha hit while iterating `test_admin_routes.py`: `conftest.py`'s
+    autouse `bypass_auth` fixture replaces `AuthMiddleware.dispatch` for the
+    ENTIRE test session on the shared `app` object — Starlette's
+    `BaseHTTPMiddleware` binds `self.dispatch` once when the middleware stack
+    is first built, so a second, test-scoped `patch.object` on top of it is
+    silently ineffective (confirmed by trial). Fixed by patching
+    `app.core.admin.ADMIN_EMAIL` down to `conftest.TEST_EMAIL` for the
+    admin-path test cases instead of trying to re-mock the middleware per test.
 - `[ ]` **Phase C — Shared-pool fair-share quota (OmniRoute port)**
   - C.0 study `src/lib/quota/*` in the clone; write `01_quota_share_port.md` mapping
   - C.1 registered-user count `N` (lazy at day start)

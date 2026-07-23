@@ -837,3 +837,60 @@ export async function fetchSalt(): Promise<Uint8Array> {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
 }
+
+// --- PAWN 2.0 Phase B.6: admin routes ---------------------------------------
+// Never carries a real pool key value -- these mirror the BYOK key routes'
+// "configured: true/false" convention, plus enabled/saturation metadata.
+export interface PoolKeyRow {
+  provider: string
+  configured: boolean
+  enabled: boolean
+  saturation_pct: number | null
+}
+
+export async function getPoolKeys(): Promise<PoolKeyRow[]> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  const data = await res.json()
+  return data.providers ?? []
+}
+
+export async function setPoolKey(provider: string, apiKey: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys/${provider}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ api_key: apiKey }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function deletePoolKey(provider: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys/${provider}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function patchPoolKey(
+  provider: string,
+  patch: { enabled?: boolean; saturation_pct?: number | null },
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys/${provider}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(patch),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function getAdminStats(): Promise<{ registered_users: number }> {
+  const res = await fetch(`${BASE_URL}/admin/stats`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}

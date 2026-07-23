@@ -7,6 +7,10 @@ export interface AuthUser {
   email: string
   name: string
   picture: string
+  // PAWN 2.0 Phase B.1: carried on the OAuth callback redirect payload, not
+  // re-fetched later -- the frontend keys admin UI off this backend flag
+  // rather than duplicating the magic admin email client-side.
+  is_admin?: boolean
 }
 
 interface AuthContextValue {

@@ -2,6 +2,22 @@
 
 Last updated: 2026-07-23
 
+**PAWN 2.0 Phase B done (admin role + DB-backed pool keys + admin page):**
+`core/admin.py` (`ADMIN_EMAIL`, `is_admin`, `require_admin`), new
+`pool_api_keys` Postgres table + `core/pool_key_store.py` (encrypted,
+short-TTL cache, admin-editable live), `config.read_pool_key()` now DB-first
+with the Docker secret as a bootstrap fallback (Phase 1b's `@lru_cache`
+removed — it would have frozen live edits forever). `routes/admin.py`
+(pool-key CRUD + enable/disable + registered-user count), all behind
+`Depends(require_admin)`. Frontend `AdminPage.tsx` + a Sidebar entry gated on
+`user.is_admin` (threaded from `/auth/me` and the OAuth callback payload).
+Also standardized `ProvidersPage.tsx`/`AdminPage.tsx` onto the same floating
+pill header as Settings, and added a global admin badge next to the
+dark-mode toggle. 729 backend tests green, live-verified end-to-end via curl
+(real admin JWT: PUT/GET/PATCH/DELETE all persisted/read correctly against
+Postgres) and via Chrome (non-admin gets a graceful in-page 403 message, no
+Admin nav entry). E.4–E.5 (shared keys DB) next, since they depend on this.
+
 **PAWN 2.0 Phase A done (BYOK-first precedence flip):**
 `resolver._resolve_key` and `dashboard._usable_key_source` now check the
 user's own BYOK key before the operator's pool for `either` endpoints
