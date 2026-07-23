@@ -95,7 +95,7 @@ async def _stream_one_model(
     candidates = resolver.pick(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+    for i, (url, provider_model_id, headers, endpoint_id, provider, key_source) in enumerate(candidates):
         if i > 0 and on_provider_switch:
             prev_provider = candidates[i - 1][4]
             if asyncio.iscoroutinefunction(on_provider_switch):
@@ -116,16 +116,16 @@ async def _stream_one_model(
                 on_usage=usage_seen.update,
             ):
                 if tokens_yielded == 0:
-                    rate_limiter.record_call(endpoint_id, user_id=user_id)
+                    rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
                     rate_limiter.record_success(endpoint_id, user_id=user_id)
                 tokens_yielded += 1
                 yield token
 
             if tokens_yielded == 0:
-                rate_limiter.record_call(endpoint_id, user_id=user_id)
+                rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
                 rate_limiter.record_success(endpoint_id, user_id=user_id)
             rate_limiter.record_tokens(
-                endpoint_id, _total_tokens(usage_seen), user_id=user_id
+                endpoint_id, _total_tokens(usage_seen), user_id=user_id, key_source=key_source
             )
             return
 
@@ -238,7 +238,7 @@ async def _stream_one_model_with_tools(
     candidates = resolver.pick(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+    for i, (url, provider_model_id, headers, endpoint_id, provider, key_source) in enumerate(candidates):
         if i > 0 and on_provider_switch:
             prev_provider = candidates[i - 1][4]
             if asyncio.iscoroutinefunction(on_provider_switch):
@@ -256,7 +256,7 @@ async def _stream_one_model_with_tools(
             ):
                 if event["type"] == "content":
                     if tokens_yielded == 0:
-                        rate_limiter.record_call(endpoint_id, user_id=user_id)
+                        rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
                         rate_limiter.record_success(endpoint_id, user_id=user_id)
                     tokens_yielded += 1
                 elif event["type"] == "done":
@@ -264,10 +264,10 @@ async def _stream_one_model_with_tools(
                 yield event
 
             if tokens_yielded == 0:
-                rate_limiter.record_call(endpoint_id, user_id=user_id)
+                rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
                 rate_limiter.record_success(endpoint_id, user_id=user_id)
             rate_limiter.record_tokens(
-                endpoint_id, _total_tokens(usage_seen), user_id=user_id
+                endpoint_id, _total_tokens(usage_seen), user_id=user_id, key_source=key_source
             )
             return
 
@@ -367,7 +367,7 @@ async def _complete_one_model(
     candidates = resolver.pick(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+    for i, (url, provider_model_id, headers, endpoint_id, provider, key_source) in enumerate(candidates):
         if i > 0 and on_provider_switch:
             prev_provider = candidates[i - 1][4]
             if asyncio.iscoroutinefunction(on_provider_switch):
@@ -384,7 +384,8 @@ async def _complete_one_model(
             # estimated -- an invented number would corrupt the budget figures
             # this accounting exists to make honest).
             rate_limiter.record_call(
-                endpoint_id, token_count=_total_tokens(message.get("usage")), user_id=user_id
+                endpoint_id, token_count=_total_tokens(message.get("usage")), user_id=user_id,
+                key_source=key_source,
             )
             rate_limiter.record_success(endpoint_id, user_id=user_id)
             return message

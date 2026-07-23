@@ -73,7 +73,7 @@ def test_resolver_uses_user_byok_key():
 
     # At least one google endpoint should carry the user's key in its auth header.
     assert candidates
-    all_headers = " ".join(str(h) for (_, _, h, _, _) in candidates)
+    all_headers = " ".join(str(h) for (_, _, h, _, _, _) in candidates)
     assert "USER-BYOK-KEY" in all_headers
     mock_get.assert_called()
 

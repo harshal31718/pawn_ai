@@ -2,6 +2,26 @@
 
 Last updated: 2026-07-23
 
+**PAWN 2.0 Phase C done (shared-pool fair-share quota, OmniRoute port):**
+`core/quota_share.py` ports OmniRoute's `enforce.ts`/`fairShare.ts` into
+PAWN's simpler shape (equal 1/N weight, tpd+rpd only, per-provider
+`saturation_pct` from B.2). `registered_user_count()` is lazily cached per
+UTC day. `rate_limiter.record_call`/`record_tokens` gained a `key_source`
+param that mirrors pool-sourced usage into the R2-reserved `SHARED_USER`
+aggregate row. `resolver.pick()`'s return tuple grew a 6th element
+(`key_source`, computed once via a new `_resolve_key_and_source()` so it
+can't disagree with the key actually used) — `quota_share.enforce()` runs
+inside `pick()`'s loop, gated on `key_source == "pool"`, and a block simply
+removes that endpoint from the candidate list so the existing
+`fallback_models` failover picks it up. A real bug (absolute-pool-cap check
+only applied inside the generous-mode branch, letting a saturated pool's
+strict-mode fair-share math be bypassed by a brand-new zero-consumption
+user) was caught by the port's own tests and fixed by porting OmniRoute's
+separate, policy-independent cap check explicitly. 755 backend tests green,
+`tsc` clean, live-verified via Chrome (real chat round-trip through the new
+6-tuple pipeline). Not live-verified: actual N>1 division (solo dev, N=1) —
+covered by unit tests with injected N instead. D (Providers page) is next.
+
 **PAWN 2.0 Phase E.4 code plumbing done, tunnel activation deferred to the
 user:** `postgres_client` functions gained an optional `dsn` override
 (default `POSTGRES_DSN`, zero behavior change), new `config.SHARED_DB_DSN`,

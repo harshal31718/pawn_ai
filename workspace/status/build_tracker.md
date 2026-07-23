@@ -102,13 +102,80 @@ DB, needs B) → **C** → **D**. Phases below are listed A–E for reference, n
     silently ineffective (confirmed by trial). Fixed by patching
     `app.core.admin.ADMIN_EMAIL` down to `conftest.TEST_EMAIL` for the
     admin-path test cases instead of trying to re-mock the middleware per test.
-- `[ ]` **Phase C — Shared-pool fair-share quota (OmniRoute port)**
-  - C.0 study `src/lib/quota/*` in the clone; write `01_quota_share_port.md` mapping
-  - C.1 registered-user count `N` (lazy at day start)
-  - C.2 shared aggregate counter (reuse R2 `endpoint_usage.user_id=''` sentinel)
-  - C.3 `quota_share.py`: 1/N, generous<80%/strict>=80%, hard/soft/burst, tpd+rpd
-  - C.4 wire into pool path only; hard-block → `fallback_models`
-  - C.5 `test_quota_share.py` porting OmniRoute scenarios
+- `[x]` **Phase C — Shared-pool fair-share quota (OmniRoute port)** ✓ (2026-07-23)
+  - C.0 `workspace/plan/architecture_2.0/01_quota_share_port.md` (gitignored,
+    local-only): full OmniRoute `enforce.ts`/`fairShare.ts` → PAWN mapping,
+    read from the actual cloned reference. Key simplifications: equal 1/N
+    weight (no per-key weighted allocations), tpd+rpd only (no
+    requests/tokens/usd × hourly/daily/monthly matrix), per-provider
+    `saturation_pct` (B.2's column) instead of one process-wide env var, no
+    `accountCount` multiplier (one shared pool key, not N pooled accounts),
+    no per-model caps.
+  - C.1 `core/quota_share.py::registered_user_count()` — lazy, cached once
+    per UTC day (module-level `_cached_n`/`_cached_day`), `max(N, 1)`,
+    counted from the main app DB (plain `fetchone`, deliberately NOT via
+    `SHARED_DB_DSN` — N is "how many users this deployment serves", not a
+    property of the shared keys DB). Fails open to the last-known value on
+    any DB error.
+  - C.2 `rate_limiter.record_call`/`record_tokens` gained a `key_source: str
+    = "byok"` param — when `"pool"`, ALSO writes to
+    `usage_store.SHARED_USER`'s row (the R2-reserved `''` sentinel) on top
+    of the caller's own per-user row. New `usage_store.usage_for_endpoint()`
+    (single-endpoint requests/tokens for one user, or `SHARED_USER` for the
+    pool-wide aggregate) — `quota_share.enforce()`'s read path for both
+    "shared total" and "this caller's own consumption".
+  - C.3 `core/quota_share.py::enforce(ep, user_id, rate_limiter)`: per
+    dimension (tpd, rpd) — absolute pool-cap check first (regardless of
+    policy or per-user math), then generous (`< saturation_pct`: allow
+    while shared headroom exists) vs strict (`>= saturation_pct`: block once
+    this user's own consumption reaches `pool_limit / N`). Block if **any**
+    dimension blocks. Fails open on any error (same posture as every other
+    quota-accounting path in this codebase).
+  - C.4 **`resolver.pick()`'s return tuple grew a 6th element, `key_source`**
+    (`"byok"`/`"pool"` — the source ACTUALLY used for that call, computed
+    once via new `_resolve_key_and_source()` rather than a second lookup
+    that could race a concurrent admin edit). `quota_share.enforce()` is
+    called from inside `pick()`'s per-endpoint loop, gated on `key_source ==
+    "pool"` — a block removes that endpoint from the candidate list (same
+    effect as a missing key), so the model-level `fallback_models` failover
+    picks it up same as any other exhausted endpoint. Threaded the new 6th
+    tuple element through `normalize.py`'s 3 unpacking sites
+    (`_stream_one_model`, `_stream_one_model_with_tools`,
+    `_complete_one_model`) and their `record_call`/`record_tokens` calls;
+    every position-indexed access (`candidates[i-1][4]` for `provider`, used
+    in `graph.py`/`routes/chat.py`) was unaffected since the new element is
+    appended at the end.
+  - C.5 New `test_quota_share.py` (12 tests: N lazy-cache + fail-open,
+    generous borrowing below saturation, strict fair-share block/allow,
+    per-provider saturation override, absolute-cap-blocks-even-a-brand-new-
+    user, any-dimension-blocks, no-published-cap-never-gated, enforce
+    fail-open). New C.4 wiring tests in `test_pool_keys.py` (4: 6-tuple
+    shape, quota_share not consulted for byok, block excludes the endpoint,
+    allow lets it through).
+  - **Real bug found and fixed while writing tests, not theorized:** the
+    first draft of `enforce()` only applied the absolute-pool-cap check
+    inside the *generous*-mode branch — a saturated pool (shared_total at or
+    over its published limit, which also trips strict mode since the ratio
+    hits ≥100%) would let a brand-new user with zero consumption of their
+    own sail through the strict-mode fair-share check (`0 >= fair_share` is
+    false), even though the pool had genuinely hit its real ceiling.
+    Ported OmniRoute's `decideFairShare`'s separate, policy-independent
+    `dim.consumedTotal >= dim.limit` check explicitly (it now runs first,
+    before the generous/strict branch, `quota_share.py`'s comment explains
+    why) — this was caught by `test_pool_absolute_limit_blocks_even_a_
+    keyless_new_user` failing, not read out of the OmniRoute source ahead of
+    time.
+  - 755 backend tests green (up from 738: +12 `test_quota_share.py`, +4
+    `test_pool_keys.py` C.4 tests, +1 fixed pre-existing 5-tuple mock in
+    `test_vision_enhance.py`), `pytest -n auto` clean, `tsc --noEmit` clean
+    (Phase C is backend-only). Live-verified via Chrome: a real chat
+    round-trip through the new 6-tuple resolver pipeline still works
+    end-to-end (no regression from the `pick()` return-shape change).
+    **Not live-verified:** the actual fair-share division under `N > 1` —
+    this dev environment is solo (`N=1`), so a live pool-quota block was
+    never exercised end-to-end against a real second user; covered instead
+    by C.5's unit tests with injected `N`, per the plan's own acknowledged
+    verification gap for solo dev.
 - `[ ]` **Phase D — Providers page (OmniRoute functionality)**
   - D.1 dashboard route: pool-dedupe headline, per-user remaining, credits/no-cap separate
   - D.2 registry metadata additions if needed (`no_published_cap`, `signup_credit_tokens`)

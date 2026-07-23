@@ -132,6 +132,7 @@ class EndpointRateLimiter:
         token_count: int = 0,
         user_id: Optional[str] = None,
         persist: bool = True,
+        key_source: str = "byok",
     ) -> None:
         """Record one request against an endpoint, plus its token cost.
 
@@ -139,6 +140,11 @@ class EndpointRateLimiter:
         `stream_options.include_usage`. Unknown is recorded as 0 rather than
         estimated -- an invented number would corrupt the very budget figures
         this exists to make honest. Request counting is unaffected.
+
+        `key_source` (PAWN 2.0 Phase C.2): when "pool", ALSO records this call
+        against the shared `usage_store.SHARED_USER` aggregate, on top of the
+        caller's own per-user row -- that shared total is quota_share's read
+        path for "how much has the pool consumed today across every user".
         """
         state = self._get(endpoint_id, user_id)
         self._prune(state)
@@ -155,9 +161,15 @@ class EndpointRateLimiter:
             # Write-behind: never blocks the response path beyond one INSERT,
             # and swallows its own failures (see usage_store.record).
             usage_store.record(user_id, endpoint_id, requests=1, tokens=tokens)
+            if key_source == "pool":
+                usage_store.record(usage_store.SHARED_USER, endpoint_id, requests=1, tokens=tokens)
 
     def record_tokens(
-        self, endpoint_id: str, token_count: int, user_id: Optional[str] = None
+        self,
+        endpoint_id: str,
+        token_count: int,
+        user_id: Optional[str] = None,
+        key_source: str = "byok",
     ) -> None:
         """Attach a token cost to a request already recorded by record_call.
 
@@ -165,6 +177,8 @@ class EndpointRateLimiter:
         while the request itself must be recorded at the START (that's what
         makes concurrent calls visible to the rate limiter). Splitting the two
         avoids either double-counting the request or losing the token count.
+
+        `key_source`: see `record_call` -- same shared-aggregate mirroring.
         """
         tokens = max(int(token_count or 0), 0)
         if not tokens:
@@ -174,6 +188,8 @@ class EndpointRateLimiter:
         state.tpm_events.append((time.time(), tokens))
         state.tpd_count += tokens
         usage_store.record(user_id, endpoint_id, requests=0, tokens=tokens)
+        if key_source == "pool":
+            usage_store.record(usage_store.SHARED_USER, endpoint_id, requests=0, tokens=tokens)
 
     def record_429(
         self, endpoint_id: str, retry_after: int = 60, user_id: Optional[str] = None

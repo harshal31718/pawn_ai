@@ -49,13 +49,25 @@ class Resolver:
             own key never touches the shared pot.
 
         Returns "" when no usable key exists for this endpoint under its
-        key_source policy.
+        key_source policy. See `_resolve_key_and_source` if you also need to
+        know WHICH source was used (PAWN 2.0 Phase C.4 — quota_share only
+        applies to pool-sourced calls).
         """
+        return self._resolve_key_and_source(ep, user_id)[0]
+
+    def _resolve_key_and_source(self, ep, user_id: Optional[str]) -> tuple[str, str]:
+        """Same precedence as `_resolve_key`, but also returns which source
+        actually resolved: "byok", "pool", or "" (neither -- `key` is also "").
+        Used by `pick()` (PAWN 2.0 Phase C.4) so callers can gate quota_share's
+        enforcement on `source == "pool"` without a second, separate lookup —
+        important because a second lookup could race a concurrent admin edit
+        and disagree with the key actually used for this call."""
         key_source = getattr(ep, "key_source", "byok")
 
         if key_source == "pool":
             from app.config import read_pool_key
-            return read_pool_key(ep.provider) or ""
+            key = read_pool_key(ep.provider) or ""
+            return (key, "pool" if key else "")
 
         # "byok" and "either" both check the user's own key first.
         byok_key = ""
@@ -64,24 +76,27 @@ class Resolver:
             from app.core import key_store
             byok_key = key_store.get_key(user_id, ep.provider) or ""
         if byok_key:
-            return byok_key
+            return (byok_key, "byok")
         if key_source != "either":
-            return ""
+            return ("", "")
 
         # Import here (not at module load) to keep config.py's secret
         # reads lazy and mockable in tests, matching key_store's own
         # deferred-import convention above.
         from app.config import read_pool_key
-        return read_pool_key(ep.provider) or ""
+        pool_key = read_pool_key(ep.provider) or ""
+        return (pool_key, "pool" if pool_key else "")
 
-    def pick(self, model_id: str, user_id: Optional[str] = None) -> List[Tuple[str, str, Dict[str, str], str, str]]:
+    def pick(self, model_id: str, user_id: Optional[str] = None) -> List[Tuple[str, str, Dict[str, str], str, str, str]]:
         """
         Picks all available endpoints for a canonical model_id, sorted by priority.
         If model_id is a known provider name or alias, we pick all active endpoints for that provider.
         Endpoints are keyed exclusively with the user's BYOK key (configured in Settings).
         Only endpoints with a usable key are returned; if the user has no key for any
         available provider, a NoEndpointError is raised prompting them to add one.
-        Returns a list of tuples: (base_url, provider_model_id, headers, endpoint_id, provider)
+        Returns a list of tuples: (base_url, provider_model_id, headers, endpoint_id, provider, key_source)
+        -- key_source ("byok"/"pool", PAWN 2.0 Phase C.4) is the source ACTUALLY used
+        for this call, so callers can attribute pool consumption without a second lookup.
         """
         provider_map = PROVIDER_ALIASES
 
@@ -104,13 +119,27 @@ class Resolver:
         keyed = []
         missing_providers = set()
         for ep in available:
-            api_key = self._resolve_key(ep, user_id)
+            api_key, key_source = self._resolve_key_and_source(ep, user_id)
             if not api_key:
                 missing_providers.add(ep.provider)
                 continue
+            # PAWN 2.0 Phase C.4: quota_share applies to pool-sourced calls only
+            # -- alongside (not instead of) the rate_limiter.can_use check
+            # above, which already enforces the endpoint's real published
+            # limit. A user with their own key (source == "byok") never hits
+            # this gate. Fail-open on any quota_share error (same posture as
+            # every other quota accounting path in this codebase).
+            if key_source == "pool":
+                from app.core import quota_share
+                try:
+                    if not quota_share.enforce(ep, user_id, self._rate_limiter):
+                        missing_providers.add(ep.provider)
+                        continue
+                except Exception:
+                    pass
             provider = _detect_provider(ep.base_url)
             headers = _provider_headers(provider, api_key, ep.base_url)
-            keyed.append((ep.base_url, ep.provider_model_id, headers, ep.id, ep.provider))
+            keyed.append((ep.base_url, ep.provider_model_id, headers, ep.id, ep.provider, key_source))
 
         if not keyed:
             provs = ", ".join(sorted(missing_providers)) or model_id

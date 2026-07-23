@@ -17,7 +17,7 @@ from __future__ import annotations
 import sys
 from datetime import date, timezone, datetime
 
-from app.db.postgres_client import execute, fetchall
+from app.db.postgres_client import execute, fetchall, fetchone
 
 # Sentinel for usage that isn't attributable to a specific user (internal calls
 # with no user_id, and later the shared free pool whose quota really is shared).
@@ -154,3 +154,29 @@ def usage_for_user(user_id: str | None, window_kind: str = "day") -> list[dict]:
     except Exception as e:  # noqa: BLE001
         _note_failure("usage_for_user", e)
         return []
+
+
+def usage_for_endpoint(user_id: str | None, endpoint_id: str, window_kind: str = "day") -> dict:
+    """Today's requests/tokens for ONE (user, endpoint) pair -- {"requests": 0,
+    "tokens": 0} if no row exists or Postgres is unavailable. Used by
+    quota_share (PAWN 2.0 Phase C.2/C.3) for both the caller's own consumption
+    and, when `user_id=SHARED_USER`, the pool-wide aggregate for this endpoint."""
+    empty = {"requests": 0, "tokens": 0}
+    if _disabled:
+        return empty
+    uid = user_id or SHARED_USER
+    start = _today() if window_kind == "day" else _month_start()
+    try:
+        row = fetchone(
+            """
+            select requests, tokens
+            from endpoint_usage
+            where user_id = %s and endpoint_id = %s and window_kind = %s and window_start = %s
+            """,
+            (uid, endpoint_id, window_kind, start),
+        )
+        _note_success()
+        return row if row else empty
+    except Exception as e:  # noqa: BLE001
+        _note_failure("usage_for_endpoint", e)
+        return empty

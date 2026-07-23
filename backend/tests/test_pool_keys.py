@@ -12,6 +12,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from app.core.rate_limiter import EndpointRateLimiter
+from app.exceptions import NoEndpointError
 from app.registry.loader import load_registry
 from app.resolver.resolver import Resolver
 
@@ -223,3 +224,45 @@ def test_neither_key_source_excludes_the_row_entirely(client):
         resp = client.get("/dashboard/free-tiers")
     body = resp.json()
     assert body["rows"] == []
+
+
+# ── PAWN 2.0 Phase C.4: quota_share wired into pick(), pool-sourced only ────
+
+
+def test_pick_returns_key_source_as_a_6th_tuple_element():
+    r = _resolver()
+    with patch("app.core.key_store.get_key", return_value="byok-key"):
+        candidates = r.pick("google", user_id="u1")
+    assert candidates
+    for c in candidates:
+        assert len(c) == 6
+        assert c[5] == "byok"
+
+
+def test_quota_share_not_consulted_for_byok_sourced_endpoints():
+    r = _resolver()
+    with patch("app.core.key_store.get_key", return_value="byok-key"), \
+         patch("app.core.quota_share.enforce") as enforce_mock:
+        candidates = r.pick("google", user_id="u1")
+    assert candidates
+    enforce_mock.assert_not_called()
+
+
+def test_quota_share_block_excludes_the_pool_sourced_endpoint():
+    r = _resolver()
+    with patch("app.core.key_store.get_key", return_value=None), \
+         patch("app.config.read_pool_key", return_value="pool-key"), \
+         patch("app.core.quota_share.enforce", return_value=False):
+        with pytest.raises(NoEndpointError):
+            r.pick("google", user_id="keyless-user")
+
+
+def test_quota_share_allow_lets_the_pool_sourced_endpoint_through():
+    r = _resolver()
+    with patch("app.core.key_store.get_key", return_value=None), \
+         patch("app.config.read_pool_key", return_value="pool-key"), \
+         patch("app.core.quota_share.enforce", return_value=True) as enforce_mock:
+        candidates = r.pick("google", user_id="keyless-user")
+    assert candidates
+    assert all(c[5] == "pool" for c in candidates)
+    enforce_mock.assert_called()
