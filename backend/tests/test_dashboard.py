@@ -28,11 +28,24 @@ def _keys(*allowed):
     )
 
 
+def _pool(*allowed):
+    """Mock read_pool_key so these tests don't depend on whatever pool keys
+    happen to be configured in the real dev Postgres (the dashboard route
+    reads them live -- 2026-07-23: tests that assume "no pool" must say so
+    explicitly, or they break the moment a pool key is added via the Admin
+    tab). `_pool()` with no args = no pool keys at all."""
+    allowed_set = set(allowed)
+    return patch(
+        "app.routes.dashboard.read_pool_key",
+        side_effect=lambda provider: "POOL-KEY" if provider in allowed_set else None,
+    )
+
+
 def test_no_keys_returns_empty_dashboard_not_an_error(client):
     """An empty dashboard is the correct state for 'no keys configured yet' --
     mirrors how Resolver.pick() treats a keyless user (a clear error only when
     a MODEL is actually requested, never when just listing)."""
-    with _keys():
+    with _keys(), _pool():
         resp = client.get("/dashboard/free-tiers")
     assert resp.status_code == 200
     body = resp.json()
@@ -42,7 +55,7 @@ def test_no_keys_returns_empty_dashboard_not_an_error(client):
 
 
 def test_only_keyed_providers_appear(client):
-    with _keys("google"):
+    with _keys("google"), _pool():
         resp = client.get("/dashboard/free-tiers")
     body = resp.json()
     assert body["rows"], "expected at least one Google-backed row"
@@ -102,7 +115,7 @@ def test_headline_sums_only_capped_endpoints(client):
 
 
 def test_rows_never_include_a_provider_the_user_holds_no_key_for(client):
-    with _keys("groq"):
+    with _keys("groq"), _pool():
         resp = client.get("/dashboard/free-tiers").json()
     assert all(r["provider"] == "groq" for r in resp["rows"])
 
@@ -110,20 +123,12 @@ def test_rows_never_include_a_provider_the_user_holds_no_key_for(client):
 def test_key_source_defaults_to_byok(client):
     """Phase 1b will add a pool key source; until then every row must say so
     explicitly rather than leaving it implicit."""
-    with _keys("groq"):
+    with _keys("groq"), _pool():
         resp = client.get("/dashboard/free-tiers").json()
     assert resp["rows"] and all(r["key_source"] == "byok" for r in resp["rows"])
 
 
 # ── PAWN 2.0 Phase D.1/D.4: pool-dedupe honest headline ─────────────────────
-
-
-def _pool(*allowed):
-    allowed_set = set(allowed)
-    return patch(
-        "app.routes.dashboard.read_pool_key",
-        side_effect=lambda provider: "POOL-KEY" if provider in allowed_set else None,
-    )
 
 
 def test_byok_row_has_no_fair_share_remaining(client):
@@ -207,3 +212,42 @@ def test_priority_matches_registry_endpoint_priority(client):
         resp = client.get("/dashboard/free-tiers").json()
     assert resp["rows"]
     assert all(isinstance(r["priority"], int) for r in resp["rows"])
+
+
+# ── 2026-07-23: independent BYOK/pool availability flags (Models tab Source) ──
+
+
+def test_byok_only_row_flags_byok_not_pool(client):
+    """A provider the user holds a BYOK key for, with no pool key configured:
+    available_via_byok true, available_via_pool false."""
+    with _keys("cerebras"), _pool():
+        resp = client.get("/dashboard/free-tiers").json()
+    rows = [r for r in resp["rows"] if r["provider"] == "cerebras"]
+    assert rows
+    assert all(r["available_via_byok"] and not r["available_via_pool"] for r in rows)
+
+
+def test_pool_only_row_flags_pool_not_byok(client):
+    """A keyless user with a pool key configured for cerebras: available_via_pool
+    true, available_via_byok false, and the effective key_source is 'pool'."""
+    with _keys(), _pool("cerebras"):
+        resp = client.get("/dashboard/free-tiers").json()
+    rows = [r for r in resp["rows"] if r["provider"] == "cerebras"]
+    assert rows
+    assert all(r["available_via_pool"] and not r["available_via_byok"] for r in rows)
+    assert all(r["key_source"] == "pool" for r in rows)
+
+
+def test_both_available_flags_both_but_effective_source_is_byok(client):
+    """The case this feature exists for: user holds a BYOK key AND the operator
+    has a pool key for the same 'either' provider. Both flags true (so the UI
+    can show "Both"), but key_source stays 'byok' (BYOK-first) so fair-share
+    math doesn't wrongly apply."""
+    with _keys("cerebras"), _pool("cerebras"):
+        resp = client.get("/dashboard/free-tiers").json()
+    rows = [r for r in resp["rows"] if r["provider"] == "cerebras"]
+    assert rows
+    assert all(r["available_via_byok"] and r["available_via_pool"] for r in rows)
+    assert all(r["key_source"] == "byok" for r in rows)
+    # BYOK-first means no fair-share dedupe applied to these rows.
+    assert all(r["fair_share_remaining"] is None for r in rows)

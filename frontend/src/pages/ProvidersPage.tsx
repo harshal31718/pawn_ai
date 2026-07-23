@@ -56,8 +56,33 @@ function groupRowsByModel(rows: ProviderUsageRow[]) {
   return Array.from(byModel.values()).map((group) => {
     const primary = [...group].sort((a, b) => a.priority - b.priority)[0]
     const providers = group.map((r) => r.provider)
-    return { modelId: primary.model_id, displayName: primary.display_name, providers, primary }
+    // Source is aggregated across ALL of the model's endpoints: a model is
+    // reachable via BYOK if any of its endpoints is, and via the pool if any
+    // is -- so a model served by one BYOK provider and one pool provider
+    // reads as "Both" (both access paths are genuinely open to the user).
+    const viaByok = group.some((r) => r.available_via_byok)
+    const viaPool = group.some((r) => r.available_via_pool)
+    return { modelId: primary.model_id, displayName: primary.display_name, providers, primary, viaByok, viaPool }
   })
+}
+
+/** BYOK / Pool / Both source badge for a model row. "Both" means the user can
+ *  reach the model through their own key AND the operator's shared pool. */
+function SourceBadge({ viaByok, viaPool }: { viaByok: boolean; viaPool: boolean }) {
+  const label = viaByok && viaPool ? 'Both' : viaByok ? 'BYOK' : viaPool ? 'Pool' : '—'
+  const cls =
+    viaByok && viaPool
+      ? 'text-theme-brand bg-theme-brand/10'
+      : viaByok
+        ? 'text-theme-text-muted bg-theme-bg/60'
+        : viaPool
+          ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'
+          : 'text-theme-text-muted'
+  return (
+    <span className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full select-none ${cls}`}>
+      {label}
+    </span>
+  )
 }
 
 function ModelsTable({ rows, search }: { rows: ProviderUsageRow[]; search: string }) {
@@ -90,6 +115,7 @@ function ModelsTable({ rows, search }: { rows: ProviderUsageRow[]; search: strin
           <tr className="border-b border-theme-border/50 text-[10px] uppercase tracking-wide text-theme-text">
             <th className="text-left font-semibold px-3 py-2">Name</th>
             <th className="text-left font-semibold px-3 py-2">Providers</th>
+            <th className="text-left font-semibold px-3 py-2 cursor-help" title="Whether you can reach this model via your own key (BYOK), the operator's shared pool, or both">Source</th>
             <th className="text-left font-semibold px-3 py-2 cursor-help" title="Tokens per minute">TPM</th>
             <th className="text-left font-semibold px-3 py-2 cursor-help" title="Requests per minute">RPM</th>
             <th className="text-left font-semibold px-3 py-2 cursor-help" title="Requests per day">RPD</th>
@@ -97,13 +123,16 @@ function ModelsTable({ rows, search }: { rows: ProviderUsageRow[]; search: strin
           </tr>
         </thead>
         <tbody className="divide-y divide-theme-border/30">
-          {models.map(({ modelId, displayName, providers, primary }) => (
+          {models.map(({ modelId, displayName, providers, primary, viaByok, viaPool }) => (
             <tr key={modelId}>
               <td className="px-3 py-2 font-medium text-theme-text whitespace-nowrap">{displayName}</td>
               <td className="px-3 py-2 text-theme-text-muted">
                 {providers.length <= 2
                   ? providers.map(formatProviderName).join(', ')
                   : `${providers.slice(0, 2).map(formatProviderName).join(', ')}, +${providers.length - 2}`}
+              </td>
+              <td className="px-3 py-2 whitespace-nowrap">
+                <SourceBadge viaByok={viaByok} viaPool={viaPool} />
               </td>
               <td className="px-3 py-2 text-theme-text-muted whitespace-nowrap">
                 {primary.tpm_limit != null ? `${formatTokens(primary.tpm_used)} / ${formatTokens(primary.tpm_limit)}` : '—'}

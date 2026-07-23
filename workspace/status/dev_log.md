@@ -6,6 +6,50 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-23] — Models tab "Source" column: pool availability visible to users
+
+Follow-up to the Providers page redesign. The gap: the Models tab showed
+which models a user could reach, but for an "either" endpoint where the user
+had their own BYOK key, it reported "byok" and silently hid that the model
+was ALSO available through the operator's shared pool — so users couldn't see
+what the free pool actually gives them.
+
+Asked the user how to surface it (new tab / Source column / toggle) rather
+than assuming — they picked a Source column in the existing Models tab.
+
+Backend: split `_usable_key_source` into `_key_source_availability(ep,
+user_id)` returning `(via_byok, via_pool)` computed independently, and added
+both as booleans on each dashboard row. The effective `key_source` stays
+BYOK-first (so fair-share math is unchanged — it only applies to genuinely
+pool-sourced rows), but `available_via_pool` now stays true even when a BYOK
+key also exists. Frontend: a "Source" column with a BYOK / Pool / Both badge,
+aggregated across each model's endpoints. 3 new tests.
+
+**Fixed a real test-isolation gap along the way.** The resolver and dashboard
+read pool keys live from the real dev Postgres `pool_api_keys` table (not
+test-isolated). The user had added google/groq pool keys via the live Admin
+UI while testing, so ~9 resolver/keys/capability/dashboard tests that assumed
+an empty pool and never mocked it started failing — exactly the same class of
+real-DB leakage as the rate-limiter `endpoint_usage` seed caught earlier this
+session. These pool keys are real config the user wants (not accidental
+pollution to delete, unlike the earlier stray usage rows), so the fix was
+isolation, not deletion: an autouse `stub_pool_keys` fixture in conftest.py
+that defaults every test to an empty pool by patching
+`pool_key_store.get_pool_config → None`. Getting the seam right took a couple
+of tries (patching `read_pool_key` broke its own unit tests; patching
+`get_pool_config` broke `test_pool_key_store.py`'s tests of that same
+function) — landed on patching `get_pool_config` but skipping the
+`test_pool_key_store` module, which isolates itself one level lower at the
+`fetchone` seam. The 4 pre-existing dashboard tests that assumed empty pool
+now also mock it explicitly. 801 backend tests green, tsc/build clean.
+
+Recurring theme worth noting: two separate real dev tables (`endpoint_usage`,
+`pool_api_keys`) have now each leaked live state into the not-isolated test
+suite this session. A proper per-test DB isolation pass would kill this whole
+class of flakiness instead of patching it seam-by-seam.
+
+---
+
 ### [2026-07-23] — Provider registry, Providers page redesign, Settings cleanup, site-wide background effect
 
 Long rapid-iteration UI/architecture session, driven almost entirely by

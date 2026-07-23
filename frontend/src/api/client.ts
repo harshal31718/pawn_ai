@@ -797,6 +797,12 @@ export interface ProviderUsageRow {
   display_name: string
   provider: string
   key_source: string
+  // 2026-07-23: the two reachability paths, reported independently, so the
+  // Models tab can show a "Source: BYOK / Pool / Both" indicator.
+  // `available_via_pool` stays true even when the user also holds a BYOK key
+  // for an "either" endpoint (unlike the BYOK-first effective `key_source`).
+  available_via_byok: boolean
+  available_via_pool: boolean
   rpd_limit: number | null
   rpd_used: number
   tpd_limit: number | null

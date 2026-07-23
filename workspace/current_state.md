@@ -2,6 +2,40 @@
 
 Last updated: 2026-07-23
 
+**Models tab "Source" column (pool visibility) — DONE (2026-07-23).** Follow-up
+to the Providers page redesign: users can now see which models are available
+via the operator's shared pool, not just their own BYOK keys. Backend
+`dashboard.py` — each `ProviderUsageRow` now carries independent
+`available_via_byok` / `available_via_pool` booleans (a new
+`_key_source_availability(ep, user_id)` helper computes both paths separately;
+the old single-string `_usable_key_source` was folded into it). Crucially,
+`available_via_pool` stays true even when the user *also* holds a BYOK key for
+an "either" endpoint — the effective BYOK-first `key_source` (and the
+fair-share math it drives) is unchanged, but the row no longer *hides* that
+the pool is also an option. Frontend `ProvidersPage.tsx` Models tab gained a
+"Source" column with a BYOK / Pool / Both badge, aggregated across each
+model's endpoints (`viaByok`/`viaPool` in `groupRowsByModel`; a model served
+by one BYOK provider and one pool provider reads "Both"). 3 new dashboard
+tests. **UI decision (asked, not assumed):** offered new-tab vs. Source-column
+vs. toggle — user chose the Source column.
+
+**Test-isolation gap fixed while here (same class as the earlier rate-limiter
+seed leak):** the resolver/dashboard read pool keys live from the real dev
+Postgres `pool_api_keys` table, which is not test-isolated. Once google/groq
+pool keys were added via the live Admin UI, ~9 resolver/keys/capability/
+dashboard tests that assumed "no pool" and didn't mock it started failing.
+Fixed properly (the pool keys are real config the user wants, NOT accidental
+pollution to delete): new autouse `stub_pool_keys` fixture in `conftest.py`
+defaults every test to an empty pool by patching
+`pool_key_store.get_pool_config → None` (skips `test_pool_key_store.py`, which
+unit-tests that function at the lower `fetchone` seam; overridden by
+`test_pool_keys.py`/dashboard pool tests that patch it themselves). The 4
+pre-existing dashboard tests that assumed empty pool now also isolate
+explicitly via a `_pool()` helper. 801 backend tests green, `tsc`/build clean.
+Note: the `endpoint_usage` and `pool_api_keys` tables both leaking real dev
+state into the not-isolated test suite is a recurring theme — worth a proper
+per-test DB isolation pass at some point rather than patching seam-by-seam.
+
 **Provider registry + Providers page redesign + Settings cleanup + site-wide
 background effect — DONE (2026-07-23).** Long UI/architecture session,
 frontend-only except one small backend change (password change no longer

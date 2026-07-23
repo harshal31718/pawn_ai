@@ -13,13 +13,18 @@ instead of omitting it or guessing a value that would inflate the headline.
 
 Phase 1b: a row now appears if the user can reach the endpoint through EITHER
 key source, and `key_source` reports which one is actually in play for them
-right now (see `_usable_key_source`) -- a user with no BYOK keys at all can
-still see rows here if the operator has configured pool keys.
+right now (see `_key_source_availability`) -- a user with no BYOK keys at all
+can still see rows here if the operator has configured pool keys.
 
-PAWN 2.0 Phase A.2 (2026-07-23): `_usable_key_source` is now BYOK-first,
-mirroring resolver.Resolver._resolve_key's reversed precedence -- a user
-with their own key is reported as "byok" even if the operator has also
-configured a pool key for that provider.
+PAWN 2.0 Phase A.2 (2026-07-23): `key_source` is BYOK-first, mirroring
+resolver.Resolver._resolve_key's reversed precedence -- a user with their own
+key is reported as "byok" even if the operator has also configured a pool key
+for that provider.
+
+2026-07-23: each row also carries independent `available_via_byok` /
+`available_via_pool` flags (both can be true at once for an "either" endpoint
+the user holds a key for), so the Models tab can show a "Source: BYOK / Pool
+/ Both" indicator without hiding that the pool is an available path.
 
 PAWN 2.0 Phase D.1 (2026-07-23): pool-sourced rows now report a
 `fair_share_remaining` alongside the raw `tpd_remaining` -- the headline's
@@ -41,25 +46,19 @@ from app.core import key_store, quota_share
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
-def _usable_key_source(ep, user_id: str) -> Optional[str]:
-    """Which key source THIS user is actually drawing on for `ep`, or None if
-    neither is available. Mirrors resolver.Resolver._resolve_key's precedence
-    exactly -- kept as a separate, parallel implementation rather than
-    importing the resolver, since this route only needs a yes/no + label, not
-    a real key, and doesn't want a dependency on Resolver's constructor
-    (registry + rate_limiter) for that.
-
-    **BYOK-first** (PAWN 2.0 Phase A.2, 2026-07-23): reverses Phase 1b's
-    pool-first order -- a user with their own key for "either" endpoints is
-    reported as "byok", never "pool", even when the operator has also
-    configured a pool key for that provider.
+def _key_source_availability(ep, user_id: str) -> tuple[bool, bool]:
+    """`(via_byok, via_pool)` -- whether THIS user can reach `ep` through their
+    own BYOK key and/or the operator's shared pool key, computed
+    independently. Mirrors resolver.Resolver._resolve_key's reachability rules
+    (a "pool" endpoint ignores the user's own key entirely; a "byok" endpoint
+    has no pool path) -- kept as a separate, parallel implementation rather
+    than importing the resolver, since this route only needs yes/no flags, not
+    a real key.
     """
     key_source = getattr(ep, "key_source", "byok")
-    if key_source != "pool" and key_store.get_key(user_id, ep.provider):
-        return "byok"
-    if key_source in ("pool", "either") and read_pool_key(ep.provider):
-        return "pool"
-    return None
+    via_byok = key_source != "pool" and bool(key_store.get_key(user_id, ep.provider))
+    via_pool = key_source in ("pool", "either") and bool(read_pool_key(ep.provider))
+    return via_byok, via_pool
 
 
 class ProviderUsageRow(BaseModel):
@@ -67,10 +66,17 @@ class ProviderUsageRow(BaseModel):
     model_id: str
     display_name: str
     provider: str
-    # Phase 1b: reflects which source THIS user is actually drawing on for
-    # this endpoint right now ("byok" or "pool"), not a static default --
-    # see _usable_key_source above.
+    # Phase 1b: the EFFECTIVE source THIS user is actually drawing on for this
+    # endpoint right now ("byok" or "pool"), BYOK-first -- not a static
+    # default. See the caller: derived from `_key_source_availability`.
     key_source: str = "byok"
+    # 2026-07-23: the two reachability paths reported independently, so the UI
+    # can show a "Source: BYOK / Pool / Both" indicator. Unlike `key_source`
+    # (BYOK-first EFFECTIVE source), `available_via_pool` stays true even when
+    # the user also holds a BYOK key for an "either" endpoint -- the point of
+    # this pair is to stop hiding that the pool is an available path.
+    available_via_byok: bool = False
+    available_via_pool: bool = False
     rpd_limit: Optional[int]
     rpd_used: int
     tpd_limit: Optional[int]
@@ -132,9 +138,12 @@ async def get_free_tiers(request: Request) -> FreeTiersResponse:
 
     for model in registry.user_models():
         for ep in registry.endpoints_for(model.id):
-            key_source = _usable_key_source(ep, user_id)
+            via_byok, via_pool = _key_source_availability(ep, user_id)
+            # Effective source is BYOK-first (what the resolver would actually
+            # use); None only when NEITHER path is open -- not this user's to see.
+            key_source = "byok" if via_byok else ("pool" if via_pool else None)
             if key_source is None:
-                continue  # neither BYOK nor pool key usable here -- not this user's to see
+                continue
 
             snapshot = rate_limiter.snapshot(ep.id, user_id=user_id)
             has_cap = ep.tpd_limit is not None
@@ -168,6 +177,8 @@ async def get_free_tiers(request: Request) -> FreeTiersResponse:
                     display_name=model.display_name,
                     provider=ep.provider,
                     key_source=key_source,
+                    available_via_byok=via_byok,
+                    available_via_pool=via_pool,
                     fair_share_remaining=fair_share_remaining,
                     rpd_limit=ep.rpd_limit,
                     rpd_used=snapshot["requests_today"],
