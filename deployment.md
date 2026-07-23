@@ -196,10 +196,16 @@ server {
     root /opt/pawn/frontend/dist;
 
     # Backend API (root-level routes; no /api prefix). SSE-friendly.
-    # NOTE: "chat" is deliberately NOT in this list — see the dedicated
-    # `location = /chat` block below. Every other name here is exclusively a
+    # NOTE: "chat" and "projects" are deliberately NOT in this list — they
+    # collide with same-named frontend page routes and get dedicated
+    # method/auth-aware blocks below. Every other name here is exclusively a
     # backend path with no same-named frontend page route, so no collision.
-    location ~ ^/(health|auth|generate|conversations|registry|keys|upload|crypto) {
+    # KEEP THIS IN SYNC with backend/app/routes/*.py's APIRouter prefixes —
+    # a missing prefix silently serves that API as SPA HTML (GET → parse
+    # error; PUT/PATCH/DELETE → 405). Found live 2026-07-23: account/admin/
+    # dashboard/memory were all missing here, breaking password change, the
+    # Providers usage dashboard, and admin pool-key management on prod.
+    location ~ ^/(health|auth|account|admin|dashboard|generate|conversations|registry|keys|memory|upload|crypto) {
         proxy_pass http://127.0.0.1:8001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -251,6 +257,45 @@ server {
     location ~ ^/chat/ {
         include snippets/security-headers.conf;
         try_files $uri /index.html;
+    }
+
+    # /projects collides like /chat. GET /projects is BOTH the gallery PAGE
+    # (browser navigation → SPA) and the list-projects API (XHR carrying a
+    # Bearer header). POST /projects is create (API only). Route the exact
+    # path by method + presence of an Authorization header — browser
+    # navigations never carry one; the frontend's fetch() always does. (The
+    # per-project PAGE route is the SINGULAR /project/<id>, so /projects/<id>…
+    # below is API-only.) Found live 2026-07-23 — projects/memory had been
+    # latently broken on prod since introduction (never exercised there).
+    location = /projects {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        include snippets/security-headers.conf;
+
+        if ($request_method = POST) {
+            proxy_pass http://127.0.0.1:8001;
+        }
+        if ($http_authorization != "") {
+            proxy_pass http://127.0.0.1:8001;
+        }
+        try_files $uri /index.html;
+    }
+
+    # /projects/<id>, /projects/<id>/chats/<cid> — backend API only.
+    location ~ ^/projects/ {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
     }
 
     # SPA fallback for everything else (/, /privacy, /imagelab, /settings, ...).

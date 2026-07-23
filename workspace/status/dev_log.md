@@ -6,6 +6,41 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-23] — POST-DEPLOY HOTFIX: Nginx missing backend route prefixes (live)
+
+Right after the 2.0 deploy, the user's prod smoke-test hit three failures:
+password change → "Request failed: 405"; Providers page → "Could not load
+provider usage"; Admin tab → "Could not load pool keys" + "Failed to save".
+All three were the SAME root cause and NOT app bugs: the VM's hand-maintained
+Nginx server block (`/etc/nginx/sites-available/pawn`, not in the repo) proxies
+only an explicit allowlist of backend path prefixes to `:8001`, and this
+release's new routers weren't in it. Unproxied API paths fall through to the
+SPA `try_files → index.html`: a GET gets HTML the frontend can't parse
+("Could not load…"), a PUT/PATCH/DELETE against a static file gets 405.
+
+Diagnosed by enumerating `APIRouter(prefix=…)` across `backend/app/routes/*`
+vs the live regex: missing `account`, `admin`, `dashboard`, `memory`, and
+`projects`. First four are collision-free (no same-named SPA page) → just
+added to the regex. `projects` COLLIDES with the `/projects` gallery page the
+same way `/chat` does — `GET /projects` is both the page (browser nav) and the
+list API (XHR). Split it: exact `location = /projects` routes to backend on
+POST or when an `Authorization` header is present (browser navs never carry
+one, the frontend fetch always does — auth is a Bearer header, not a cookie),
+else SPA; `location ~ ^/projects/` (the plural-with-subpath API paths; the
+per-project PAGE is the SINGULAR `/project/<id>`) → backend. `projects`/
+`memory` turned out PRE-EXISTING on old prod (`22695be`) — they'd been
+latently broken there since introduction, just never exercised.
+
+Applied to the live VM config (backed up first, `nginx -t` gated, reloaded),
+verified every route through public HTTPS: `/account/password` PUT, `/dashboard/
+free-tiers`, `/admin/pool-keys` all now return backend JSON (401 without a
+token — correct) instead of 405/HTML; `GET /projects` no-auth → SPA HTML,
+`GET/POST /projects` +auth → backend JSON; `/settings` control still SPA. Also
+fixed `deployment.md`'s §3.7 Nginx block (the repo runbook still had the stale
+regex) so a future fresh deploy doesn't repeat this, with a KEEP-IN-SYNC note.
+
+---
+
 ### [2026-07-23] — DEPLOYED: PAWN 2.0 full release live on prod (pawnai.duckdns.org)
 
 Promoted `dev → main` and deployed the whole PAWN 2.0 stack to the prod VM

@@ -2,6 +2,20 @@
 
 Last updated: 2026-07-23
 
+**POST-DEPLOY HOTFIX (2026-07-23, live) — Nginx was missing backend route
+prefixes.** Prod smoke-test surfaced 3 failures (password change → 405,
+Providers usage + admin pool keys → "could not load"), all one root cause: the
+VM's hand-maintained Nginx block only proxies an allowlist of prefixes to
+`:8001`, and this release's new routers (`account`/`admin`/`dashboard`/
+`memory`, plus latent `projects`) weren't in it — so their API calls fell to
+the SPA `try_files` (GET → unparseable HTML, PUT → 405). Added the four
+collision-free prefixes to the regex; split `/projects` (collides with the
+gallery page like `/chat`) into method/auth-aware blocks. Fixed live (backed
+up, `nginx -t`-gated, reloaded, all routes re-verified over HTTPS) AND in
+`deployment.md`'s §3.7 so it can't recur. `projects`/`memory` were latently
+broken on old prod too (never exercised). Lesson recorded: the Nginx prefix
+allowlist must stay in sync with `backend/app/routes/*` router prefixes.
+
 **DEPLOYED — full PAWN 2.0 release LIVE on prod (`pawnai.duckdns.org`),
 2026-07-23.** `main`: `22695be` → `2e75d14`. Everything since the 2026-07-17
 deploy (13 commits): capability routing + registry, 2.0 Phases A–E,
