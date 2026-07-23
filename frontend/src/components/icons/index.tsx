@@ -104,3 +104,22 @@ export function ImageIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+/** R3: sidebar nav icon for the Providers (free-tier budget) page. */
+export function GaugeIcon({ className }: IconProps) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zM12 12l4-4M12 12V8" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 15a5.25 5.25 0 019 0" />
+    </svg>
+  )
+}
+
+/** PAWN 2.0 Phase B: sidebar nav icon for the Admin page (shield). */
+export function ShieldIcon({ className }: IconProps) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+    </svg>
+  )
+}

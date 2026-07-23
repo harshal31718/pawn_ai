@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import type { RegistryModel, ConversationMeta } from '../api/client'
-import ApiKeysSection from './ApiKeysSection'
+import type { ConversationMeta } from '../api/client'
+import ChangePasswordSection from './ChangePasswordSection'
+import SettingsDialog from './SettingsDialog'
 import ThemeToggle, { type Theme } from './ThemeToggle'
 
 const BUBBLE_PRESETS = [
@@ -18,14 +19,12 @@ const BUBBLE_PRESETS = [
 
 interface Props {
   onClose: () => void
+  isSidebarOpen?: boolean
+  onOpenSidebar?: () => void
   theme: Theme
   onChangeTheme: (t: Theme) => void
   displayName: string
   onSaveDisplayName: (name: string) => void
-  models: RegistryModel[]
-  defaultModel: string
-  onSaveDefaultModel: (id: string) => void
-  onKeysChanged?: () => void
   userBubbleColor: string
   onChangeUserBubble: (id: string) => void
   aiBubbleColor: string
@@ -44,7 +43,6 @@ const SHORTCUTS = [
 ]
 
 const FUTURE_ITEMS = [
-  { label: 'Password & Authentication', desc: 'Password change, 2FA, login history, active sessions' },
   { label: 'Notifications', desc: 'Global toggle, message & system channels, quiet hours' },
   { label: 'Sync & Backup', desc: 'Cloud sync, data backup and restore across devices' },
   { label: 'Search Preferences', desc: 'Scope and filter defaults (search feature planned)' },
@@ -119,9 +117,8 @@ function BubbleColorRow({
 }
 
 export default function SettingsPage({
-  onClose, theme, onChangeTheme,
+  onClose, isSidebarOpen, onOpenSidebar, theme, onChangeTheme,
   displayName, onSaveDisplayName,
-  models, defaultModel, onSaveDefaultModel, onKeysChanged,
   userBubbleColor, onChangeUserBubble,
   aiBubbleColor, onChangeAiBubble,
   backgroundEffect, onToggleBackgroundEffect,
@@ -130,6 +127,8 @@ export default function SettingsPage({
   const [nameInput, setNameInput] = useState(displayName)
   const [nameSaved, setNameSaved] = useState(false)
   const [clearConfirm, setClearConfirm] = useState(false)
+  const [showEditDetails, setShowEditDetails] = useState(false)
+  const [showChangePassword, setShowChangePassword] = useState(false)
 
   const nameSavedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -144,16 +143,32 @@ export default function SettingsPage({
     setNameSaved(true)
     if (nameSavedTimer.current) clearTimeout(nameSavedTimer.current)
     nameSavedTimer.current = setTimeout(() => setNameSaved(false), 2000)
+    setShowEditDetails(false)
   }
 
   const avatarLetter = displayName[0]?.toUpperCase() || 'U'
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden relative bg-theme-bg">
+    <div className="flex-1 flex flex-col h-full overflow-hidden relative">
 
       {/* Floating Top Header */}
       <header className="absolute top-0 left-0 right-0 z-30 pointer-events-none p-4 flex items-center justify-between w-full">
         <div className="flex items-center gap-2 h-7 pl-2 pr-3 bg-theme-surface border border-theme-border/60 rounded-xl shadow-md pointer-events-auto z-20 transition-all">
+          {/* Mobile-only reopen affordance -- "Back to chat" gets you to the
+              sidebar indirectly (chat has its own hamburger), this makes it
+              direct. Mirrors ChatPage.tsx's / ProvidersPage.tsx's toggle. */}
+          {!isSidebarOpen && onOpenSidebar && (
+            <button
+              type="button"
+              onClick={onOpenSidebar}
+              className="md:hidden rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
+              title="Open sidebar"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+              </svg>
+            </button>
+          )}
           <button
             type="button" onClick={onClose}
             className="rounded-full text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text transition-colors focus:outline-none flex items-center justify-center"
@@ -170,7 +185,7 @@ export default function SettingsPage({
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto pt-14 px-4 pb-10">
         <div className="w-full max-w-6xl mx-auto py-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
 
             {/* Left Column */}
             <div className="space-y-6">
@@ -247,66 +262,29 @@ export default function SettingsPage({
               </section>
             </div>
 
-            {/* Middle Column */}
-            <div className="space-y-6">
-              {/* ── Chat Defaults ── */}
-              <section>
-                <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-3">Chat Defaults</h2>
-                <div className="bg-theme-surface border border-theme-border/50 rounded-xl p-3">
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-theme-text block">Default model</label>
-                    <select
-                      value={defaultModel}
-                      onChange={(e) => onSaveDefaultModel(e.target.value)}
-                      className="text-xs bg-theme-bg border border-theme-border rounded-lg px-2.5 py-1.5 text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-brand/50 cursor-pointer w-full"
-                    >
-                      {models.map((m) => (
-                        <option key={m.model_id} value={m.model_id}>{m.display_name}</option>
-                      ))}
-                      {models.length === 0 && <option value={defaultModel}>{defaultModel}</option>}
-                    </select>
-                  </div>
-                </div>
-              </section>
-
-              {/* ── API Keys (BYOK) ── */}
-              <ApiKeysSection onKeysChanged={onKeysChanged} />
-            </div>
-
             {/* Right Column */}
             <div className="space-y-6">
-              {/* ── Profile ── */}
+              {/* ── Profile (merged with Change Password) ── */}
               <section>
                 <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-3">Profile</h2>
                 <div className="bg-theme-surface border border-theme-border/50 rounded-xl p-3 space-y-3">
-                  {/* Row 1: Display Name */}
+                  {/* Row 1: photo + name + Edit Details */}
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-full bg-theme-brand text-theme-brand-text flex items-center justify-center font-bold text-sm shrink-0 select-none">
                       {avatarLetter}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <label className="text-[10px] font-medium text-theme-text-muted block mb-1">Display name</label>
-                      <div className="flex flex-col sm:flex-row md:flex-col xl:flex-row gap-2">
-                        <input
-                          type="text" value={nameInput}
-                          onChange={(e) => { setNameInput(e.target.value); setNameSaved(false) }}
-                          onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
-                          placeholder="Your name"
-                          className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
-                        />
-                        <button
-                          type="button" onClick={handleSaveName}
-                          disabled={!nameInput.trim() || nameInput.trim() === displayName}
-                          className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 w-full sm:w-auto md:w-full xl:w-auto text-center cursor-pointer"
-                        >
-                          {nameSaved ? 'Saved' : 'Save'}
-                        </button>
-                      </div>
-                    </div>
+                    <p className="flex-1 min-w-0 text-xs font-semibold text-theme-text truncate">{displayName}</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowEditDetails(true)}
+                      className="text-xs px-3 py-1.5 bg-theme-bg border border-theme-border/50 rounded-lg text-theme-text-muted hover:text-theme-text transition-colors font-semibold shrink-0 cursor-pointer"
+                    >
+                      Edit
+                    </button>
                   </div>
 
-                  {/* Row 2: Email & Sign out */}
-                  <div className="flex flex-col sm:flex-row md:flex-col xl:flex-row items-stretch sm:items-end md:items-stretch xl:items-end gap-2 pt-1">
+                  {/* Row 2: Email + Sign out */}
+                  <div className="flex items-stretch gap-2">
                     <div className="flex-1 min-w-0">
                       <label className="text-[10px] font-medium text-theme-text-muted block mb-1">Email</label>
                       <p className="text-xs text-theme-text-muted px-3 py-1.5 bg-theme-bg border border-theme-border/50 rounded-lg opacity-60 select-none truncate" title={email || 'Not signed in'}>
@@ -315,16 +293,23 @@ export default function SettingsPage({
                     </div>
                     <button
                       type="button" onClick={onLogout}
-                      className="text-xs px-3 py-1.5 bg-theme-bg border border-red-500/40 rounded-lg text-red-500 hover:bg-red-500/10 transition-colors font-semibold shrink-0 w-full sm:w-auto md:w-full xl:w-auto text-center cursor-pointer"
+                      className="self-end text-xs px-3 py-1.5 bg-theme-bg border border-red-500/40 rounded-lg text-red-500 hover:bg-red-500/10 transition-colors font-semibold shrink-0 cursor-pointer"
                     >
                       Sign out
                     </button>
                   </div>
 
-                  {/* Row 3: Data actions */}
-                  <div className="pt-2 border-t border-theme-border/20">
+                  {/* Row 3: Change Password + Clear Data */}
+                  <div className="flex items-center gap-2 pt-2 border-t border-theme-border/20">
+                    <button
+                      type="button"
+                      onClick={() => setShowChangePassword(true)}
+                      className="flex-1 text-xs px-3 py-1.5 bg-theme-bg border border-theme-border/50 rounded-lg text-theme-text-muted hover:text-theme-text transition-colors font-semibold cursor-pointer"
+                    >
+                      Change Password
+                    </button>
                     {clearConfirm ? (
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <span className="text-[10px] text-theme-text-muted select-none">Sure?</span>
                         <button
                           type="button" onClick={() => setClearConfirm(false)}
@@ -341,7 +326,7 @@ export default function SettingsPage({
                       <button
                         type="button" onClick={() => setClearConfirm(true)}
                         disabled={conversations.length === 0}
-                        className="text-[11px] px-2.5 py-1.5 bg-theme-bg border border-red-500/40 rounded-lg text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
+                        className="flex-1 text-xs px-3 py-1.5 bg-theme-bg border border-red-500/40 rounded-lg text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-semibold cursor-pointer"
                       >
                         Clear Data
                       </button>
@@ -367,6 +352,36 @@ export default function SettingsPage({
           </div>
         </div>
       </div>
+
+      {showEditDetails && (
+        <SettingsDialog title="Edit" onClose={() => setShowEditDetails(false)}>
+          <div className="space-y-2">
+            <label className="text-[10px] font-medium text-theme-text-muted block">Display name</label>
+            <div className="flex gap-2">
+              <input
+                type="text" value={nameInput}
+                onChange={(e) => { setNameInput(e.target.value); setNameSaved(false) }}
+                onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
+                placeholder="Your name"
+                className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+              />
+              <button
+                type="button" onClick={handleSaveName}
+                disabled={!nameInput.trim() || nameInput.trim() === displayName}
+                className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+              >
+                {nameSaved ? 'Saved' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </SettingsDialog>
+      )}
+
+      {showChangePassword && (
+        <SettingsDialog title="Change Password" onClose={() => setShowChangePassword(false)}>
+          <ChangePasswordSection />
+        </SettingsDialog>
+      )}
     </div>
   )
 }

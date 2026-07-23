@@ -14,11 +14,15 @@ create extension if not exists pgcrypto;  -- gen_random_uuid() (image_sessions/i
 -- ---------------------------------------------------------------------------
 
 create table if not exists users (
-  user_id    text primary key,          -- Google OAuth "sub" claim
-  email      text unique not null,
-  name       text,
-  picture    text,
-  created_at timestamptz default now()
+  user_id          text primary key,    -- Google OAuth "sub" claim
+  email            text unique not null,
+  name             text,
+  picture          text,
+  created_at       timestamptz default now(),
+  -- Login-change plan (2026-07-23): auto-generated at true first-insert only
+  -- (Google re-logins never touch this) -- see routes/auth.py's callback.
+  password_hash    text,
+  password_changed boolean not null default false
 );
 
 create table if not exists user_drive_tokens (
@@ -34,6 +38,19 @@ create table if not exists user_api_keys (
   key_enc    text not null,             -- AES-256-GCM encrypted BYOK key
   updated_at timestamptz default now(),
   primary key (user_id, provider)
+);
+
+-- PAWN 2.0 Phase B.2: operator-owned shared pool keys, admin-editable live
+-- (no restart). One row per provider, no user_id -- distinct from
+-- user_api_keys above (per-user BYOK). saturation_pct is nullable: null means
+-- "use quota_share's global 80% default" (Phase C), a real value overrides it
+-- per-provider.
+create table if not exists pool_api_keys (
+  provider       text primary key,
+  key_enc        text not null,        -- AES-256-GCM encrypted, same as user_api_keys
+  enabled        boolean not null default true,
+  saturation_pct int,                  -- null -> global default (80)
+  updated_at     timestamptz default now()
 );
 
 -- Phase M (memory scoping) — redefined from the original cross-chat-visible
@@ -203,6 +220,29 @@ create index if not exists image_jobs_session_status_idx
   on image_jobs (session_id, status);
 create index if not exists image_jobs_queue_pos_idx
   on image_jobs (session_id, queue_pos);
+
+-- R2: persistent, token-accurate endpoint quota accounting. Mirrors
+-- postgres/migrations/2026-07_R2_endpoint_usage.sql -- see that file for the
+-- full rationale (in-memory counters reset on restart; tpm/tpd limits were
+-- registered but unenforced; per-user grain because BYOK means per-user quota).
+-- Only day/month windows are persisted; rpm/tpm stay in memory.
+create table if not exists endpoint_usage (
+  user_id      text not null default '',   -- '' = unattributed / shared pool
+  endpoint_id  text not null,
+  window_kind  text not null,              -- 'day' | 'month'
+  window_start date not null,
+  requests     bigint not null default 0,
+  tokens       bigint not null default 0,
+  updated_at   timestamptz not null default now(),
+  primary key (user_id, endpoint_id, window_kind, window_start),
+  constraint endpoint_usage_window_kind_chk check (window_kind in ('day', 'month')),
+  constraint endpoint_usage_nonneg_chk check (requests >= 0 and tokens >= 0)
+);
+
+create index if not exists endpoint_usage_window_idx
+  on endpoint_usage (window_kind, window_start);
+create index if not exists endpoint_usage_user_idx
+  on endpoint_usage (user_id, window_kind, window_start);
 
 -- pawn_anon role (D.4) — replaces Supabase's built-in `anon` role. NOLOGIN here;
 -- a companion init script (postgres/init_pawn_anon.sh, run right after this

@@ -30,7 +30,11 @@ async def test_cross_model_fallback_completes_on_groq():
     fires for the switch."""
     resolver = Resolver(load_registry(), EndpointRateLimiter())
 
-    async def selective_stream(url, model, messages, headers):
+    async def selective_stream(url, model, messages, headers, **kwargs):
+        # **kwargs absorbs R2's on_usage callback / stream_options passthrough --
+        # without it this mock's signature mismatches the real stream_llm and
+        # every call raises a TypeError, masked as a generic ProviderError
+        # (only surfaced once real pytest actually ran this session).
         if "generativelanguage" in url:
             raise ProviderError(kind="rate_limit", message="429 rate limited")
         yield "ok"
@@ -62,7 +66,7 @@ async def test_no_fallback_when_user_only_has_the_rate_limited_provider():
     fallback, so a ProviderError(rate_limit) surfaces."""
     resolver = Resolver(load_registry(), EndpointRateLimiter())
 
-    async def always_rate_limited(url, model, messages, headers):
+    async def always_rate_limited(url, model, messages, headers, **kwargs):
         raise ProviderError(kind="rate_limit", message="429")
         yield  # pragma: no cover
 

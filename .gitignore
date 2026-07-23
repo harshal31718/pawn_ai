@@ -41,6 +41,15 @@ dist/
 # keep only docker-compose.override.yml.example in git
 docker-compose.override.yml
 
+# local-only planning notes (router/failover research + 2.0 architecture) —
+# stays on this machine, never committed
+workspace/plan/router_failover/
+workspace/plan/architecture_2.0/
+
+# local-only reference clones (e.g. OmniRoute, for porting quota-share) —
+# third-party code, never committed
+workspace/reference/
+
 # os
 .DS_Store
 Thumbs.db

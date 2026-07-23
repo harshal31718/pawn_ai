@@ -72,3 +72,30 @@ def stub_byok_key():
     assert the no-key path can override this with a narrower patch."""
     with patch("app.core.key_store.get_key", return_value="TEST-BYOK-KEY"):
         yield
+
+
+@pytest.fixture(autouse=True)
+def stub_pool_keys(request):
+    """Default every test to an EMPTY operator pool (no shared pool keys).
+
+    The resolver/dashboard read pool keys live from the real dev Postgres
+    (`config.read_pool_key` -> `pool_key_store.get_pool_config` -> the
+    `pool_api_keys` table), which is NOT test-isolated. When an admin
+    configures a pool key via the live Admin UI (e.g. google/groq, 2026-07-23),
+    every resolver/keys/capability test that assumed "no pool" and didn't mock
+    it silently started failing -- the same class of real-DB leakage as the
+    rate-limiter seed.
+
+    Patched at the `get_pool_config` seam (returns None = "no DB row"), NOT at
+    `read_pool_key` itself, so `read_pool_key`'s real logic still runs (this is
+    exactly the historical empty-`pool_api_keys`-table state that let these
+    tests pass). Tests that exercise the pool path override cleanly:
+    `test_pool_keys.py` patches `app.config.read_pool_key`/`get_pool_config`
+    itself; `test_pool_key_store.py` unit-tests the REAL `get_pool_config` (it
+    isolates at the lower `fetchone`/`fetchall` seam), so this fixture skips
+    that module entirely rather than clobbering the function it's testing."""
+    if request.module.__name__.endswith("test_pool_key_store"):
+        yield
+        return
+    with patch("app.core.pool_key_store.get_pool_config", return_value=None):
+        yield

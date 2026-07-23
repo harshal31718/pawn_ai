@@ -178,7 +178,10 @@ async def test_fallback_no_resolver_available_defaults_heavy():
     toward capability rather than guessing."""
     text = "a" * (router.ROUTER_LIGHT_CHAR_THRESHOLD + 50)
     decision = await router.classify(_msgs(text), has_doc=False, has_tools_likely=False)
-    assert decision == {"difficulty": "heavy", "needs_agent": True}
+    # C2 added task_type to RouteDecision; assert the two fields this test
+    # is actually about rather than pinning the whole dict shape.
+    assert decision["difficulty"] == "heavy"
+    assert decision["needs_agent"] is True
 
 
 @pytest.mark.asyncio
@@ -210,7 +213,10 @@ async def test_fallback_parse_failure_defaults_heavy():
         decision = await router.classify(
             _msgs(text), has_doc=False, has_tools_likely=False, resolver=resolver, rate_limiter=resolver._rate_limiter
         )
-    assert decision == {"difficulty": "heavy", "needs_agent": True}
+    # C2 added task_type to RouteDecision; assert the two fields this test
+    # is actually about rather than pinning the whole dict shape.
+    assert decision["difficulty"] == "heavy"
+    assert decision["needs_agent"] is True
 
 
 @pytest.mark.asyncio
@@ -227,7 +233,10 @@ async def test_fallback_model_error_defaults_heavy():
         decision = await router.classify(
             _msgs(text), has_doc=False, has_tools_likely=False, resolver=resolver, rate_limiter=resolver._rate_limiter
         )
-    assert decision == {"difficulty": "heavy", "needs_agent": True}
+    # C2 added task_type to RouteDecision; assert the two fields this test
+    # is actually about rather than pinning the whole dict shape.
+    assert decision["difficulty"] == "heavy"
+    assert decision["needs_agent"] is True
 
 
 # ── ROLE_LEVELS ──────────────────────────────────────────────────────────────
@@ -274,7 +283,11 @@ def test_resolve_final_model_falls_back_to_role_levels_when_no_override():
     result = router.resolve_final_model("heavy", None, resolver)
 
     assert result == "resolved-model"
-    resolver.pick_model_by_capability.assert_called_once_with("research", user_id=None)
+    # C2: no task_type was passed in, so resolve_final_model falls back to the
+    # "final_heavy" role's own declared type (ROLE_TASK_TYPES), not None.
+    resolver.pick_model_by_capability.assert_called_once_with(
+        "research", user_id=None, task_type="reasoning"
+    )
 
 
 def test_resolve_final_model_light_uses_final_light_level():
@@ -284,4 +297,6 @@ def test_resolve_final_model_light_uses_final_light_level():
     result = router.resolve_final_model("light", None, resolver)
 
     assert result == "fast-model"
-    resolver.pick_model_by_capability.assert_called_once_with("fast", user_id=None)
+    resolver.pick_model_by_capability.assert_called_once_with(
+        "fast", user_id=None, task_type="general"
+    )

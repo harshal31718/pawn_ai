@@ -22,36 +22,42 @@ from psycopg.rows import dict_row
 from app.config import POSTGRES_DSN
 
 
-def _connect() -> psycopg.Connection:
-    if not POSTGRES_DSN:
+def _connect(dsn: Optional[str] = None) -> psycopg.Connection:
+    """PAWN 2.0 Phase E.4: optional `dsn` override lets key_store/
+    pool_key_store connect to SHARED_DB_DSN instead of POSTGRES_DSN (prod:
+    identical, since SHARED_DB_DSN defaults to POSTGRES_DSN; dev: a separate,
+    shared keys-only DB reached over an SSH tunnel). Every other caller is
+    unaffected -- passing no dsn keeps today's exact behavior."""
+    resolved = dsn or POSTGRES_DSN
+    if not resolved:
         raise RuntimeError("POSTGRES_DSN must be configured")
-    conn = psycopg.connect(POSTGRES_DSN, row_factory=dict_row)
+    conn = psycopg.connect(resolved, row_factory=dict_row)
     # Lets a Python list be passed straight as a `vector(N)` column/param
     # (memory_chunks.embedding, match_scoped_chunks' query_embedding).
     register_vector(conn)
     return conn
 
 
-def fetchone(sql: str, params: Sequence[Any] = ()) -> Optional[dict]:
+def fetchone(sql: str, params: Sequence[Any] = (), dsn: Optional[str] = None) -> Optional[dict]:
     """Run a query and return the first row as a dict, or None."""
-    with _connect() as conn:
+    with _connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             return cur.fetchone()
 
 
-def fetchall(sql: str, params: Sequence[Any] = ()) -> list[dict]:
+def fetchall(sql: str, params: Sequence[Any] = (), dsn: Optional[str] = None) -> list[dict]:
     """Run a query and return all rows as dicts."""
-    with _connect() as conn:
+    with _connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             return cur.fetchall()
 
 
-def execute(sql: str, params: Sequence[Any] = ()) -> None:
+def execute(sql: str, params: Sequence[Any] = (), dsn: Optional[str] = None) -> None:
     """Run a statement with no result rows needed (or where the caller
     doesn't care about the RETURNING clause, if any)."""
-    with _connect() as conn:
+    with _connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
 

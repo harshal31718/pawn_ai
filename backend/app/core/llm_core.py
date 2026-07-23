@@ -1,6 +1,6 @@
 import json
 import urllib.parse
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Callable
 
 import httpx
 
@@ -86,9 +86,29 @@ async def chat_complete(
 
 
 async def stream_llm(
-    url: str, model: str, messages: list[dict[str, str]], headers: dict[str, str]
+    url: str,
+    model: str,
+    messages: list[dict[str, str]],
+    headers: dict[str, str],
+    on_usage: "Callable[[dict], None] | None" = None,
 ) -> AsyncGenerator[str, None]:
-    payload = {"model": model, "messages": messages, "stream": True}
+    """Plain streaming completion (no tools). Yields content token strings.
+
+    R2: `on_usage` is an optional sink for the provider's own token accounting.
+    It is deliberately a CALLBACK rather than a change to what this generator
+    yields -- callers iterate this expecting `str`, and altering that contract
+    would ripple through every streaming path. Called at most once, only if the
+    provider honours `stream_options.include_usage` (many do not, and some
+    omit it under load), so treat a missing call as "unknown", never as zero.
+    """
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        # R2: ask for a final usage chunk. Providers that don't support this
+        # ignore the field; those that do append a usage-only chunk at the end.
+        "stream_options": {"include_usage": True},
+    }
     async with _get_client().stream(
         "POST", f"{url}/chat/completions", json=payload, headers=headers
     ) as resp:
@@ -106,6 +126,12 @@ async def stream_llm(
                 return
             try:
                 chunk = json.loads(data)
+                # R2: the usage-only tail chunk has an empty `choices` list, so
+                # this must be handled BEFORE indexing choices[0] -- otherwise
+                # it raises IndexError and gets swallowed by the except below,
+                # silently discarding the token count.
+                if chunk.get("usage") and on_usage is not None:
+                    on_usage(chunk["usage"])
                 delta = chunk["choices"][0]["delta"].get("content", "")
                 if delta:
                     yield delta

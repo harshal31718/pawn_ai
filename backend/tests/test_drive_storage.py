@@ -22,6 +22,7 @@ logic)."""
 from unittest.mock import patch
 
 from app.storage.drive import DriveStorage
+from app import constants
 
 
 class _Exec:
@@ -134,3 +135,17 @@ def test_get_or_create_root_caches_result_no_repeat_query():
 
     assert first == second == "root-1"
     assert len(files_resource.list_calls) == 1  # second call served from the in-memory cache
+
+
+def test_get_or_create_root_uses_env_scoped_folder_name():
+    """PAWN 2.0 Phase E.2: the root folder name is constants.DRIVE_ROOT_NAME
+    (env-derived: "PAWN" in prod, "PAWN-dev" outside it), not a hardcoded
+    literal — this is the single chokepoint that isolates all Drive data
+    (chats/projects/uploads) between dev/staging and production."""
+    files_resource = _FakeFilesResource(list_result={"files": []}, create_result={"id": "new-root"})
+    drive = _make_drive(files_resource)
+
+    drive.get_or_create_root()
+
+    assert f"name = '{constants.DRIVE_ROOT_NAME}'" in files_resource.list_calls[0]["q"]
+    assert files_resource.create_calls[0]["body"]["name"] == constants.DRIVE_ROOT_NAME

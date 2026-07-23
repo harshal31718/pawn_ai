@@ -216,7 +216,7 @@ async def test_chat_complete_single_model_never_falls_over_to_a_different_model(
     resolver = MagicMock()
     resolver.pick.return_value = [
         ("https://api.groq.com/openai/v1", "meta-llama/llama-4-scout-17b-16e-instruct",
-         {"Authorization": "Bearer KEY"}, "ep-llama-4-scout-groq", "groq"),
+         {"Authorization": "Bearer KEY"}, "ep-llama-4-scout-groq", "groq", "byok"),
     ]
     rate_limiter = MagicMock()
     rate_limiter.can_use.return_value = True

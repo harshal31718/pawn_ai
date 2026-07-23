@@ -87,9 +87,12 @@ def _tool_call(call_id: str, name: str, arguments: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_classify_node_light_message():
+    # C2: classify_node always attaches its own task_type (inferred from the
+    # message text), independent of whatever router_classify returns for
+    # difficulty/needs_agent -- "hi" matches no keyword list, so "general".
     with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "light", "needs_agent": False})):
         res = await classify_node(_state())
-    assert res == {"difficulty": "light", "needs_agent": False}
+    assert res == {"difficulty": "light", "needs_agent": False, "task_type": "general"}
 
 
 @pytest.mark.asyncio
@@ -97,7 +100,7 @@ async def test_classify_node_heavy_message():
     state = _state(messages=[{"role": "user", "content": "please analyze this deeply"}])
     with patch("app.agent.graph.router_classify", new=AsyncMock(return_value={"difficulty": "heavy", "needs_agent": True})):
         res = await classify_node(state)
-    assert res == {"difficulty": "heavy", "needs_agent": True}
+    assert res == {"difficulty": "heavy", "needs_agent": True, "task_type": "reasoning"}
 
 
 @pytest.mark.asyncio
@@ -108,7 +111,8 @@ async def test_classify_node_image_attached_skips_router_entirely():
     state = _state(has_image=True, image_b64="Zm9v", image_mime="image/png")
     with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
         res = await classify_node(state)
-    assert res == {"difficulty": "light", "needs_agent": False}
+    # C2: has_image short-circuits _infer_task_type straight to "vision".
+    assert res == {"difficulty": "light", "needs_agent": False, "task_type": "vision"}
     mock_router.assert_not_called()
 
 
@@ -117,7 +121,7 @@ async def test_classify_node_mode_hint_pro_forces_heavy_agent():
     state = _state(mode_hint="pro")
     with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
         res = await classify_node(state)
-    assert res == {"difficulty": "heavy", "needs_agent": True}
+    assert res == {"difficulty": "heavy", "needs_agent": True, "task_type": "general"}
     mock_router.assert_not_called()
 
 
@@ -128,7 +132,7 @@ async def test_classify_node_mode_hint_image_forces_light_agentic():
     state = _state(mode_hint="image", messages=[{"role": "user", "content": "hi"}])
     with patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
         res = await classify_node(state)
-    assert res == {"difficulty": "light", "needs_agent": True}
+    assert res == {"difficulty": "light", "needs_agent": True, "task_type": "general"}
     mock_router.assert_not_called()
 
 
@@ -144,7 +148,10 @@ async def test_classify_node_mode_hint_fast_with_image_wording_and_kaggle_creds_
     with patch("app.core.key_store.has_kaggle_creds", return_value=True), \
          patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
         res = await classify_node(state)
-    assert res == {"difficulty": "light", "needs_agent": True}
+    # "generate an image of a cat" matches no coding/summarization/reasoning
+    # keyword (has_image is False here -- this is text-only wording asking
+    # for image generation, not a multimodal turn), so task_type is "general".
+    assert res == {"difficulty": "light", "needs_agent": True, "task_type": "general"}
     mock_router.assert_not_called()
 
 
@@ -157,7 +164,7 @@ async def test_classify_node_mode_hint_fast_with_image_wording_but_no_kaggle_cre
     with patch("app.core.key_store.has_kaggle_creds", return_value=False), \
          patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
         res = await classify_node(state)
-    assert res == {"difficulty": "light", "needs_agent": False}
+    assert res == {"difficulty": "light", "needs_agent": False, "task_type": "general"}
     mock_router.assert_not_called()
 
 
@@ -169,7 +176,7 @@ async def test_classify_node_mode_hint_fast_without_image_wording_stays_direct()
     with patch("app.core.key_store.has_kaggle_creds", return_value=True), \
          patch("app.agent.graph.router_classify", new=AsyncMock()) as mock_router:
         res = await classify_node(state)
-    assert res == {"difficulty": "light", "needs_agent": False}
+    assert res == {"difficulty": "light", "needs_agent": False, "task_type": "general"}
     mock_router.assert_not_called()
 
 
@@ -819,7 +826,7 @@ class _TieredResolver(DummyResolver):
     which tier a given call actually used, instead of every level
     coincidentally resolving to the same DummyResolver placeholder."""
 
-    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False):
+    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False, **kwargs):
         return f"model-for-{level}"
 
 

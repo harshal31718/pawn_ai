@@ -51,6 +51,27 @@ from app.core.llm_core import (
     stream_chat_with_tools as _stream_chat_with_tools_llm,
 )
 
+def _total_tokens(usage: dict | None) -> int:
+    """R2: pull a token count out of a provider `usage` block.
+
+    Prefers `total_tokens`; falls back to prompt+completion when a provider
+    reports only the components. Returns 0 when usage is missing or unparseable
+    -- several providers ignore `stream_options.include_usage`, and 0 here means
+    "unknown", which is recorded as such rather than guessed at.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    total = usage.get("total_tokens")
+    if isinstance(total, (int, float)) and total > 0:
+        return int(total)
+    prompt = usage.get("prompt_tokens") or 0
+    completion = usage.get("completion_tokens") or 0
+    try:
+        return max(int(prompt) + int(completion), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 class _ModelExhausted(Exception):
     """Internal: a single model produced no tokens and all its endpoints failed.
     Carries the underlying error so chat_stream can re-raise it if no fallback
@@ -74,7 +95,7 @@ async def _stream_one_model(
     candidates = resolver.pick(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+    for i, (url, provider_model_id, headers, endpoint_id, provider, key_source) in enumerate(candidates):
         if i > 0 and on_provider_switch:
             prev_provider = candidates[i - 1][4]
             if asyncio.iscoroutinefunction(on_provider_switch):
@@ -83,17 +104,29 @@ async def _stream_one_model(
                 on_provider_switch(prev_provider, provider)
 
         tokens_yielded = 0
+        # R2: streaming reports usage only in a final chunk, long after the
+        # request must already be recorded (recording at the START is what makes
+        # concurrent calls visible to the limiter). So the request and its token
+        # cost are recorded separately -- record_call here, record_tokens once
+        # the tail arrives -- rather than double-counting or losing the count.
+        usage_seen: dict = {}
         try:
-            async for token in stream_llm(url, provider_model_id, messages, headers):
+            async for token in stream_llm(
+                url, provider_model_id, messages, headers,
+                on_usage=usage_seen.update,
+            ):
                 if tokens_yielded == 0:
-                    rate_limiter.record_call(endpoint_id)
-                    rate_limiter.record_success(endpoint_id)
+                    rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
+                    rate_limiter.record_success(endpoint_id, user_id=user_id)
                 tokens_yielded += 1
                 yield token
 
             if tokens_yielded == 0:
-                rate_limiter.record_call(endpoint_id)
-                rate_limiter.record_success(endpoint_id)
+                rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
+                rate_limiter.record_success(endpoint_id, user_id=user_id)
+            rate_limiter.record_tokens(
+                endpoint_id, _total_tokens(usage_seen), user_id=user_id, key_source=key_source
+            )
             return
 
         except ProviderError as pe:
@@ -101,15 +134,15 @@ async def _stream_one_model(
             if tokens_yielded > 0:
                 raise pe
             if pe.kind == "rate_limit":
-                rate_limiter.record_429(endpoint_id)
+                rate_limiter.record_429(endpoint_id, user_id=user_id)
             else:
-                rate_limiter.record_connect_failure(endpoint_id)
+                rate_limiter.record_connect_failure(endpoint_id, user_id=user_id)
 
         except (httpx.HTTPError, Exception) as e:
             last_error = e
             if tokens_yielded > 0:
                 raise e
-            rate_limiter.record_connect_failure(endpoint_id)
+            rate_limiter.record_connect_failure(endpoint_id, user_id=user_id)
 
     raise _ModelExhausted(last_error or NoEndpointError(f"No available endpoint for model '{model_id}'"))
 
@@ -205,7 +238,7 @@ async def _stream_one_model_with_tools(
     candidates = resolver.pick(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+    for i, (url, provider_model_id, headers, endpoint_id, provider, key_source) in enumerate(candidates):
         if i > 0 and on_provider_switch:
             prev_provider = candidates[i - 1][4]
             if asyncio.iscoroutinefunction(on_provider_switch):
@@ -214,20 +247,28 @@ async def _stream_one_model_with_tools(
                 on_provider_switch(prev_provider, provider)
 
         tokens_yielded = 0
+        # R2: same split as _stream_one_model -- request recorded up front, token
+        # cost recorded from the "done" event's usage block once it arrives.
+        usage_seen: dict | None = None
         try:
             async for event in _stream_chat_with_tools_llm(
                 url, provider_model_id, messages, headers, tools=tools, tool_choice=tool_choice
             ):
                 if event["type"] == "content":
                     if tokens_yielded == 0:
-                        rate_limiter.record_call(endpoint_id)
-                        rate_limiter.record_success(endpoint_id)
+                        rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
+                        rate_limiter.record_success(endpoint_id, user_id=user_id)
                     tokens_yielded += 1
+                elif event["type"] == "done":
+                    usage_seen = event.get("usage")
                 yield event
 
             if tokens_yielded == 0:
-                rate_limiter.record_call(endpoint_id)
-                rate_limiter.record_success(endpoint_id)
+                rate_limiter.record_call(endpoint_id, user_id=user_id, key_source=key_source)
+                rate_limiter.record_success(endpoint_id, user_id=user_id)
+            rate_limiter.record_tokens(
+                endpoint_id, _total_tokens(usage_seen), user_id=user_id, key_source=key_source
+            )
             return
 
         except ProviderError as pe:
@@ -235,15 +276,15 @@ async def _stream_one_model_with_tools(
             if tokens_yielded > 0:
                 raise pe
             if pe.kind == "rate_limit":
-                rate_limiter.record_429(endpoint_id)
+                rate_limiter.record_429(endpoint_id, user_id=user_id)
             else:
-                rate_limiter.record_connect_failure(endpoint_id)
+                rate_limiter.record_connect_failure(endpoint_id, user_id=user_id)
 
         except (httpx.HTTPError, Exception) as e:
             last_error = e
             if tokens_yielded > 0:
                 raise e
-            rate_limiter.record_connect_failure(endpoint_id)
+            rate_limiter.record_connect_failure(endpoint_id, user_id=user_id)
 
     raise _ModelExhausted(last_error or NoEndpointError(f"No available endpoint for model '{model_id}'"))
 
@@ -326,7 +367,7 @@ async def _complete_one_model(
     candidates = resolver.pick(model_id, user_id=user_id)
 
     last_error: Exception | None = None
-    for i, (url, provider_model_id, headers, endpoint_id, provider) in enumerate(candidates):
+    for i, (url, provider_model_id, headers, endpoint_id, provider, key_source) in enumerate(candidates):
         if i > 0 and on_provider_switch:
             prev_provider = candidates[i - 1][4]
             if asyncio.iscoroutinefunction(on_provider_switch):
@@ -337,20 +378,28 @@ async def _complete_one_model(
             message = await _chat_complete_llm(
                 url, provider_model_id, messages, headers, tools=tools, tool_choice=tool_choice
             )
-            rate_limiter.record_call(endpoint_id)
-            rate_limiter.record_success(endpoint_id)
+            # R2: llm_core.chat_complete already attaches the provider's own
+            # usage block; record the real token cost rather than 0. Providers
+            # that omit usage yield 0, which is recorded as "unknown" (never
+            # estimated -- an invented number would corrupt the budget figures
+            # this accounting exists to make honest).
+            rate_limiter.record_call(
+                endpoint_id, token_count=_total_tokens(message.get("usage")), user_id=user_id,
+                key_source=key_source,
+            )
+            rate_limiter.record_success(endpoint_id, user_id=user_id)
             return message
 
         except ProviderError as pe:
             last_error = pe
             if pe.kind == "rate_limit":
-                rate_limiter.record_429(endpoint_id)
+                rate_limiter.record_429(endpoint_id, user_id=user_id)
             else:
-                rate_limiter.record_connect_failure(endpoint_id)
+                rate_limiter.record_connect_failure(endpoint_id, user_id=user_id)
 
         except (httpx.HTTPError, Exception) as e:
             last_error = e
-            rate_limiter.record_connect_failure(endpoint_id)
+            rate_limiter.record_connect_failure(endpoint_id, user_id=user_id)
 
     raise _ModelExhausted(last_error or NoEndpointError(f"No available endpoint for model '{model_id}'"))
 

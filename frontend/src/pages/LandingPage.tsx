@@ -111,6 +111,13 @@ export default function LandingPage() {
             "Google hasn't verified this app" screen during sign-in. That's expected; click{' '}
             <span className="font-medium text-theme-text-muted">Advanced → Go to PAWN</span> to continue.
           </p>
+
+          <Link
+            to="/login"
+            className="text-[11px] text-theme-text-muted underline underline-offset-2 hover:text-theme-text transition-colors"
+          >
+            Already have an account? Sign in
+          </Link>
         </div>
       </section>
 

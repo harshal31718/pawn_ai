@@ -26,6 +26,9 @@ from app.routes.generate import router as generate_router
 from app.routes.crypto import router as crypto_router
 from app.routes.projects import router as projects_router
 from app.routes.memory import router as memory_router
+from app.routes.dashboard import router as dashboard_router
+from app.routes.admin import router as admin_router
+from app.routes.account import router as account_router
 from app.app_initializer import initialize_managers
 from app.core.llm_core import close_client
 
@@ -79,6 +82,9 @@ app.include_router(generate_router)
 app.include_router(crypto_router)
 app.include_router(projects_router)
 app.include_router(memory_router)
+app.include_router(dashboard_router)
+app.include_router(admin_router)
+app.include_router(account_router)
 
 
 

@@ -73,7 +73,7 @@ def test_resolver_uses_user_byok_key():
 
     # At least one google endpoint should carry the user's key in its auth header.
     assert candidates
-    all_headers = " ".join(str(h) for (_, _, h, _, _) in candidates)
+    all_headers = " ".join(str(h) for (_, _, h, _, _, _) in candidates)
     assert "USER-BYOK-KEY" in all_headers
     mock_get.assert_called()
 
@@ -92,3 +92,26 @@ def test_resolver_raises_when_no_byok_key():
     with patch("app.core.key_store.get_key", return_value=None):
         with pytest.raises(NoEndpointError):
             resolver.pick("google", user_id="user-1")
+
+
+# ── PAWN 2.0 Phase E.4: user_api_keys routes through SHARED_DB_DSN ─────────
+
+
+def test_key_store_execute_wrapper_passes_shared_db_dsn():
+    from app.core import key_store
+
+    with patch("app.core.key_store.SHARED_DB_DSN", "postgresql://shared/db"), \
+         patch("app.core.key_store.postgres_client.execute") as exec_mock:
+        key_store.execute("delete from user_api_keys where user_id = %s", ("u1",))
+    exec_mock.assert_called_once_with(
+        "delete from user_api_keys where user_id = %s", ("u1",), dsn="postgresql://shared/db"
+    )
+
+
+def test_key_store_fetchone_wrapper_passes_shared_db_dsn():
+    from app.core import key_store
+
+    with patch("app.core.key_store.SHARED_DB_DSN", "postgresql://shared/db"), \
+         patch("app.core.key_store.postgres_client.fetchone", return_value=None) as fetch_mock:
+        key_store.fetchone("select 1")
+    fetch_mock.assert_called_once_with("select 1", (), dsn="postgresql://shared/db")

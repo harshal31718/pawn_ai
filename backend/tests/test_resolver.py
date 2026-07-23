@@ -64,20 +64,35 @@ def test_pick_without_user_id_keeps_legacy_behavior():
     assert r.pick_model_by_capability("fast", user_id=None) == "gemini-2.5-flash-lite"
 
 
-# ── F-6: Groq-priority ordering ──────────────────────────────────────────────
+# ── C3: quality-first ordering (REPLACES F-6's Groq-priority hack) ───────────
+#
+# These two tests previously asserted F-6's behaviour: "if the user holds a Groq
+# key, models with a Groq endpoint jump the queue." C3 deleted that special case
+# -- a hardcoded provider name in the resolver was exactly the provider-coupling
+# capability-first routing exists to remove. Selection is now decided by
+# curated quality_rank, with live signals (headroom, failures) breaking ties
+# between near-equals.
+#
+# Groq is NOT disadvantaged by this: in the real registry it holds the
+# priority-1 endpoint for llama-3.3-70b, the rank-10 model at the fast tier, so
+# Groq still wins fast-tier work -- now on merit rather than by name. See
+# test_capability_routing.py for the headroom-tiebreak proof.
 
-def test_balanced_pick_prioritizes_groq_when_user_holds_a_groq_key():
-    """With both a Google and a Groq key, the default file order would return
-    gemini-2.5-flash (Google, first in file order) -- but F-6 reprioritizes
-    Groq-endpoint-having models first when the user holds a Groq key, so
-    llama-3.3-70b (which has a Groq endpoint) must win instead."""
+def test_balanced_pick_is_quality_ranked_not_provider_ranked():
+    """With both a Google and a Groq key, the best-ranked balanced model wins.
+
+    Pre-C3 this returned llama-3.3-70b purely because it had a Groq endpoint and
+    the user held a Groq key. Now gemini-2.5-flash (quality_rank 10) beats
+    llama-3.3-70b (30) on merit, and holding a Groq key does not change it.
+    """
     r = _resolver()
     with _keys("google", "groq"):
-        assert r.pick_model_by_capability("balanced", user_id="u") == "llama-3.3-70b"
+        assert r.pick_model_by_capability("balanced", user_id="u") == "gemini-2.5-flash"
 
 
-def test_balanced_pick_without_groq_key_keeps_default_order():
-    """No Groq key -> unaffected, still the plain file-order pick."""
+def test_balanced_pick_unaffected_by_which_keys_are_held():
+    """The same winner as above with only a Google key -- proving the provider
+    mix genuinely no longer influences ordering, only availability."""
     r = _resolver()
     with _keys("google"):
         assert r.pick_model_by_capability("balanced", user_id="u") == "gemini-2.5-flash"

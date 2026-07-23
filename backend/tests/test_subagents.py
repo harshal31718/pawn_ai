@@ -22,28 +22,39 @@ class _FakeResolver:
     def pick(self, model_id, user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
 
-    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False):
+    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False, **kwargs):
         return "gemini-2.5-flash"
 
-    def fallback_models(self, model_id, user_id=None):
+    def fallback_models(self, model_id, user_id=None, **kwargs):
         return [model_id]
 
 
 class _FakeRateLimiter:
-    def can_use(self, endpoint) -> bool:
+    # **kwargs absorbs R2's user_id/token arguments so this fake doesn't have to
+    # track the real limiter's signature.
+    def can_use(self, endpoint, **kwargs) -> bool:
         return True
 
-    def record_call(self, endpoint_id, token_count=0):
+    def record_call(self, endpoint_id, token_count=0, **kwargs):
         pass
 
-    def record_429(self, endpoint_id, retry_after=60):
+    def record_tokens(self, endpoint_id, token_count=0, **kwargs):
         pass
 
-    def record_connect_failure(self, endpoint_id):
+    def record_429(self, endpoint_id, retry_after=60, **kwargs):
         pass
 
-    def record_success(self, endpoint_id):
+    def record_connect_failure(self, endpoint_id, **kwargs):
         pass
+
+    def record_success(self, endpoint_id, **kwargs):
+        pass
+
+    def failure_count(self, endpoint_id, **kwargs) -> int:
+        return 0
+
+    def usage_pct(self, endpoint, **kwargs) -> float:
+        return 0.0
 
 
 def _ctx(user_id="u1", scope_type=None, scope_id=None):

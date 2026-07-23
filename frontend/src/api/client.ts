@@ -400,7 +400,7 @@ export async function streamChat(
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         messages,
-        ...(modelId ? { model_id: modelId } : {}),
+        ...(resolveModelId(modelId) ? { model_id: resolveModelId(modelId) } : {}),
         ...(docId ? { doc_id: docId } : {}),
         ...(conversationId ? { conversation_id: conversationId } : {}),
         ...(image ? { image_b64: image.b64, image_mime: image.mime } : {}),
@@ -572,6 +572,20 @@ export async function fetchConversations(): Promise<ConversationMeta[]> {
   return res.json()
 }
 
+/**
+ * C5: sentinel for "let the backend pick the best model for this task".
+ * Auto is expressed by simply OMITTING model_id from the request -- the
+ * backend's router.resolve_final_model() already treats a missing user pick as
+ * "resolve by capability", so Auto needs no new backend contract.
+ * resolveModelId() is the single place the sentinel is translated, so it can
+ * never leak to the API as a literal model named "auto".
+ */
+export const AUTO_MODEL_ID = 'auto'
+
+export function resolveModelId(modelId?: string): string | undefined {
+  return !modelId || modelId === AUTO_MODEL_ID ? undefined : modelId
+}
+
 export async function createConversation(title?: string, modelId?: string, id?: string): Promise<ConversationMeta> {
   const res = await fetch(`${BASE_URL}/conversations`, {
     method: 'POST',
@@ -579,7 +593,7 @@ export async function createConversation(title?: string, modelId?: string, id?: 
     body: JSON.stringify({
       ...(id ? { id } : {}),
       ...(title ? { title } : {}),
-      ...(modelId ? { model_id: modelId } : {}),
+      ...(resolveModelId(modelId) ? { model_id: resolveModelId(modelId) } : {}),
     }),
   })
   if (handle401(res)) throw new Error('Session expired')
@@ -754,6 +768,73 @@ export async function fetchRegistryModels(): Promise<RegistryModel[]> {
   return res.json()
 }
 
+// 2026-07-23: single source of truth for "what is a provider" -- replaces
+// ApiKeysSection.tsx's old hardcoded PROVIDERS/MORE_PROVIDERS/SEARCH_PROVIDERS
+// arrays and the duplicated formatProviderName() functions elsewhere.
+export interface ProviderEntry {
+  id: string
+  name: string
+  official_docs_link: string
+  signup_link: string
+  auth_type: 'bearer_key' | 'oauth' | 'credentials' | 'none'
+  capabilities: ('chat' | 'image' | 'internet' | 'kaggle')[]
+  aliases: string[]
+  type: 'byok' | 'pool'
+  free_tier_note: string | null
+}
+
+export async function fetchRegistryProviders(): Promise<ProviderEntry[]> {
+  const res = await fetch(`${BASE_URL}/registry/providers`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+// R3: Providers page (free-tier budget dashboard)
+export interface ProviderUsageRow {
+  endpoint_id: string
+  model_id: string
+  display_name: string
+  provider: string
+  key_source: string
+  // 2026-07-23: the two reachability paths, reported independently, so the
+  // Models tab can show a "Source: BYOK / Pool / Both" indicator.
+  // `available_via_pool` stays true even when the user also holds a BYOK key
+  // for an "either" endpoint (unlike the BYOK-first effective `key_source`).
+  available_via_byok: boolean
+  available_via_pool: boolean
+  rpd_limit: number | null
+  rpd_used: number
+  tpd_limit: number | null
+  tpd_used: number
+  tpd_remaining: number | null
+  has_published_cap: boolean
+  // PAWN 2.0 Phase D.1: only set for key_source === "pool" -- this user's
+  // conservative, guaranteed-yours share of the endpoint's daily budget.
+  fair_share_remaining: number | null
+  // Models-test table (2026-07-23): per-minute usage, plus this endpoint's
+  // priority among the model's other endpoints (lower = tried first) so a
+  // one-row-per-model view can pick the "primary" endpoint's numbers.
+  rpm_limit: number | null
+  rpm_used: number
+  tpm_limit: number | null
+  tpm_used: number
+  priority: number
+}
+
+export interface FreeTiersResponse {
+  total_tokens_remaining_today: number | null
+  rows: ProviderUsageRow[]
+  uncapped_providers: string[]
+}
+
+export async function fetchFreeTiers(): Promise<FreeTiersResponse> {
+  const res = await fetch(`${BASE_URL}/dashboard/free-tiers`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
 // BYOK key management
 export async function getKeys(): Promise<string[]> {
   const res = await fetch(`${BASE_URL}/keys`, { headers: authHeaders() })
@@ -794,4 +875,73 @@ export async function fetchSalt(): Promise<Uint8Array> {
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
+}
+
+// --- PAWN 2.0 Phase B.6: admin routes ---------------------------------------
+// Never carries a real pool key value -- these mirror the BYOK key routes'
+// "configured: true/false" convention, plus enabled/saturation metadata.
+export interface PoolKeyRow {
+  provider: string
+  configured: boolean
+  enabled: boolean
+  saturation_pct: number | null
+}
+
+export async function getPoolKeys(): Promise<PoolKeyRow[]> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  const data = await res.json()
+  return data.providers ?? []
+}
+
+export async function setPoolKey(provider: string, apiKey: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys/${provider}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ api_key: apiKey }),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function deletePoolKey(provider: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys/${provider}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function patchPoolKey(
+  provider: string,
+  patch: { enabled?: boolean; saturation_pct?: number | null },
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/admin/pool-keys/${provider}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(patch),
+  })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+}
+
+export async function getAdminStats(): Promise<{ registered_users: number }> {
+  const res = await fetch(`${BASE_URL}/admin/stats`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+// Login-change plan (2026-07-23): PUT /account/password. No current-password
+// check server-side -- the active session is the authentication, so this
+// doubles as both "change" and "forgot" from within Settings.
+export async function changePassword(newPassword: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/account/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ new_password: newPassword }),
+  })
+  if (!res.ok) throw new Error(await errorDetail(res))
 }

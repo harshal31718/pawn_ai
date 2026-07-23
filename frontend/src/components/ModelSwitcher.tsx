@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import type { RegistryModel } from '../api/client'
+import { AUTO_MODEL_ID, type RegistryModel } from '../api/client'
 
 const DROPDOWN_MAX_HEIGHT = 320 // px, matches the old fixed max-h-80
 const VIEWPORT_MARGIN = 8 // px breathing room from the viewport edge
@@ -15,6 +15,12 @@ interface Props {
   onChange: (id: string) => void
   disabled?: boolean
   models: RegistryModel[]
+  // ProvidersPage's "Default Model" trigger: shows this literal, static
+  // label instead of the selected model's name (and hides the provider
+  // suffix span) -- same dropdown, different trigger text/style, so tab
+  // trays that want a fixed label don't have to duplicate the whole
+  // dropdown implementation.
+  triggerLabel?: string
 }
 
 const formatProviderName = (p: string) => {
@@ -34,7 +40,7 @@ const formatProviderList = (providers?: string[]) => {
   return `${firstTwo} +${providers.length - 2} more`
 }
 
-export default function ModelSwitcher({ selected, onChange, disabled, models }: Props) {
+export default function ModelSwitcher({ selected, onChange, disabled, models, triggerLabel }: Props) {
   const [isOpen, setIsOpen] = useState(false)
   const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({})
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -73,10 +79,13 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
     })
   }
 
+  const isAuto = selected === AUTO_MODEL_ID
   const selectedModel = models.find((m) => m.model_id === selected)
-  const buttonLabel = selectedModel 
-    ? selectedModel.display_name 
-    : (models.length === 0 ? 'Loading models...' : selected)
+  const buttonLabel = isAuto
+    ? '✨ Auto'
+    : selectedModel
+      ? selectedModel.display_name
+      : (models.length === 0 ? 'Loading models...' : selected)
 
   const handleSelect = (modelId: string) => {
     onChange(modelId)
@@ -91,7 +100,10 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
         ref={triggerRef}
         id="model-switcher-button"
         type="button"
-        disabled={disabled || models.length === 0}
+        // C5: no longer disabled on an empty model list -- Auto is always a
+        // valid choice, so the dropdown must stay reachable even before the
+        // registry has loaded (or when the user holds no keys yet).
+        disabled={disabled}
         onClick={() => {
           if (isOpen) {
             setExpandedModels({})
@@ -105,16 +117,25 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
           }
           setIsOpen(!isOpen)
         }}
-        className="
-          text-xs bg-theme-surface border border-theme-border rounded-md
-          px-2.5 py-0.5 text-theme-text cursor-pointer
-          hover:bg-theme-surface-hover focus:outline-none focus:ring-1 focus:ring-theme-border
-          disabled:opacity-50 disabled:cursor-not-allowed
-          transition-all flex items-center gap-1.5 active:scale-95 font-medium
-        "
+        className={
+          triggerLabel
+            ? `
+              text-[11px] font-semibold uppercase tracking-wide bg-theme-surface border border-theme-border/50 rounded-xl
+              px-4 py-1.5 text-theme-text-muted hover:text-theme-text cursor-pointer
+              focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed
+              transition-all flex items-center gap-1.5 active:scale-95
+            `
+            : `
+              text-xs bg-theme-surface border border-theme-border rounded-md
+              px-2.5 py-0.5 text-theme-text cursor-pointer
+              hover:bg-theme-surface-hover focus:outline-none focus:ring-1 focus:ring-theme-border
+              disabled:opacity-50 disabled:cursor-not-allowed
+              transition-all flex items-center gap-1.5 active:scale-95 font-medium
+            `
+        }
       >
-        <span>{buttonLabel}</span>
-        {selectedModel?.providers?.[0] && !disabled && (
+        <span>{triggerLabel ?? buttonLabel}</span>
+        {!triggerLabel && selectedModel?.providers?.[0] && !disabled && (
           <span className="text-theme-text-muted font-normal opacity-70">
             · {formatProviderName(selectedModel.providers[0])}
           </span>
@@ -151,6 +172,27 @@ export default function ModelSwitcher({ selected, onChange, disabled, models }: 
           `}
         >
           <div className="overflow-y-auto" style={{ maxHeight: dropdownPlacement.maxHeight }}>
+            {/* C5: Auto -- pinned above every category. Not a registry model;
+                selecting it omits model_id from the request so the backend
+                routes by capability (level + task type). */}
+            <button
+              type="button"
+              onClick={() => handleSelect(AUTO_MODEL_ID)}
+              className={`w-full text-left px-3 py-2 transition-colors border-b border-theme-border/20 cursor-pointer ${
+                isAuto ? 'bg-theme-brand/10' : 'hover:bg-theme-surface/60'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className={`font-medium ${isAuto ? 'text-theme-brand' : 'text-theme-text'}`}>
+                  ✨ Auto
+                </span>
+                {isAuto && <span className="text-theme-brand shrink-0">✓</span>}
+              </div>
+              <p className="text-[10px] text-theme-text-muted mt-0.5 leading-relaxed">
+                Picks the best available model for each task
+              </p>
+            </button>
+
             {groups.map(({ level, label, models: groupModels }) =>
               groupModels.length > 0 ? (
                 <div key={level} className="flex flex-col">

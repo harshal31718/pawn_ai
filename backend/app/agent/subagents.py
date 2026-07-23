@@ -26,7 +26,12 @@ from app.agent.tools.base import ToolContext, ToolSpec
 from app.agent.tools.execute import run_tool
 from app.agent.tools.fetch_url import FETCH_URL_TOOL
 from app.agent.tools.web_search import WEB_SEARCH_TOOL
-from app.constants import AGENT_MAX_TOKENS, ROLE_LEVELS, SUBAGENT_MAX_ITERATIONS
+from app.constants import (
+    AGENT_MAX_TOKENS,
+    ROLE_LEVELS,
+    ROLE_TASK_TYPES,
+    SUBAGENT_MAX_ITERATIONS,
+)
 from app.core import key_store, normalize
 from app.exceptions import NoEndpointError, ProviderError
 
@@ -166,8 +171,14 @@ async def run_subagent(name: str, task: str, ctx: ToolContext, tokens_used: int)
     tools_by_name = {t.name: t for t in tools}
 
     try:
+        # C2/C3: each preset's role declares its own task type
+        # (subagent_coder -> "coding" etc.), which is a better signal than
+        # re-inferring one from the delegated task string.
         model_id = ctx.resolver.pick_model_by_capability(
-            preset.role_level, user_id=ctx.user_id, require_tools=bool(tools)
+            preset.role_level,
+            user_id=ctx.user_id,
+            require_tools=bool(tools),
+            task_type=ROLE_TASK_TYPES.get(f"subagent_{name}"),
         )
     except NoEndpointError as e:
         return {"result": f"TOOL_ERROR: no model available for {name} subagent: {e}", "tool_log": [], "citations": [], "tokens_used": tokens_used}

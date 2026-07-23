@@ -1,7 +1,27 @@
 import os
 from pathlib import Path
 
+from app.config import PAWN_ENV
+
 DATA_DIR = Path(os.getenv("PAWN_DATA_DIR", "/app/data"))
+
+# --- PAWN 2.0 Phase E: dev/prod isolation on shared Drive + Kaggle accounts --
+# Drive and Kaggle are tied to the operator's Google/Kaggle ACCOUNT, not the
+# deployment, so local/staging testing and production would otherwise collide
+# when logged in with the same account. `PAWN_ENV` (config.py) is the single
+# switch; everything below derives from it.
+
+# storage/drive.py's get_or_create_root() is the one chokepoint all Drive data
+# (chats, projects, uploads) hangs off — scoping the root name here isolates
+# all of it in one change.
+DRIVE_ROOT_NAME = "PAWN-dev" if PAWN_ENV == "dev" else "PAWN"
+
+
+def kaggle_slug(base: str) -> str:
+    """Suffix a Kaggle kernel/dataset slug with '-dev' outside prod, so dev/staging
+    generations run on separate kernels instead of clobbering prod's live ones in
+    the same Kaggle account."""
+    return f"{base}-dev" if PAWN_ENV == "dev" else base
 
 REGISTRY_DIR      = DATA_DIR / "registry"
 MODELS_FILE       = REGISTRY_DIR / "models.json"
@@ -13,6 +33,22 @@ ENDPOINTS_FILE    = REGISTRY_DIR / "endpoints.json"
 # registry-refresh, isolated per test worker); presets aren't, so they don't
 # need or want that isolation.
 IMAGE_PRESETS_FILE = Path(__file__).resolve().parent.parent / "data" / "registry" / "image_presets.json"
+# Provider registry (2026-07-23): same reasoning as IMAGE_PRESETS_FILE above --
+# static reference data (which providers exist, their auth type/capabilities/
+# pool-eligibility), not per-request-mutable state, so no seeding step and no
+# per-test-worker isolation copy. Single source of truth replacing what used
+# to be separately hardcoded in key_store.VALID_PROVIDERS,
+# pool_key_store.POOL_VALID_PROVIDERS, resolver.PROVIDER_ALIASES, and
+# EndpointEntry.provider's old Pydantic Literal.
+#
+# 2026-07-23: kept as ONE file (providers.json) while the catalogue is small
+# (~15 providers) -- an earlier pass split this into one file per capability
+# (providers_chat.json/providers_internet.json/...), but that's unnecessary
+# complexity at this size. The loader (registry/providers.py) globs
+# providers*.json, so re-splitting later (if the catalogue grows toward
+# 200+) needs zero code change -- just moving JSON objects into more files.
+PROVIDERS_DIR = Path(__file__).resolve().parent.parent / "data" / "registry"
+PROVIDERS_GLOB = "providers*.json"
 MEMORY_DIR        = DATA_DIR / "memory"
 MEMORY_DB         = MEMORY_DIR / "memory.db"
 RATE_LIMITS_DIR   = DATA_DIR / "rate_limits"
@@ -37,13 +73,13 @@ KAGGLE_HTTP_TIMEOUT_SECONDS = 30
 KAGGLE_BUSY_WAIT_TIMEOUT_SECONDS = 300
 
 # Per-user kernel slug suffixes (full slug is "<username>/<suffix>").
-KAGGLE_CUBE_SLUG = "pawn-cube-poc"
+KAGGLE_CUBE_SLUG = kaggle_slug("pawn-cube-poc")
 
 # --- Warm/persistent Kaggle image sessions (Plan v5 / Phase W) ---------------
 # W.0 CPU echo notebook that proves the persistent loop + PostgREST rendezvous.
 KAGGLE_SESSION_POC_TEMPLATE = KAGGLE_TEMPLATES_DIR / "session_poc" / "notebook.ipynb"
 # Single slug for the W.0 POC kernel (full slug "<username>/<suffix>").
-KAGGLE_SESSION_SLUG = "pawn-session-poc"
+KAGGLE_SESSION_SLUG = kaggle_slug("pawn-session-poc")
 # How often the persistent kernel polls PostgREST for work / writes a heartbeat.
 KAGGLE_SESSION_POLL_INTERVAL_SECONDS = 3
 # A 'ready' session whose heartbeat is older than this is considered dead.
@@ -149,6 +185,52 @@ ROLE_LEVELS = {
     "vision_enhancer_primary": "balanced",
 }
 
+# --- C-series: capability-first routing -------------------------------------
+
+# C2: the task-type axis, orthogonal to capability_level. A task declares both
+# ("research"-level + "coding"-type); selection prefers models whose
+# capability_tags satisfy the type. Kept as a PREFERENCE, never a hard filter --
+# see resolver.rank_candidates. (require_vision stays a hard filter: handing
+# image content to a text-only model is a correctness bug, not a quality
+# regression. Q3.1 already had to fix exactly that once.)
+TASK_TYPES = ("general", "coding", "reasoning", "vision", "summarization")
+
+# Which capability_tags (as used in data/registry/models.json) satisfy each
+# task type. A model matching ANY listed tag counts as a match.
+TASK_TYPE_TAGS = {
+    "general": ("general", "instruction-following"),
+    "coding": ("coding",),
+    "reasoning": ("reasoning", "math", "research"),
+    "vision": ("vision",),
+    "summarization": ("summarization", "general"),
+}
+
+# Per-role task type, parallel to ROLE_LEVELS above. Deliberately a SEPARATE
+# dict rather than widening ROLE_LEVELS' values: ROLE_LEVELS[x] is read as a
+# plain string in 8 call sites, and changing its shape would break all of them
+# for no benefit. Roles absent here fall back to "general".
+# Rationale: where the task is already known internally (a coder subagent is
+# always coding), declaring it beats re-inferring it from text.
+ROLE_TASK_TYPES = {
+    "orchestrator": "general",
+    "final_light": "general",
+    "final_heavy": "reasoning",
+    "summarizer": "summarization",
+    "titler": "summarization",
+    "subagent_researcher": "reasoning",
+    "subagent_coder": "coding",
+    "subagent_summarizer": "summarization",
+    "vision_answer": "vision",
+    "vision_enhancer_primary": "vision",
+}
+
+# C1/C3: two models whose quality_rank differs by less than this are treated as
+# comparable, and the live tiebreak (quota headroom, then recent failures)
+# decides between them. Without a band, curated ranks form a total order and the
+# live signals could never fire at all -- which would defeat the point of
+# "quality-first, live signals break ties".
+QUALITY_TIE_BAND = 10
+
 # Q3.1: below this word count, a raw prompt is considered "vague" and worth
 # running through the vision enhancer; at/above it, _looks_already_scaffolded
 # decides instead. Starting guess per phase_Q3_prompting_presets.md §3.1.4 --
@@ -177,4 +259,10 @@ TRACE_MAX_ENTRIES = 50
 # research turns only -- see graph.py's route_after_execute gate) so a
 # stubborn gap can't run away the request.
 VERIFY_MAX_REVISIONS = 2
+
+# --- PAWN 2.0 Phase B: admin role ---------------------------------------------
+# Hardcoded, not a DB flag or JWT claim (plan's locked design, §Phase B/B.1) --
+# a single-operator deployment doesn't need a real role system yet. See
+# core/admin.py's require_admin/is_admin.
+ADMIN_EMAIL = "admin.pawnai@gmail.com"
 

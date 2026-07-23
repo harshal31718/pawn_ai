@@ -1,8 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import {
+  AUTO_MODEL_ID,
   fetchRegistryModels,
+  fetchRegistryProviders,
   getKeys,
   healthCheck,
+  type ProviderEntry,
   type RegistryModel,
 } from '../api/client'
 import { useThemePreference } from '../hooks/useThemePreference'
@@ -18,6 +21,7 @@ interface AppContextValue {
 
   /* Models & Providers */
   models: RegistryModel[]
+  providers: ProviderEntry[]
   configuredProviders: string[]
   availableModels: RegistryModel[]
   refreshKeys: () => void
@@ -49,6 +53,7 @@ export function AppContextProvider({ children, userName }: { children: ReactNode
 
   /* ── Models & Providers ── */
   const [models, setModels] = useState<RegistryModel[]>([])
+  const [providers, setProviders] = useState<ProviderEntry[]>([])
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([])
 
   const availableModels = models.filter((m) =>
@@ -72,12 +77,19 @@ export function AppContextProvider({ children, userName }: { children: ReactNode
       })
       .catch((err) => console.error('Failed to fetch registry models:', err))
 
+    fetchRegistryProviders()
+      .then(setProviders)
+      .catch((err) => console.error('Failed to fetch registry providers:', err))
+
     refreshKeys()
   }, [])
 
   /* ── User preferences ── */
   const [displayName, setDisplayName] = useState(() => userName || localStorage.getItem('pawn-display-name') || 'User')
-  const [defaultModel, setDefaultModel] = useState(() => localStorage.getItem('pawn-default-model') || 'gemini-2.5-flash')
+  // C5: Auto is the default for anyone who hasn't explicitly chosen a model.
+  // Previously hardcoded to 'gemini-2.5-flash', which silently pinned every new
+  // user to one model regardless of task or which keys they actually hold.
+  const [defaultModel, setDefaultModel] = useState(() => localStorage.getItem('pawn-default-model') || AUTO_MODEL_ID)
   const [userBubbleColor, setUserBubbleColor] = useState(() => localStorage.getItem('pawn-user-bubble') || '')
   const [aiBubbleColor, setAiBubbleColor] = useState(() => localStorage.getItem('pawn-ai-bubble') || '')
   const [backgroundEffect, setBackgroundEffect] = useState(() => localStorage.getItem('pawn-bg-effect') !== 'false')
@@ -148,7 +160,12 @@ export function AppContextProvider({ children, userName }: { children: ReactNode
   useEffect(() => {
     if (availableModels.length === 0) return
     const ids = availableModels.map((m) => m.model_id)
-    if (!ids.includes(defaultModel)) handleSaveDefaultModel(availableModels[0].model_id)
+    // C5: 'auto' is a valid selection but is deliberately NOT a registry model,
+    // so it must be exempted here -- otherwise this coercion would immediately
+    // overwrite Auto with a concrete model on every load.
+    if (defaultModel !== AUTO_MODEL_ID && !ids.includes(defaultModel)) {
+      handleSaveDefaultModel(AUTO_MODEL_ID)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableModels, defaultModel])
 
@@ -157,6 +174,7 @@ export function AppContextProvider({ children, userName }: { children: ReactNode
     setTheme,
     isDark,
     models,
+    providers,
     configuredProviders,
     availableModels,
     refreshKeys,

@@ -287,3 +287,14 @@ workspace/
 **Kaggle as compute, Supabase as rendezvous:** Kaggle provides free GPU quota (T4, dual-T4). The warm-session design uses Supabase as a message queue — the notebook polls for jobs, the backend polls for results. No persistent connection, no webhook surface, no custom infrastructure.
 
 **Optimistic UI with a persisted sync queue:** Drive latency (200–800ms per call) makes server-round-trip UI unusable. Client-owned UUIDs + localStorage cache make every conversation action instant. The sync queue handles retries, ordering, and offline survival so Drive stays consistent without the user ever waiting on it.
+
+---
+
+## Acknowledgements
+
+PAWN's multi-provider routing and free-tier failover design was informed by
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) (MIT), an open-source AI
+gateway that aggregates free-tier capacity across many providers behind a single
+OpenAI-compatible endpoint. PAWN shares no code with it — the influence is on
+approach: a data-driven provider registry, priority-ordered failover, and honest
+per-endpoint quota accounting.

@@ -6,17 +6,13 @@ import type { LayoutContext } from './Layout'
 
 export default function SettingsPage() {
   const navigate = useNavigate()
-  const { store } = useOutletContext<LayoutContext>()
+  const { store, isSidebarOpen, setIsSidebarOpen } = useOutletContext<LayoutContext>()
   const { user, logout } = useAuth()
   const {
     theme,
     setTheme,
     displayName,
     handleSaveDisplayName,
-    availableModels,
-    defaultModel,
-    handleSaveDefaultModel,
-    refreshKeys,
     userBubbleColor,
     handleChangeUserBubble,
     aiBubbleColor,
@@ -28,14 +24,12 @@ export default function SettingsPage() {
   return (
     <SettingsPageComponent
       onClose={() => navigate('/chat')}
+      isSidebarOpen={isSidebarOpen}
+      onOpenSidebar={() => setIsSidebarOpen(true)}
       theme={theme}
       onChangeTheme={setTheme}
       displayName={displayName}
       onSaveDisplayName={handleSaveDisplayName}
-      models={availableModels}
-      defaultModel={defaultModel}
-      onSaveDefaultModel={handleSaveDefaultModel}
-      onKeysChanged={refreshKeys}
       userBubbleColor={userBubbleColor}
       onChangeUserBubble={handleChangeUserBubble}
       aiBubbleColor={aiBubbleColor}

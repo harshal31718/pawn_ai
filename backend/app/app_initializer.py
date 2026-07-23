@@ -1,3 +1,4 @@
+import sys
 from contextlib import asynccontextmanager
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.constants import CHECKPOINTS_DB
@@ -15,6 +16,14 @@ async def initialize_managers():
     CHECKPOINTS_DB.parent.mkdir(parents=True, exist_ok=True)
     registry = load_registry()
     rate_limiter = EndpointRateLimiter()
+    # R2: reload today's persisted quota counters. Without this the process
+    # starts believing every daily limit is untouched and blows straight through
+    # quota the user already consumed before the restart -- which is exactly the
+    # bug persistence exists to fix, so it must happen before anything is served.
+    # Exception-safe and a no-op when Postgres is unavailable.
+    seeded = rate_limiter.seed_from_store()
+    if seeded:
+        print(f"rate limiter: seeded {seeded} usage bucket(s) from Postgres", file=sys.stderr)
     resolver = Resolver(registry, rate_limiter)
     
     async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINTS_DB)) as checkpointer:

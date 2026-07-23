@@ -15,22 +15,32 @@ import threading
 import time
 from typing import List, Optional
 
+from app.config import SHARED_DB_DSN
 from app.core.crypto import decrypt, encrypt
-from app.db.postgres_client import execute, fetchall, fetchone
+from app.db import postgres_client
+# Providers a user may supply a key for -- 2026-07-23: derived from the
+# provider registry (data/registry/providers_*.json) instead of a hand-kept
+# copy. Includes "kaggle" now (didn't before) -- harmless, since the
+# dedicated /keys/kaggle route is registered before the generic
+# /keys/{provider} catch-all and always intercepts that literal path first.
+from app.registry.providers import VALID_PROVIDER_IDS as VALID_PROVIDERS
 
-# Providers a user may supply a key for (mirrors the resolver/secret names).
-VALID_PROVIDERS = {
-    "google",
-    "groq",
-    "cerebras",
-    "huggingface",
-    "github",
-    "openrouter",
-    # Web search (agent tools, Phase A / A.3) — not LLM providers, same BYOK
-    # storage/UX. Preference order when both are configured: tavily, then brave.
-    "tavily",
-    "brave",
-}
+
+# PAWN 2.0 Phase E.4: user_api_keys lives on SHARED_DB_DSN (defaults to
+# POSTGRES_DSN -- prod is unaffected), not the per-environment POSTGRES_DSN
+# every other table uses. Thin wrappers so every existing call site below
+# (execute(...)/fetchall(...)/fetchone(...)) picks this up automatically
+# instead of needing a `dsn=` kwarg threaded through each one individually.
+def execute(sql, params=()):
+    return postgres_client.execute(sql, params, dsn=SHARED_DB_DSN)
+
+
+def fetchall(sql, params=()):
+    return postgres_client.fetchall(sql, params, dsn=SHARED_DB_DSN)
+
+
+def fetchone(sql, params=()):
+    return postgres_client.fetchone(sql, params, dsn=SHARED_DB_DSN)
 
 # Short-lived in-memory cache of decrypted keys. resolver.pick() calls get_key()
 # several times per chat (once per reasoning step / provider), and it runs inside

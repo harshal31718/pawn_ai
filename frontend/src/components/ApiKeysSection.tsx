@@ -8,103 +8,142 @@ import {
   deleteKaggleConfig,
   getDriveStatus,
 } from '../api/client'
+import { useAppContext } from '../contexts/AppContext'
 import { useAuth } from '../contexts/AuthContext'
 
-// Mirrors backend key_store.VALID_PROVIDERS.
-const PROVIDERS: { id: string; label: string; hint: string }[] = [
-  { id: 'google',      label: 'Google (Gemini)', hint: 'aistudio.google.com/apikey' },
-  { id: 'groq',        label: 'Groq',            hint: 'console.groq.com/keys' },
-  { id: 'cerebras',    label: 'Cerebras',        hint: 'cloud.cerebras.ai' },
-  { id: 'huggingface', label: 'Hugging Face',    hint: 'huggingface.co/settings/tokens' },
-  { id: 'github',      label: 'GitHub Models',   hint: 'github.com/settings/tokens' },
-  { id: 'openrouter',  label: 'OpenRouter',      hint: 'openrouter.ai/keys' },
-]
-
-// Web search providers (agent's web_search tool, Phase A / A.3). Optional —
-// without either, web_search is simply absent from the agent's toolset.
-// Preference order when both are configured: Tavily, then Brave.
-const SEARCH_PROVIDERS: { id: string; label: string; hint: string }[] = [
-  { id: 'tavily', label: 'Tavily',       hint: 'app.tavily.com — free tier available' },
-  { id: 'brave',  label: 'Brave Search', hint: 'brave.com/search/api' },
-]
-
+/** 2026-07-23 redesign: one consistent 2-row layout for every provider,
+ *  configured or not (a collapsed single-row variant for unconfigured
+ *  providers was tried and reverted -- looked worse in practice).
+ *
+ *  Row 1: name (col 1) + "?" hint toggle (col 2) + right-corner action
+ *         button (col 3) -- "Reconnect" for OAuth providers (Drive),
+ *         "Remove" for BYOK providers (only shown once configured).
+ *  Row 2: input(s) (col 1) + Save button (col 2, right corner). Omitted
+ *         entirely for providers with nothing to save (Drive -- its
+ *         "action" IS row 1's Reconnect button).
+ */
 function ProviderRow({
   id,
-  label,
+  name,
   hint,
   isConfigured,
+  configuredLabel = 'Configured',
   isBusy,
   activeHint,
   onToggleHint,
-  onRemove,
+  actionLabel,
+  onAction,
+  onSave,
+  saveDisabled,
   error,
   children,
 }: {
   id: string
-  label: string
-  hint: string
+  name: string
+  hint?: string
   isConfigured: boolean
+  configuredLabel?: string
   isBusy: boolean
   activeHint: string | null
   onToggleHint: (id: string) => void
-  onRemove: () => void
+  actionLabel?: string
+  onAction?: () => void
+  onSave?: () => void
+  saveDisabled?: boolean
   error?: string | null
-  children: ReactNode
+  children?: ReactNode
 }) {
+  const hintToggle = hint && (
+    <button
+      type="button"
+      onClick={() => onToggleHint(id)}
+      className={`p-0.5 rounded text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50 transition-all focus:outline-none cursor-pointer shrink-0 ${
+        activeHint === id ? 'text-theme-brand bg-theme-bg/60 border border-theme-border/40' : ''
+      }`}
+      title="Show guide"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3.5 h-3.5">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+      </svg>
+    </button>
+  )
+  const hintText = hint && activeHint === id && (
+    <p className="text-[10px] text-theme-text-muted truncate animate-in fade-in duration-200">
+      {hint}
+    </p>
+  )
+  const saveButton = onSave && (
+    <button
+      type="button"
+      onClick={onSave}
+      disabled={saveDisabled || isBusy}
+      className="w-[71.5px] py-1 text-[10px] bg-theme-brand text-theme-brand-text rounded-md hover:opacity-90 transition-colors font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer text-center"
+    >
+      {isBusy ? '…' : 'Save'}
+    </button>
+  )
+
   return (
     <div className="p-3 space-y-2">
-      {/* Row 1: Title & Help Button */}
-      <div className="flex items-center gap-1.5">
-        <p className="text-xs font-medium text-theme-text">{label}</p>
-        <button
-          type="button"
-          onClick={() => onToggleHint(id)}
-          className={`p-0.5 rounded text-theme-text-muted hover:text-theme-text hover:bg-theme-bg/50 transition-all focus:outline-none cursor-pointer ${
-            activeHint === id ? 'text-theme-brand bg-theme-bg/60 border border-theme-border/40' : ''
-          }`}
-          title="Show guide"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3.5 h-3.5">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
-          </svg>
-        </button>
+      {/* Row 1: name + hint toggle + inline hint text (left, grows) /
+          configured badge + action (right, fixed) -- the hint, when open,
+          flows in the SAME line right after the "?" icon, not a separate
+          line below. */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <p className="text-xs font-medium text-theme-text shrink-0">{name}</p>
+          {hintToggle}
+          {hintText}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {isConfigured && (
+            <span
+              className={`text-[9px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 py-0.5 rounded-full select-none ${
+                configuredLabel === 'Connected' ? 'px-2' : 'px-1.5'
+              }`}
+            >
+              {configuredLabel}
+            </span>
+          )}
+          {actionLabel && onAction && (isConfigured || actionLabel !== 'Remove') && (
+            <button
+              type="button"
+              onClick={onAction}
+              disabled={isBusy}
+              className={`text-[10px] py-1 rounded-md font-semibold cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                actionLabel === 'Remove'
+                  ? 'px-4 bg-theme-bg border border-red-500/40 text-red-500 hover:bg-red-500/10'
+                  : 'px-2.5 bg-theme-brand text-theme-brand-text hover:opacity-90'
+              }`}
+            >
+              {isBusy ? '…' : actionLabel}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Row 2: Hint text (conditional) */}
-      {activeHint === id && (
-        <p className="text-[10px] text-theme-text-muted bg-theme-bg/40 border border-theme-border/30 rounded-lg p-2 animate-in fade-in slide-in-from-top-1 duration-200">
-          {hint}
-        </p>
-      )}
-
-      {/* Row 3: Configured badge & Remove button (conditional) */}
-      {isConfigured && (
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 w-full">
-          <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full shrink-0 select-none">
-            Configured
-          </span>
-          <button
-            type="button"
-            onClick={onRemove}
-            disabled={isBusy}
-            className="text-[10px] px-2 py-0.5 bg-theme-bg border border-red-500/40 rounded-md text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
-          >
-            Remove
-          </button>
+      {/* Row 2: input(s) + Save -- omitted when there's nothing to save. */}
+      {children && (
+        <div className="flex items-center gap-2 w-full">
+          <div className="flex-1 min-w-0">{children}</div>
+          {saveButton}
         </div>
       )}
 
-      {/* Row 4: Inputs (via children) */}
-      <div className="pt-1">{children}</div>
-
-      {/* Row 5: Per-provider error */}
       {error && <p className="text-[10px] text-red-500">{error}</p>}
     </div>
   )
 }
 
-export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () => void }) {
+export default function ApiKeysSection({
+  onKeysChanged,
+  search,
+}: {
+  onKeysChanged?: () => void
+  search: string
+}) {
   const { login } = useAuth()
+  const { providers } = useAppContext()
   const [configured, setConfigured] = useState<string[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
@@ -228,182 +267,144 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
     }
   }
 
+  // A provider's "?" hint text -- derived from the registry entry rather than
+  // a hardcoded per-provider string, so a new provider needs zero UI code.
+  function hintFor(p: { free_tier_note: string | null; signup_link: string }): string {
+    return [p.free_tier_note, p.signup_link].filter(Boolean).join(' — ')
+  }
+
+  // Shared renderer for a single-key-input provider row (every LLM/search
+  // provider). Kaggle and Drive are special-cased below (different input
+  // shape / no key input at all).
+  function renderKeyRow(id: string, name: string, hint: string) {
+    const isSet = configured.includes(id)
+    return (
+      <ProviderRow
+        key={id}
+        id={id}
+        name={name}
+        hint={hint}
+        isConfigured={isSet}
+        isBusy={busy === id}
+        activeHint={activeHint}
+        onToggleHint={toggleHint}
+        actionLabel="Remove"
+        onAction={() => handleDelete(id)}
+        onSave={() => handleSave(id)}
+        saveDisabled={!(drafts[id] || '').trim()}
+        error={errors[id]}
+      >
+        <input
+          type="password"
+          value={drafts[id] || ''}
+          onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
+          onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
+          placeholder={isSet ? 'New key' : 'Paste key'}
+          autoComplete="off"
+          className="w-full bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+        />
+      </ProviderRow>
+    )
+  }
+
+  const driveProvider = providers.find((p) => p.id === 'google_drive')
+  const kaggleProvider = providers.find((p) => p.id === 'kaggle')
+  // One combined, filterable list -- chat (LLM) and internet (search)
+  // providers used to be two separately-headed sections; now they're just
+  // rows in the same list, per the user's follow-up call.
+  const keyProviders = providers.filter(
+    (p) => p.capabilities.includes('chat') || p.capabilities.includes('internet'),
+  )
+
+  // Drive + Kaggle join the same searchable/sortable pool as every other
+  // provider (per the user's follow-up calls): without a search query,
+  // configured/connected items float to the top (stable sort -- Drive and
+  // Kaggle still land first among configured items since they're first in
+  // this array); with a query, every row (Drive/Kaggle included) is
+  // filtered by relevance like anything else, so they hide when irrelevant.
+  type Row = { kind: 'drive' | 'kaggle' | 'key'; id: string; name: string; isConfigured: boolean }
+  const allRows: Row[] = [
+    { kind: 'drive', id: 'drive', name: driveProvider?.name ?? 'Google Drive', isConfigured: driveConnected === true },
+    { kind: 'kaggle', id: 'kaggle', name: kaggleProvider?.name ?? 'Kaggle', isConfigured: kaggleHasCreds },
+    ...keyProviders.map((p): Row => ({ kind: 'key', id: p.id, name: p.name, isConfigured: configured.includes(p.id) })),
+  ]
+
+  const query = search.trim().toLowerCase()
+  const visibleRows = query
+    ? allRows.filter((r) => r.name.toLowerCase().includes(query) || r.id.toLowerCase().includes(query))
+    : [...allRows].sort((a, b) => Number(b.isConfigured) - Number(a.isConfigured))
+
   return (
     <section className="space-y-4">
-      <div>
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-1">API Keys (BYOK)</h2>
-        <p className="text-[10px] text-theme-text-muted leading-relaxed">
-          Bring your own provider keys. Keys are encrypted at rest and used only by the
-          backend to make requests on your behalf — they are never shown again after saving.
-        </p>
-      </div>
-
       {errors['__global'] && (
         <p className="text-[10px] text-red-500">{errors['__global']}</p>
       )}
 
       <div className="bg-theme-surface border border-theme-border/50 rounded-xl divide-y divide-theme-border/30">
-
-        {/* Google Drive — mandatory storage backend; first and most prominent row */}
-        <div className="p-3 space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
-              <p className="text-xs font-medium text-theme-text">Google Drive</p>
-              {driveConnected === true && (
-                <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full shrink-0 select-none">
-                  Connected
-                </span>
-              )}
-              {driveConnected === false && (
-                <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0 select-none">
-                  Not connected
-                </span>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={handleConnectDrive}
-              className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold shrink-0 cursor-pointer"
-            >
-              {driveConnected ? 'Reconnect' : 'Connect'}
-            </button>
-          </div>
-          <p className="text-[10px] text-theme-text-muted leading-relaxed">
-            PAWN stores your conversations and uploads in your own Google Drive. This is
-            required — {driveConnected ? 'reconnect if chats stop saving.' : 'connect it to start saving your chats.'}
-          </p>
-          {errors['drive'] && <p className="text-[10px] text-red-500">{errors['drive']}</p>}
-        </div>
-
-        {/* Kaggle Credentials */}
-        <ProviderRow
-          id="kaggle"
-          label="Kaggle API Credentials"
-          hint="kaggle.com settings → Account → API Token"
-          isConfigured={kaggleHasCreds}
-          isBusy={busy === 'kaggle'}
-          activeHint={activeHint}
-          onToggleHint={toggleHint}
-          onRemove={handleDeleteKaggle}
-          error={errors['kaggle']}
-        >
-          <div className="flex flex-col gap-2 w-full">
-            <input
-              type="text"
-              value={kaggleUsername}
-              onChange={(e) => setKaggleUsername(e.target.value)}
-              placeholder="Kaggle username"
-              className="w-full bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
-            />
-            <div className="flex items-center gap-2 w-full">
-              <input
-                type="password"
-                value={kaggleApiToken}
-                onChange={(e) => setKaggleApiToken(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSaveKaggle()}
-                placeholder={kaggleHasCreds ? 'New token' : 'Kaggle API token'}
-                autoComplete="off"
-                className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+        {visibleRows.map((row) => {
+          if (row.kind === 'drive') {
+            return (
+              <ProviderRow
+                key="drive"
+                id="drive"
+                name={row.name}
+                hint="PAWN stores your conversations and uploads in your own Google Drive. This is required."
+                isConfigured={driveConnected === true}
+                configuredLabel="Connected"
+                isBusy={false}
+                activeHint={activeHint}
+                onToggleHint={toggleHint}
+                actionLabel={driveConnected ? 'Reconnect' : 'Connect'}
+                onAction={handleConnectDrive}
+                error={errors['drive']}
               />
-              <button
-                type="button"
-                onClick={handleSaveKaggle}
-                disabled={!kaggleUsername.trim() || (!kaggleHasCreds && !kaggleApiToken.trim()) || busy === 'kaggle'}
-                className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+            )
+          }
+          if (row.kind === 'kaggle') {
+            return (
+              <ProviderRow
+                key="kaggle"
+                id="kaggle"
+                name={row.name}
+                hint={kaggleProvider ? hintFor(kaggleProvider) : undefined}
+                isConfigured={kaggleHasCreds}
+                isBusy={busy === 'kaggle'}
+                activeHint={activeHint}
+                onToggleHint={toggleHint}
+                actionLabel="Remove"
+                onAction={handleDeleteKaggle}
+                onSave={handleSaveKaggle}
+                saveDisabled={!kaggleUsername.trim() || (!kaggleHasCreds && !kaggleApiToken.trim())}
+                error={errors['kaggle']}
               >
-                {busy === 'kaggle' ? '…' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </ProviderRow>
-
-        {/* LLM provider keys */}
-        {PROVIDERS.map(({ id, label, hint }) => {
-          const isSet = configured.includes(id)
-          return (
-            <ProviderRow
-              key={id}
-              id={id}
-              label={label}
-              hint={hint}
-              isConfigured={isSet}
-              isBusy={busy === id}
-              activeHint={activeHint}
-              onToggleHint={toggleHint}
-              onRemove={() => handleDelete(id)}
-              error={errors[id]}
-            >
-              <div className="flex items-center gap-2 w-full">
-                <input
-                  type="password"
-                  value={drafts[id] || ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
-                  placeholder={isSet ? 'New key' : 'Paste key'}
-                  autoComplete="off"
-                  className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleSave(id)}
-                  disabled={!(drafts[id] || '').trim() || busy === id}
-                  className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
-                >
-                  {busy === id ? '…' : 'Save'}
-                </button>
-              </div>
-            </ProviderRow>
-          )
+                {/* Username + token in one line, per the locked row-2 design. */}
+                <div className="flex items-center gap-2 w-full">
+                  <input
+                    type="text"
+                    value={kaggleUsername}
+                    onChange={(e) => setKaggleUsername(e.target.value)}
+                    placeholder="Kaggle username"
+                    className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+                  />
+                  <input
+                    type="password"
+                    value={kaggleApiToken}
+                    onChange={(e) => setKaggleApiToken(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSaveKaggle()}
+                    placeholder={kaggleHasCreds ? 'New token' : 'API token'}
+                    autoComplete="off"
+                    className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+                  />
+                </div>
+              </ProviderRow>
+            )
+          }
+          const p = keyProviders.find((kp) => kp.id === row.id)!
+          return renderKeyRow(p.id, p.name, hintFor(p))
         })}
-
-      </div>
-
-      <div>
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-theme-text-muted mb-1">Search (optional)</h2>
-        <p className="text-[10px] text-theme-text-muted leading-relaxed">
-          Lets the assistant search the web for current information. Without one of these,
-          it answers from its own knowledge only — no error, no degraded chat.
-        </p>
-      </div>
-
-      <div className="bg-theme-surface border border-theme-border/50 rounded-xl divide-y divide-theme-border/30">
-        {SEARCH_PROVIDERS.map(({ id, label, hint }) => {
-          const isSet = configured.includes(id)
-          return (
-            <ProviderRow
-              key={id}
-              id={id}
-              label={label}
-              hint={hint}
-              isConfigured={isSet}
-              isBusy={busy === id}
-              activeHint={activeHint}
-              onToggleHint={toggleHint}
-              onRemove={() => handleDelete(id)}
-              error={errors[id]}
-            >
-              <div className="flex items-center gap-2 w-full">
-                <input
-                  type="password"
-                  value={drafts[id] || ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
-                  placeholder={isSet ? 'New key' : 'Paste key'}
-                  autoComplete="off"
-                  className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleSave(id)}
-                  disabled={!(drafts[id] || '').trim() || busy === id}
-                  className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
-                >
-                  {busy === id ? '…' : 'Save'}
-                </button>
-              </div>
-            </ProviderRow>
-          )
-        })}
+        {query && visibleRows.length === 0 && (
+          <p className="p-3 text-[10px] text-theme-text-muted">No providers match "{search}".</p>
+        )}
       </div>
     </section>
   )
