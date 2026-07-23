@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import type { RegistryModel, ConversationMeta } from '../api/client'
 import ApiKeysSection from './ApiKeysSection'
+import ChangePasswordSection from './ChangePasswordSection'
 import ThemeToggle, { type Theme } from './ThemeToggle'
 
 const BUBBLE_PRESETS = [
@@ -46,7 +47,6 @@ const SHORTCUTS = [
 ]
 
 const FUTURE_ITEMS = [
-  { label: 'Password & Authentication', desc: 'Password change, 2FA, login history, active sessions' },
   { label: 'Notifications', desc: 'Global toggle, message & system channels, quiet hours' },
   { label: 'Sync & Backup', desc: 'Cloud sync, data backup and restore across devices' },
   { label: 'Search Preferences', desc: 'Scope and filter defaults (search feature planned)' },
@@ -366,6 +366,9 @@ export default function SettingsPage({
                   </div>
                 </div>
               </section>
+
+              {/* ── Change Password ── */}
+              <ChangePasswordSection />
 
               {/* ── Extras ── */}
               <section>

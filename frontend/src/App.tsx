@@ -11,6 +11,8 @@ import SettingsPage from './pages/SettingsPageWrapper'
 import ImageLabPage from './pages/ImageLabPageWrapper'
 import ProvidersPage from './pages/ProvidersPage'
 import AdminPage from './pages/AdminPage'
+import SignInPage from './pages/SignInPage'
+import GeneratedPasswordModal from './components/GeneratedPasswordModal'
 
 /** Pathless guard route: everything nested under it requires auth. */
 function RequireAuth() {
@@ -24,6 +26,10 @@ function AuthedShell() {
   const { user } = useAuth()
   return (
     <AppContextProvider userName={user?.name}>
+      {/* Login-change plan: renders nothing unless a fresh Google signup just
+          happened (generatedPassword non-null) -- mounted here so it's
+          present right after the post-signup redirect lands on /chat. */}
+      <GeneratedPasswordModal />
       <Layout />
     </AppContextProvider>
   )
@@ -37,7 +43,7 @@ function AppRoutes() {
           OAuth verification URL checks and for reviewers to load them cold). */}
       <Route path="/" element={isAuthenticated ? <Navigate to="/chat" replace /> : <LandingPage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
-      <Route path="/login" element={<Navigate to="/" replace />} />
+      <Route path="/login" element={isAuthenticated ? <Navigate to="/chat" replace /> : <SignInPage />} />
 
       <Route element={<RequireAuth />}>
         <Route element={<AuthedShell />}>

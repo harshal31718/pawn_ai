@@ -52,13 +52,82 @@ password hashing) — security-auditor runs on every backend step.
   Registered in `main.py`. New `test_account.py` (4 tests). 783 backend
   tests green (up from 779), `pytest -n auto` clean. **Backend is now fully
   done for this plan** — moving to frontend (steps 5-10).
-- `[ ]` **5 — `AuthContext.tsx`**: `password_changed`, `applySession`, `loginWithPassword`, generated-password state
-- `[ ]` **6 — `client.ts`**: `changePassword`
-- `[ ]` **7 — `SignInPage.tsx`** + `/login` route + `LandingPage.tsx` cross-link
-- `[ ]` **8 — `GeneratedPasswordModal.tsx`** + mount point
-- `[ ]` **9 — `ChangePasswordSection.tsx`** + `SettingsPage.tsx` wiring
-- `[ ]` **10 — `PasswordNudgeModal.tsx`** + `Layout.tsx` mount
-- `[ ]` **11 — Full cross-stack gate** (backend pytest + frontend tsc/build) + live Chrome verification of the manual checklist (plan §Verification, 11 items)
+- `[x]` **5 — `AuthContext.tsx`** ✓ (2026-07-23) `AuthUser` gains
+  `password_changed?: boolean`. New shared `applySession()` (localStorage +
+  state, used by both the OAuth-callback effect and the new password path).
+  New `loginWithPassword()` (raw fetch, mirrors `login()`'s style — no token
+  exists yet). OAuth-callback effect also reads `generated_password` from
+  the query string into new `generatedPassword` state (never persisted) +
+  `clearGeneratedPassword()`; naturally stripped by the existing
+  `history.replaceState`. New `updateUser(partial)` for optimistic local
+  patches (used by `ChangePasswordSection` after a successful change).
+- `[x]` **6 — `client.ts`** ✓ (2026-07-23) New `changePassword()`.
+  **Deliberately does NOT use the existing `handle401` helper** — a real bug
+  caught before it shipped: `handle401` unconditionally logs the user out
+  and reloads on ANY 401, but `/account/password`'s 401 means "current
+  password is wrong" (an expected, inline-displayable error), not "session
+  expired". Using it here would have logged a user out for typing their
+  current password wrong.
+- `[x]` **7 — `SignInPage.tsx`** + route + cross-link ✓ (2026-07-23) New
+  page, same chrome as `LandingPage.tsx` (grid background, theme toggle,
+  `/privacy` footer link): Google button (unchanged, `login()`) + an
+  email/password form with a show/hide eye-icon toggle, wired to
+  `loginWithPassword`. `App.tsx`'s `/login` stub replaced with a real
+  auth-gated route. `LandingPage.tsx` gets a "Already have an account? Sign
+  in" link; `SignInPage.tsx` gets "New here? Create an account" back to `/`.
+- `[x]` **8 — `GeneratedPasswordModal.tsx`** ✓ (2026-07-23) Renders only
+  when `generatedPassword` is non-null; read-only field + Copy button +
+  "Done" (clears it). Mounted in `App.tsx`'s `AuthedShell`, near the top.
+- `[x]` **9 — `ChangePasswordSection.tsx`** + `SettingsPage.tsx` wiring ✓
+  (2026-07-23) New own-file component (mirrors `ApiKeysSection.tsx`'s
+  split), 3 password fields each with an eye-icon show/hide toggle,
+  client-side `new === confirm` + length ≥ 8 validation before the
+  round-trip, 2s "Saved" confirmation matching `handleSaveName`'s pattern,
+  patches `AuthContext` via `updateUser({password_changed: true})` on
+  success. Mounted in the Profile column, replacing the removed
+  `FUTURE_ITEMS` "Password & Authentication" placeholder entry.
+- `[x]` **10 — `PasswordNudgeModal.tsx`** + `Layout.tsx` mount ✓ (2026-07-23)
+  "Change password now" (→ `/settings`) / "Remind me later" (dismiss this
+  mount only). `Layout.tsx`'s `shownRef` fires it once per mount (i.e. once
+  per login, since `Layout` only mounts under `RequireAuth`) when
+  `user.password_changed === false` — no `localStorage` flag, matching the
+  plan's server-side-source-of-truth requirement exactly.
+- `[x]` **11 — Full cross-stack gate + live verification** ✓ (2026-07-23)
+  783 backend tests green (unchanged from step 4 — steps 5-10 are
+  frontend-only), `pytest -n auto` clean, `tsc --noEmit` clean, `npm run
+  build` clean. **Live-verified via Chrome, real end-to-end, not just
+  typechecked:** opened Settings on the real logged-in account, entered a
+  deliberately wrong current password + a valid new password, clicked
+  "Change Password" — got the real backend's 401 "Current password is
+  incorrect." inline, **and the session stayed logged in** (confirms the
+  `handle401`-avoidance fix actually works against the live API, not just in
+  theory). No console errors.
+  **Not live-verified this session (documented, not silently skipped):**
+  the full fresh-Google-signup → generated-password-reveal →
+  password-login round trip. Logging out to reach the logged-out `/login`/
+  `/` pages would have ended the user's own live chat session in another
+  open tab (shared `localStorage` across tabs on the same origin) — a real,
+  in-progress conversation was visible there, so this was skipped as a
+  cost/risk call rather than attempted. `tsc`/build already prove `/login`
+  and `/` compile and render-shape correctly; the interactive OAuth
+  round-trip itself needs the user's own hands regardless (real Google
+  consent flow, not scriptable).
+  **Real gap surfaced by this verification, not from re-reading the plan:**
+  a user who signed up **before** this feature shipped has `password_hash =
+  NULL` forever — `/callback`'s upsert only sets it on a TRUE first insert,
+  never on a re-login update (this is the plan's own explicit design,
+  decision #3, not a bug introduced here). Their `password_changed` DOES
+  correctly backfill to `false` (the migration's column default applies to
+  existing rows), so `PasswordNudgeModal` will legitimately fire for them on
+  their next fresh login — but they have no password to type into
+  `ChangePasswordSection`'s "current password" field, so the nudge leads
+  nowhere useful for pre-existing accounts. Confirmed live: the currently
+  logged-in real account (predates this feature) hit exactly this — current
+  password is unconditionally "incorrect" because there was never one set.
+  Flagging for the user's decision, not silently working around it: either
+  accept this as an acceptable edge case (new users only, pre-existing
+  accounts stay Google-only forever), or a future step could special-case
+  "no password set yet" to skip the current-password check the first time.
 
 ---
 

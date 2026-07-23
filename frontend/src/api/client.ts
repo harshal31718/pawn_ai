@@ -897,3 +897,17 @@ export async function getAdminStats(): Promise<{ registered_users: number }> {
   if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()
 }
+
+// Login-change plan (2026-07-23): PUT /account/password.
+// Deliberately does NOT use handle401 -- a 401 here means "current password
+// is incorrect" (an expected, inline-displayable error the user typed wrong),
+// not "your session expired". Calling handle401 would incorrectly log the
+// user out and reload the page on a simple typo.
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/account/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  })
+  if (!res.ok) throw new Error(await errorDetail(res))
+}

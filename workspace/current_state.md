@@ -2,6 +2,30 @@
 
 Last updated: 2026-07-23
 
+**Login change — split Sign In/Sign Up + email-password + change password +
+nudge — DONE (2026-07-23), full stack.** Backend: password auto-generated +
+Argon2id-hashed on a user's TRUE first Google signup only (never on
+re-logins), revealed once via the callback redirect; new
+`POST /auth/login-password` (generic 401, brute-force guarded) and
+`PUT /account/password`; `/auth/me` no longer risks leaking `password_hash`.
+Frontend: new `SignInPage.tsx` (Google + email/password), `/login` is now a
+real page, `GeneratedPasswordModal`/`PasswordNudgeModal`,
+`ChangePasswordSection` in Settings. 783 backend tests green, `tsc`/build
+clean. **Real bug caught before shipping:** `client.ts`'s existing
+`handle401` helper logs the user out on ANY 401 — `changePassword()`
+deliberately avoids it, since a wrong-current-password 401 there is an
+expected inline error, not a session expiry. Live-verified against the real
+backend (wrong-password 401 shows inline, session stays logged in). **Known
+gap, flagged for the user:** pre-existing accounts (signed up before this
+shipped) never get a `password_hash`, so `PasswordNudgeModal` will fire for
+them but they have nothing to enter as their "current password" — this is a
+direct consequence of the plan's own locked design (password only generated
+on true first-insert), not a bug, but worth a decision on whether to special-
+case it. Not live-verified: the full fresh-signup → generated-password-
+reveal → password-login flow (would have required logging out, which
+would've killed the user's other open tab's live chat session — same-origin
+shared localStorage).
+
 **PAWN 2.0 Phase D done (Providers page honest math):** dashboard's
 `fair_share_remaining` field (pool rows only) replaces the raw
 `tpd_limit - own_consumption` in both the per-row display and the headline

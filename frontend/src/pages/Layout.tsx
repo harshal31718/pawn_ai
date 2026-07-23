@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
+import PasswordNudgeModal from '../components/PasswordNudgeModal'
 import { useAuth } from '../contexts/AuthContext'
 import { useAppContext } from '../contexts/AppContext'
 import { useConversationStore, type ConversationStore } from '../store/useConversationStore'
@@ -9,6 +10,19 @@ export default function Layout() {
   const { user } = useAuth()
   const { displayName, defaultModel, isDark, setTheme } = useAppContext()
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768)
+
+  // Login-change plan: one-time-per-login nudge. shownRef resets to false on
+  // every fresh mount (i.e. every login -- Layout only mounts under
+  // RequireAuth), so it fires once per login exactly, gated on the
+  // server-side password_changed flag rather than any localStorage state.
+  const [showNudge, setShowNudge] = useState(false)
+  const shownRef = useRef(false)
+  useEffect(() => {
+    if (!shownRef.current && user && user.password_changed === false) {
+      shownRef.current = true
+      setShowNudge(true)
+    }
+  }, [user])
 
   const store = useConversationStore(user?.id ?? null, defaultModel)
 
@@ -73,6 +87,7 @@ export default function Layout() {
         </div>
         <Outlet context={{ isSidebarOpen, setIsSidebarOpen, store }} />
       </div>
+      {showNudge && <PasswordNudgeModal onDismiss={() => setShowNudge(false)} />}
     </div>
   )
 }
