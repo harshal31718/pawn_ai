@@ -163,8 +163,42 @@ DB, needs B) → **C** → **D**. Phases below are listed A–E for reference, n
     `pytest -q` and `pytest -q -n auto` clean. `npx tsc --noEmit` clean
     (frontend untouched by E.1–E.3). No live Chrome verification yet this
     session (see E.5).
-  - `[ ]` E.4 `SHARED_DB_DSN` (keys-only shared; defaults to `POSTGRES_DSN`) + dev Postgres tunnel — depends on Phase B, deferred until B lands
-  - `[ ]` E.5 verify: chats/gens/usage isolate; keys shared+sync; no dev image in prod gallery — needs E.4
+  - `[~]` **E.4 — `SHARED_DB_DSN` code plumbing** ✓ code, tunnel activation
+    **deliberately not done this session** (2026-07-23). `db/postgres_client.py`'s
+    `_connect`/`fetchone`/`fetchall`/`execute` all gained an optional `dsn`
+    override (defaults to `POSTGRES_DSN`, so every existing caller is
+    byte-for-byte unaffected). New `config.SHARED_DB_DSN` (`shared_db_dsn`
+    secret, or `POSTGRES_DSN` if absent — prod needs zero new config).
+    `core/key_store.py`/`core/pool_key_store.py` each gained thin
+    `execute`/`fetchall`/`fetchone` wrappers binding `dsn=SHARED_DB_DSN`, so
+    every existing call site in both modules picked it up with no per-call-site
+    changes. `docker-compose.yml`: new `shared_db_dsn` secret (optional —
+    same is_file()-tolerant-of-a-missing-file behavior as the pool-key
+    secrets), and a new profile-gated `keys-tunnel` service (forward SSH
+    tunnel, opposite direction from the existing `pgrst-tunnel`) with a
+    dedicated `keys_tunnel_key` secret — deliberately NOT `pgrst_tunnel_key`
+    reused, since that key's VM-side `authorized_keys` restriction only
+    permits forwarding port 3002; this needs 5432, a different port, so a
+    different least-privilege key. New `secrets/shared_db_dsn.example`.
+    738 backend tests green (up from 729: new `test_postgres_client.py` (5) +
+    2 wrapper tests each in `test_pool_key_store.py`/`test_keys.py`),
+    `pytest -n auto` clean, `docker compose config --quiet` validates the new
+    service/secret block parses. Live-verified this session's actual stack is
+    unaffected: `/keys` still resolves correctly (empty list, as expected —
+    `SHARED_DB_DSN` fell through to `POSTGRES_DSN` since no `shared_db_dsn`
+    secret exists locally), full chat round-trip still works via Chrome.
+    **Deliberately NOT done this session, and why:** actually generating the
+    `keys_tunnel_key` keypair, restricting it in the production VM's
+    `authorized_keys`, creating a real `secrets/shared_db_dsn` pointing at
+    prod's real credentials, and bringing up `--profile tunnel` all require
+    live changes to the production Oracle VM (modifying its SSH
+    `authorized_keys`) and copying prod's real `ENCRYPTION_SECRET` onto this
+    dev machine — an infrastructure action on a shared/production system
+    that needs the user's own hands and explicit go-ahead, not something to
+    do autonomously. The plumbing above is fully additive and inert until
+    that VM-side step happens; nothing here touches prod.
+  - `[ ]` E.5 verify: chats/gens/usage isolate; keys shared+sync; no dev image
+    in prod gallery — blocked on the user completing E.4's VM-side tunnel setup
 
 ---
 

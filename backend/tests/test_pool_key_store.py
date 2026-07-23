@@ -13,6 +13,25 @@ def _reset_cache():
         pool_key_store._POOL_CACHE.clear()
 
 
+# ── PAWN 2.0 Phase E.4: pool_api_keys routes through SHARED_DB_DSN ──────────
+
+
+def test_execute_wrapper_passes_shared_db_dsn():
+    with patch("app.core.pool_key_store.SHARED_DB_DSN", "postgresql://shared/db"), \
+         patch("app.core.pool_key_store.postgres_client.execute") as exec_mock:
+        pool_key_store.execute("delete from pool_api_keys where provider = %s", ("groq",))
+    exec_mock.assert_called_once_with(
+        "delete from pool_api_keys where provider = %s", ("groq",), dsn="postgresql://shared/db"
+    )
+
+
+def test_fetchone_wrapper_passes_shared_db_dsn():
+    with patch("app.core.pool_key_store.SHARED_DB_DSN", "postgresql://shared/db"), \
+         patch("app.core.pool_key_store.postgres_client.fetchone", return_value=None) as fetch_mock:
+        pool_key_store.fetchone("select 1")
+    fetch_mock.assert_called_once_with("select 1", (), dsn="postgresql://shared/db")
+
+
 def test_set_pool_key_encrypts_and_upserts():
     _reset_cache()
     with patch("app.core.pool_key_store.encrypt", return_value="ENC(secret)") as enc, \

@@ -10,8 +10,23 @@ import threading
 import time
 from typing import Optional
 
+from app.config import SHARED_DB_DSN
 from app.core.crypto import decrypt, encrypt
-from app.db.postgres_client import execute, fetchall, fetchone
+from app.db import postgres_client
+
+
+# PAWN 2.0 Phase E.4: pool_api_keys lives on SHARED_DB_DSN, same reasoning as
+# key_store.py's identical wrapper (see there for the full comment).
+def execute(sql, params=()):
+    return postgres_client.execute(sql, params, dsn=SHARED_DB_DSN)
+
+
+def fetchall(sql, params=()):
+    return postgres_client.fetchall(sql, params, dsn=SHARED_DB_DSN)
+
+
+def fetchone(sql, params=()):
+    return postgres_client.fetchone(sql, params, dsn=SHARED_DB_DSN)
 
 # LLM providers eligible for a pool key -- mirrors the 11 Docker secrets
 # wired in docker-compose.yml (Phase 1b). Deliberately excludes tavily/brave

@@ -5,6 +5,12 @@ services:
       - "8001:8000"
     secrets:
       - postgres_dsn
+      # PAWN 2.0 Phase E.4: optional. Absent -> SHARED_DB_DSN falls back to
+      # POSTGRES_DSN (today's exact behavior). To share keys live with prod
+      # from local dev: bring up the `keys-tunnel` service below (profile
+      # `tunnel`, same pattern as `pgrst-tunnel`), then put a DSN pointing at
+      # 127.0.0.1:<tunnel-port> in ./secrets/shared_db_dsn.
+      - shared_db_dsn
       - encryption_secret
       - google_client_id
       - google_client_secret
@@ -131,6 +137,33 @@ services:
     profiles:
       - tunnel
 
+  # PAWN 2.0 Phase E.4: dev-only FORWARD SSH tunnel so this local backend can
+  # reach PROD's Postgres for the one deliberately-shared table set
+  # (user_api_keys, pool_api_keys) via SHARED_DB_DSN. Opposite direction from
+  # pgrst-tunnel above (that's a REMOTE tunnel letting a Kaggle kernel reach
+  # local Postgrest; this is a local port forwarded to the VM's Postgres).
+  # Requires: (1) the one-time VM-side authorized_keys restriction described
+  # on keys_tunnel_key above, (2) prod's real Postgres port open to
+  # 127.0.0.1 on the VM (already true -- it's never exposed publicly), (3)
+  # `secrets/shared_db_dsn` pointing at host `keys-tunnel`, port 5434 (Docker
+  # Compose's internal DNS resolves the service name across containers on
+  # this network -- no host port mapping needed, and none is published, so
+  # this never touches the host's network at all) with prod's real DB
+  # credentials, and (4) dev carrying prod's ENCRYPTION_SECRET to decrypt the
+  # shared key blobs -- the one real security cost of this, accepted for a
+  # solo operator per the plan's own risk #6. Gated behind the `tunnel`
+  # profile like pgrst-tunnel -- inert for anyone not deliberately opting
+  # into live dev/prod key sharing.
+  # Usage: docker compose --profile tunnel up -d keys-tunnel
+  keys-tunnel:
+    image: alpine:3.20
+    entrypoint: sh -c "apk add --no-cache openssh-client >/dev/null && cp /run/secrets/keys_tunnel_key /tmp/tunnel_key && chmod 600 /tmp/tunnel_key && exec ssh -i /tmp/tunnel_key -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -N -L 0.0.0.0:5434:127.0.0.1:5432 ubuntu@144.24.119.184"
+    secrets:
+      - keys_tunnel_key
+    restart: unless-stopped
+    profiles:
+      - tunnel
+
   frontend:
     build: ./frontend
     ports:
@@ -156,6 +189,9 @@ secrets:
     file: ./secrets/postgres_password
   postgres_dsn:
     file: ./secrets/postgres_dsn
+  # PAWN 2.0 Phase E.4: optional, keys-only shared DB. See secrets/shared_db_dsn.example.
+  shared_db_dsn:
+    file: ./secrets/shared_db_dsn
   postgrest_anon_password:
     file: ./secrets/postgrest_anon_password
   postgrest_db_uri:
@@ -172,6 +208,17 @@ secrets:
     # An SSH key (like keys/pawn_oci.key), not an API key -- lives in keys/,
     # not secrets/, per the same convention as the existing deploy key.
     file: ./keys/pgrst_tunnel_key
+  # PAWN 2.0 Phase E.4: separate key from pgrst_tunnel_key, deliberately --
+  # least-privilege (that key's VM-side authorized_keys entry is restricted
+  # to forwarding only 127.0.0.1:3002; this one needs 127.0.0.1:5432
+  # instead, a DIFFERENT port, so it should be a DIFFERENT restricted key,
+  # not a widened version of the existing one). One-time VM setup required
+  # (generate a keypair, restrict it in the VM's authorized_keys to
+  # `command="echo tunnel-only",no-pty,no-agent-forwarding,no-X11-forwarding,
+  # permitopen="127.0.0.1:5432"`) before this file needs to exist -- not
+  # created by this pass, since it requires the user's own VM access.
+  keys_tunnel_key:
+    file: ./keys/keys_tunnel_key
 
   # Phase 1b (2026-07-21, wired 2026-07-23): operator-supplied shared
   # free-tier pool keys. Stack starts fine with none of these files present

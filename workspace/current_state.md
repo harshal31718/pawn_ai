@@ -2,6 +2,20 @@
 
 Last updated: 2026-07-23
 
+**PAWN 2.0 Phase E.4 code plumbing done, tunnel activation deferred to the
+user:** `postgres_client` functions gained an optional `dsn` override
+(default `POSTGRES_DSN`, zero behavior change), new `config.SHARED_DB_DSN`,
+`key_store`/`pool_key_store` now route through it via thin wrappers. New
+profile-gated `keys-tunnel` docker-compose service (forward SSH tunnel to
+prod's Postgres) + `keys_tunnel_key`/`shared_db_dsn` secrets — deliberately
+NOT activated: doing so needs a live change to the production VM's SSH
+`authorized_keys` and copying prod's real `ENCRYPTION_SECRET` onto this dev
+machine, both of which need the user's own hands. 738 backend tests green,
+`docker compose config --quiet` validates the new config, live-verified the
+current stack is unaffected (`/keys` and a real chat round-trip both still
+work). E.5 (the isolation verification checklist) is blocked on the user
+completing that VM step.
+
 **PAWN 2.0 Phase B done (admin role + DB-backed pool keys + admin page):**
 `core/admin.py` (`ADMIN_EMAIL`, `is_admin`, `require_admin`), new
 `pool_api_keys` Postgres table + `core/pool_key_store.py` (encrypted,

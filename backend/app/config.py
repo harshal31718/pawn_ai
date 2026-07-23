@@ -59,6 +59,17 @@ PAWN_ENV = os.getenv("PAWN_ENV", "dev")
 # Self-hosted Postgres (application database) — replaces Supabase.
 POSTGRES_DSN = read_secret("postgres_dsn")
 
+# PAWN 2.0 Phase E.4: the ONE deliberately-shared store across dev/prod --
+# API keys (user_api_keys, pool_api_keys). Defaults to POSTGRES_DSN, so prod
+# (single DB) is completely unaffected. In dev, set this to prod's DB reached
+# over an SSH tunnel (mirror the existing `pgrst-tunnel` docker-compose
+# pattern) so keys entered once stay in sync across both environments --
+# requires dev to also carry prod's ENCRYPTION_SECRET to decrypt the shared
+# blobs (the one real security cost of this, accepted for a solo operator
+# per the plan's risk #6). key_store.py / pool_key_store.py pass this as the
+# `dsn` override on every call; every other table stays on POSTGRES_DSN.
+SHARED_DB_DSN = read_secret("shared_db_dsn") or POSTGRES_DSN
+
 # Public HTTPS URL for the self-hosted PostgREST instance (D.4) — injected into
 # the warm Kaggle kernel payload so it can rendezvous with PAWN over the
 # internet. Non-secret (just a URL); PostgREST itself has no host port and is
