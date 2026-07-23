@@ -6,7 +6,7 @@ import type { LayoutContext } from './Layout'
 
 export default function SettingsPage() {
   const navigate = useNavigate()
-  const { store } = useOutletContext<LayoutContext>()
+  const { store, isSidebarOpen, setIsSidebarOpen } = useOutletContext<LayoutContext>()
   const { user, logout } = useAuth()
   const {
     theme,
@@ -28,6 +28,8 @@ export default function SettingsPage() {
   return (
     <SettingsPageComponent
       onClose={() => navigate('/chat')}
+      isSidebarOpen={isSidebarOpen}
+      onOpenSidebar={() => setIsSidebarOpen(true)}
       theme={theme}
       onChangeTheme={setTheme}
       displayName={displayName}

@@ -9,6 +9,22 @@ services:
       - google_client_id
       - google_client_secret
       - jwt_secret
+      # Phase 1b pool keys — verified live (2026-07-23) that `docker compose
+      # up` tolerates missing source files here (just a "secret file does
+      # not exist" warning, exit 0); `required: false` isn't a field this
+      # Compose version supports, and isn't needed. read_pool_key() falls
+      # through to BYOK for any provider whose file is absent.
+      - pool_cerebras_api_key
+      - pool_github_api_key
+      - pool_google_api_key
+      - pool_groq_api_key
+      - pool_huggingface_api_key
+      - pool_kluster_api_key
+      - pool_mistral_api_key
+      - pool_nvidia_api_key
+      - pool_openrouter_api_key
+      - pool_sambanova_api_key
+      - pool_zhipu_api_key
     environment:
       # Public URL for the self-hosted PostgREST instance (D.4) — non-secret,
       # injected into warm Kaggle-session payloads. Blank by default: the
@@ -152,3 +168,37 @@ secrets:
     # An SSH key (like keys/pawn_oci.key), not an API key -- lives in keys/,
     # not secrets/, per the same convention as the existing deploy key.
     file: ./keys/pgrst_tunnel_key
+
+  # Phase 1b (2026-07-21, wired 2026-07-23): operator-supplied shared
+  # free-tier pool keys. Stack starts fine with none of these files present
+  # — confirmed live via a scratch probe that `docker compose up` only warns
+  # ("secret file does not exist") and still exits 0 when a source file is
+  # missing. `app/config.py`'s `read_pool_key()` and every endpoint's
+  # `key_source` already fall through to BYOK exactly as before when a
+  # provider's file is absent. To actually enable a provider's pool: copy
+  # `secrets/pool_<provider>_api_key.example` to
+  # `secrets/pool_<provider>_api_key` with a real key, then restart — no
+  # further compose edits needed, the entries already exist here and on the
+  # backend service.
+  pool_cerebras_api_key:
+    file: ./secrets/pool_cerebras_api_key
+  pool_github_api_key:
+    file: ./secrets/pool_github_api_key
+  pool_google_api_key:
+    file: ./secrets/pool_google_api_key
+  pool_groq_api_key:
+    file: ./secrets/pool_groq_api_key
+  pool_huggingface_api_key:
+    file: ./secrets/pool_huggingface_api_key
+  pool_kluster_api_key:
+    file: ./secrets/pool_kluster_api_key
+  pool_mistral_api_key:
+    file: ./secrets/pool_mistral_api_key
+  pool_nvidia_api_key:
+    file: ./secrets/pool_nvidia_api_key
+  pool_openrouter_api_key:
+    file: ./secrets/pool_openrouter_api_key
+  pool_sambanova_api_key:
+    file: ./secrets/pool_sambanova_api_key
+  pool_zhipu_api_key:
+    file: ./secrets/pool_zhipu_api_key

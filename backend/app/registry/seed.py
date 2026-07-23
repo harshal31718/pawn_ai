@@ -14,7 +14,8 @@ INITIAL_MODELS = [
     "capability_tags": ["general", "summarization", "instruction-following", "coding"],
     "context_window": 1048576,
     "active": True,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 10
   },
   {
     "id": "gemini-2.5-flash-lite",
@@ -26,7 +27,8 @@ INITIAL_MODELS = [
     "capability_tags": ["general", "summarization"],
     "context_window": 1048576,
     "active": True,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 20
   },
   {
     "id": "llama-3.3-70b",
@@ -38,7 +40,8 @@ INITIAL_MODELS = [
     "capability_tags": ["coding", "reasoning", "general"],
     "context_window": 128000,
     "active": True,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 20
   },
   {
     "id": "deepseek-r1",
@@ -55,7 +58,8 @@ INITIAL_MODELS = [
     # real structured tool_calls field -- found live leaking as visible text
     # instead of triggering a tool. False until a working tool-calling
     # endpoint for this model is verified (e.g. OpenRouter's, if reactivated).
-    "supports_tools": False
+    "supports_tools": False,
+    "quality_rank": 50
   },
   {
     "id": "gpt-oss-120b",
@@ -67,7 +71,8 @@ INITIAL_MODELS = [
     "capability_tags": ["general", "coding", "instruction-following"],
     "context_window": 8192,
     "active": True,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 20
   },
   {
     "id": "qwen-3-32b",
@@ -79,7 +84,8 @@ INITIAL_MODELS = [
     "capability_tags": ["general", "coding", "reasoning"],
     "context_window": 32768,
     "active": False,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 20
   },
   {
     "id": "glm-4.7",
@@ -91,7 +97,8 @@ INITIAL_MODELS = [
     "capability_tags": ["general", "instruction-following"],
     "context_window": 8192,
     "active": True,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 60
   },
   {
     "id": "text-embedding-004",
@@ -103,7 +110,8 @@ INITIAL_MODELS = [
     "capability_tags": [],
     "context_window": 2048,
     "active": False,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 999
   },
   {
     "id": "gemini-embedding-2",
@@ -115,7 +123,8 @@ INITIAL_MODELS = [
     "capability_tags": [],
     "context_window": 8192,
     "active": True,
-    "supports_tools": True
+    "supports_tools": True,
+    "quality_rank": 999
   }
 ]
 
@@ -131,6 +140,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": 500,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   },
@@ -145,6 +155,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": 1000,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   },
@@ -159,6 +170,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": 1000,
     "tpm_limit": 12000,
     "tpd_limit": None,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   },
@@ -173,6 +185,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": 1000000,
+    "key_source": "either",
     "active": False,
     "last_verified": "2026-06-15"
   },
@@ -187,6 +200,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   },
@@ -201,6 +215,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": 150,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": False,
     "last_verified": "2026-06-15"
   },
@@ -215,6 +230,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": False,
     "last_verified": "2026-06-15"
   },
@@ -229,6 +245,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   },
@@ -243,6 +260,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": 150,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": False,
     "last_verified": "2026-06-15"
   },
@@ -257,6 +275,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": False,
     "last_verified": "2026-06-15"
   },
@@ -271,6 +290,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": 1000000,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   },
@@ -285,6 +305,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": 1000000,
+    "key_source": "either",
     "active": False,
     "last_verified": "2026-06-15"
   },
@@ -299,6 +320,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": 1000000,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   },
@@ -313,6 +335,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": False,
     "last_verified": "2026-06-15"
   },
@@ -327,6 +350,7 @@ INITIAL_ENDPOINTS = [
     "rpd_limit": None,
     "tpm_limit": None,
     "tpd_limit": None,
+    "key_source": "either",
     "active": True,
     "last_verified": "2026-07-13"
   }

@@ -1,5 +1,6 @@
 from typing import Optional
 from starlette.concurrency import run_in_threadpool
+from app.constants import ROLE_TASK_TYPES
 from app.core.normalize import chat_stream
 from app.core.drive_factory import call_drive, require_drive_for_user
 from app.exceptions import NotConfiguredError
@@ -8,18 +9,27 @@ from app.resolver.resolver import Resolver
 from app.core.rate_limiter import EndpointRateLimiter
 
 class DummyRateLimiter:
-    def can_use(self, endpoint) -> bool: return True
-    def record_call(self, endpoint_id, token_count=0): pass
-    def record_429(self, endpoint_id, retry_after=60): pass
-    def record_connect_failure(self, endpoint_id): pass
-    def record_success(self, endpoint_id): pass
+    # R2 added user_id/token kwargs plus record_tokens/failure_count. **kwargs
+    # absorbs them so this stub never has to track the real limiter's signature
+    # -- a TypeError here would surface on the no-limiter fallback path and mask
+    # the real "no rate limiter configured" condition.
+    def can_use(self, endpoint, **kwargs) -> bool: return True
+    def record_call(self, endpoint_id, token_count=0, **kwargs): pass
+    def record_tokens(self, endpoint_id, token_count=0, **kwargs): pass
+    def record_429(self, endpoint_id, retry_after=60, **kwargs): pass
+    def record_connect_failure(self, endpoint_id, **kwargs): pass
+    def record_success(self, endpoint_id, **kwargs): pass
+    def failure_count(self, endpoint_id, **kwargs) -> int: return 0
+    def usage_pct(self, endpoint, **kwargs) -> float: return 0.0
 
 class DummyResolver:
     def pick(self, model_id, user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
     def pick_by_capability(self, level, visibility="internal"):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
-    def pick_model_by_capability(self, level, visibility="internal"):
+    # **kwargs absorbs C2/C3's task_type -- see the same note on graph.py's
+    # DummyResolver. summarize_history() now always passes it.
+    def pick_model_by_capability(self, level, visibility="internal", **kwargs):
         return "gemini-2.5-flash"
 
 async def summarize_history(
@@ -51,7 +61,9 @@ async def summarize_history(
         rate_limiter = rate_limiter or DummyRateLimiter()
         
     try:
-        model_id = resolver.pick_model_by_capability("fast")
+        model_id = resolver.pick_model_by_capability(
+            "fast", task_type=ROLE_TASK_TYPES["summarizer"]
+        )
         summary_text = ""
         async for token in chat_stream(model_id, msgs, resolver, rate_limiter, user_id=user_id):
             summary_text += token

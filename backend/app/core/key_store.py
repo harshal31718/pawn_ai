@@ -26,6 +26,13 @@ VALID_PROVIDERS = {
     "huggingface",
     "github",
     "openrouter",
+    # Free-tier expansion (R1, 2026-07-21). All OpenAI-compatible with plain
+    # bearer auth -- no provider-specific code needed in llm_core.py.
+    "mistral",
+    "nvidia",
+    "zhipu",
+    "sambanova",
+    "kluster",
     # Web search (agent tools, Phase A / A.3) — not LLM providers, same BYOK
     # storage/UX. Preference order when both are configured: tavily, then brave.
     "tavily",

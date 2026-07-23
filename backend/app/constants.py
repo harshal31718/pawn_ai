@@ -149,6 +149,52 @@ ROLE_LEVELS = {
     "vision_enhancer_primary": "balanced",
 }
 
+# --- C-series: capability-first routing -------------------------------------
+
+# C2: the task-type axis, orthogonal to capability_level. A task declares both
+# ("research"-level + "coding"-type); selection prefers models whose
+# capability_tags satisfy the type. Kept as a PREFERENCE, never a hard filter --
+# see resolver.rank_candidates. (require_vision stays a hard filter: handing
+# image content to a text-only model is a correctness bug, not a quality
+# regression. Q3.1 already had to fix exactly that once.)
+TASK_TYPES = ("general", "coding", "reasoning", "vision", "summarization")
+
+# Which capability_tags (as used in data/registry/models.json) satisfy each
+# task type. A model matching ANY listed tag counts as a match.
+TASK_TYPE_TAGS = {
+    "general": ("general", "instruction-following"),
+    "coding": ("coding",),
+    "reasoning": ("reasoning", "math", "research"),
+    "vision": ("vision",),
+    "summarization": ("summarization", "general"),
+}
+
+# Per-role task type, parallel to ROLE_LEVELS above. Deliberately a SEPARATE
+# dict rather than widening ROLE_LEVELS' values: ROLE_LEVELS[x] is read as a
+# plain string in 8 call sites, and changing its shape would break all of them
+# for no benefit. Roles absent here fall back to "general".
+# Rationale: where the task is already known internally (a coder subagent is
+# always coding), declaring it beats re-inferring it from text.
+ROLE_TASK_TYPES = {
+    "orchestrator": "general",
+    "final_light": "general",
+    "final_heavy": "reasoning",
+    "summarizer": "summarization",
+    "titler": "summarization",
+    "subagent_researcher": "reasoning",
+    "subagent_coder": "coding",
+    "subagent_summarizer": "summarization",
+    "vision_answer": "vision",
+    "vision_enhancer_primary": "vision",
+}
+
+# C1/C3: two models whose quality_rank differs by less than this are treated as
+# comparable, and the live tiebreak (quota headroom, then recent failures)
+# decides between them. Without a band, curated ranks form a total order and the
+# live signals could never fire at all -- which would defeat the point of
+# "quality-first, live signals break ties".
+QUALITY_TIE_BAND = 10
+
 # Q3.1: below this word count, a raw prompt is considered "vague" and worth
 # running through the vision enhancer; at/above it, _looks_already_scaffolded
 # decides instead. Starting guess per phase_Q3_prompting_presets.md §3.1.4 --

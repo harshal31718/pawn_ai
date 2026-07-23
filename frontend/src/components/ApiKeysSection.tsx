@@ -20,6 +20,17 @@ const PROVIDERS: { id: string; label: string; hint: string }[] = [
   { id: 'openrouter',  label: 'OpenRouter',      hint: 'openrouter.ai/keys' },
 ]
 
+// Additional free-tier providers, collapsed by default so the common case stays
+// a short list. Same BYOK storage and behaviour as PROVIDERS above — the only
+// difference is presentation.
+const MORE_PROVIDERS: { id: string; label: string; hint: string }[] = [
+  { id: 'mistral',   label: 'Mistral AI', hint: 'console.mistral.ai/api-keys — ~1B tokens/month free' },
+  { id: 'nvidia',    label: 'NVIDIA NIM', hint: 'build.nvidia.com — free tier for NVIDIA Developer Program members' },
+  { id: 'zhipu',     label: 'Zhipu (GLM)', hint: 'open.bigmodel.cn — GLM Flash models are free' },
+  { id: 'sambanova', label: 'SambaNova',  hint: 'cloud.sambanova.ai — free tier, low daily request cap' },
+  { id: 'kluster',   label: 'Kluster AI', hint: 'platform.kluster.ai/apikeys — limits undocumented' },
+]
+
 // Web search providers (agent's web_search tool, Phase A / A.3). Optional —
 // without either, web_search is simply absent from the agent's toolset.
 // Preference order when both are configured: Tavily, then Brave.
@@ -124,6 +135,7 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
   const [kaggleApiToken, setKaggleApiToken] = useState('')
 
   const [activeHint, setActiveHint] = useState<string | null>(null)
+  const [showMore, setShowMore] = useState(false)
 
   function toggleHint(id: string) {
     setActiveHint((h) => (h === id ? null : id))
@@ -228,6 +240,50 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
     }
   }
 
+  // Shared renderer for a password-input provider row. Used by the core
+  // provider list, the collapsed "more providers" list, and the search
+  // providers list — identical behaviour in all three, so it lives in one
+  // place rather than being copy-pasted per section.
+  function renderKeyRow({ id, label, hint }: { id: string; label: string; hint: string }) {
+    const isSet = configured.includes(id)
+    return (
+      <ProviderRow
+        key={id}
+        id={id}
+        label={label}
+        hint={hint}
+        isConfigured={isSet}
+        isBusy={busy === id}
+        activeHint={activeHint}
+        onToggleHint={toggleHint}
+        onRemove={() => handleDelete(id)}
+        error={errors[id]}
+      >
+        <div className="flex items-center gap-2 w-full">
+          <input
+            type="password"
+            value={drafts[id] || ''}
+            onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
+            onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
+            placeholder={isSet ? 'New key' : 'Paste key'}
+            autoComplete="off"
+            className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
+          />
+          <button
+            type="button"
+            onClick={() => handleSave(id)}
+            disabled={!(drafts[id] || '').trim() || busy === id}
+            className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+          >
+            {busy === id ? '…' : 'Save'}
+          </button>
+        </div>
+      </ProviderRow>
+    )
+  }
+
+  const configuredMoreCount = MORE_PROVIDERS.filter((p) => configured.includes(p.id)).length
+
   return (
     <section className="space-y-4">
       <div>
@@ -318,43 +374,35 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
         </ProviderRow>
 
         {/* LLM provider keys */}
-        {PROVIDERS.map(({ id, label, hint }) => {
-          const isSet = configured.includes(id)
-          return (
-            <ProviderRow
-              key={id}
-              id={id}
-              label={label}
-              hint={hint}
-              isConfigured={isSet}
-              isBusy={busy === id}
-              activeHint={activeHint}
-              onToggleHint={toggleHint}
-              onRemove={() => handleDelete(id)}
-              error={errors[id]}
+        {PROVIDERS.map(renderKeyRow)}
+
+        {/* Additional free-tier providers — collapsed by default */}
+        <div className="p-3">
+          <button
+            type="button"
+            onClick={() => setShowMore((s) => !s)}
+            className="flex items-center gap-1.5 text-[10px] font-medium text-theme-text-muted hover:text-theme-text transition-colors cursor-pointer"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+              className={`w-3 h-3 transition-transform ${showMore ? 'rotate-90' : ''}`}
             >
-              <div className="flex items-center gap-2 w-full">
-                <input
-                  type="password"
-                  value={drafts[id] || ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
-                  placeholder={isSet ? 'New key' : 'Paste key'}
-                  autoComplete="off"
-                  className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleSave(id)}
-                  disabled={!(drafts[id] || '').trim() || busy === id}
-                  className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
-                >
-                  {busy === id ? '…' : 'Save'}
-                </button>
-              </div>
-            </ProviderRow>
-          )
-        })}
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+            {showMore ? 'Hide' : 'Show'} {MORE_PROVIDERS.length} more free providers
+            {configuredMoreCount > 0 && (
+              <span className="text-[9px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full select-none">
+                {configuredMoreCount} configured
+              </span>
+            )}
+          </button>
+        </div>
+
+        {showMore && MORE_PROVIDERS.map(renderKeyRow)}
 
       </div>
 
@@ -367,43 +415,7 @@ export default function ApiKeysSection({ onKeysChanged }: { onKeysChanged?: () =
       </div>
 
       <div className="bg-theme-surface border border-theme-border/50 rounded-xl divide-y divide-theme-border/30">
-        {SEARCH_PROVIDERS.map(({ id, label, hint }) => {
-          const isSet = configured.includes(id)
-          return (
-            <ProviderRow
-              key={id}
-              id={id}
-              label={label}
-              hint={hint}
-              isConfigured={isSet}
-              isBusy={busy === id}
-              activeHint={activeHint}
-              onToggleHint={toggleHint}
-              onRemove={() => handleDelete(id)}
-              error={errors[id]}
-            >
-              <div className="flex items-center gap-2 w-full">
-                <input
-                  type="password"
-                  value={drafts[id] || ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [id]: e.target.value }))}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSave(id)}
-                  placeholder={isSet ? 'New key' : 'Paste key'}
-                  autoComplete="off"
-                  className="flex-1 min-w-0 bg-theme-bg border border-theme-border rounded-lg px-3 py-1.5 text-xs text-theme-text placeholder-theme-text-muted focus:outline-none focus:ring-1 focus:ring-theme-brand/50"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleSave(id)}
-                  disabled={!(drafts[id] || '').trim() || busy === id}
-                  className="px-3 py-1.5 text-xs bg-theme-brand text-theme-brand-text rounded-lg hover:opacity-90 transition-opacity font-semibold disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
-                >
-                  {busy === id ? '…' : 'Save'}
-                </button>
-              </div>
-            </ProviderRow>
-          )
-        })}
+        {SEARCH_PROVIDERS.map(renderKeyRow)}
       </div>
     </section>
   )

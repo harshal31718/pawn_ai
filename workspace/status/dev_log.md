@@ -6,6 +6,428 @@ This becomes your interview script and project history.
 
 ---
 
+### [2026-07-23] — router_failover cleanup: pool secrets wired in, langgraph pinned
+
+Closed the two remaining follow-ups from the 2026-07-21 Phase 1b session.
+User chose "wire structure only" (no real API keys yet) for pool secrets,
+and confirmed pinning the `langgraph` version ceiling.
+
+- All 11 `pool_<provider>_api_key` secrets added to `docker-compose.yml`
+  (top-level `secrets:` block + `backend` service list). Before doing this,
+  checked the earlier assumption that `required: false` was needed to avoid
+  breaking the live stack on a missing file — ran a scratch `docker compose
+  up` probe with a deliberately-missing secret file; this Compose version
+  (`v5.0.0`) just warns and exits 0. Also found `required` isn't a valid
+  field on a top-level secret definition in this version at all (`docker
+  compose config` errors on it) — so the earlier plan for how to wire this
+  in was already wrong, caught before applying it. `docker compose config`
+  validates clean with all 11 entries and no key files present.
+- `backend/requirements.txt`: `langgraph>=0.3.0` → `>=1.2.0,<2.0.0`,
+  `langgraph-checkpoint-sqlite>=3.0.1` → `>=3.0.1,<4.0.0`. 1.2.x is the
+  version confirmed working in the 2026-07-21 pytest run; 0.6.x is the
+  confirmed-broken range from that session's deliberate downgrade test.
+  Not re-verified with a real `pip install` this session (no local backend
+  deps) — the next `docker compose build` is the real test of this pin.
+- Updated `build_tracker.md` and `current_state.md` to reflect both closed.
+
+---
+
+### [2026-07-21] — Phase 1b: two-tier keys (BYOK + self-hosted free pool), and real pytest finally ran
+
+Asked "what's next" after the R3 responsive pass; picked Phase 1b (the
+original workstream's actual goal — R1/C1-C5/R2/R3 were all scaffolding for
+this), a mobile-nav consistency fix, and running the real backend test suite
+in parallel.
+
+**Two locked decisions before writing code**, since the plan flagged both as
+"confirm before building": (1) pool-first, BYOK-as-fallback within a chosen
+endpoint — the opposite of the plan's tentative default, chosen to conserve
+each user's own provider-side limits by spending the operator's shared pool
+first; (2) multi-user-shaped but no real users yet — "each user gets his own
+limits" (R2 already delivers this) and both BYOK and pool should coexist and
+be usable now, not gated behind a future cutover.
+
+**What shipped:** `EndpointEntry.key_source: Literal["byok","pool","either"]
+= "byok"` (default preserves every existing row's behavior byte-for-byte);
+all 47 shipped endpoints + 15 seed fixtures set to `"either"`.
+`app/config.read_pool_key(provider)` reads the operator's shared key from
+`/run/secrets/pool_<provider>_api_key`, cached (secrets don't change without
+a restart, which clears the cache too). `Resolver._resolve_key` now branches
+on `key_source`: `"byok"` unchanged, `"pool"` uses only the operator's key
+(ignoring the user's own, even if present — a lever for forcing specific
+models onto the pool, unused yet), `"either"` tries pool first and falls back
+to BYOK. The dashboard's `key_source` field now reflects what's ACTUALLY
+being used per row (mirrors the same precedence in a small standalone
+function, not by importing `Resolver`), so a user with zero keys of their own
+can see rows the operator has pool-funded.
+
+**Docker secrets deliberately NOT wired up yet.** Compose requires a secret's
+source file to exist before `up` succeeds — adding 11 required secrets with
+no real files behind them would have broken the user's own live
+`docker compose watch` stack on its next restart. Created
+`secrets/pool_<provider>_api_key.example` for all 11 LLM providers and left a
+comment block in `docker-compose.yml` documenting the one-time steps to
+actually turn a provider's pool on, rather than risking a live session.
+
+**The bigger event this session: real `pytest` actually ran, for the first
+time all session.** Every R1/C1-C5/R2/R3 entry above had been marked `[~]`
+specifically because the implementing sandbox had no Docker and no backend
+Python deps — verification meant re-implementing each test file's assertions
+standalone. Mid-way through Phase 1b, the actual backend dependencies got
+installed directly into the sandbox, and the real suite ran: **645 passed, 29
+failed** on the first try. Every failure was a genuine pre-existing bug, none
+caused by this session's own changes — closing a gap that had been flagged
+in every single build_tracker entry since R1. Root-caused and fixed all 29:
+a self-referential `datetime` monkeypatch causing infinite recursion in
+`test_usage_accounting.py`; 8 stale `classify_node` dict assertions in
+`test_agent.py` and 2 stale `resolve_final_model` mock assertions in
+`test_router.py`, both missing C2's `task_type` key that had only been
+partially swept the first time; a tie-band test in `test_capability_routing.py`
+that burned the wrong per-user bucket AND overshot into full quota exhaustion;
+2 mock signature mismatches in `test_normalize_fallback.py` missing R2's
+`on_usage` kwarg. **Second run: 676 passed, 15 failed, zero newly
+introduced** by any of those fixes.
+
+The remaining 15 are a genuinely separate, environmental issue — confirmed,
+not assumed: downgrading `langgraph` from the sandbox's freshly-installed
+1.2.9 to a 0.6.x release broke the import outright on a
+`langgraph-checkpoint-sqlite` conflict, proving these packages have had real
+breaking changes since `requirements.txt`'s unbounded `langgraph>=0.3.0`
+floor was written. **Flagged as a real, separate finding**: a fresh
+`docker compose build --no-cache` today could pull the same 1.x release and
+break `adispatch_custom_event` in the actual running app, not just this
+sandbox. Deliberately not fixed here — picking a version to pin and deciding
+whether call sites need an actual code change is a standalone decision that
+shouldn't ride along in Phase 1b's diff.
+
+New `tests/test_pool_keys.py` (17 tests) covers every `key_source` precedence
+combination plus the dashboard's pool-row reporting; `test_registry_integrity.py`
+gained 2 more. Full suite (`pytest -n auto`, matching `testing.md`'s
+full-suite convention) confirms the same 676/15 split under parallelism —
+no test-isolation surprises. `tsc --noEmit` clean (no frontend changes in
+Phase 1b itself).
+
+---
+
+### [2026-07-21] — R3 follow-up: responsive Providers page, live-verified logged in
+
+User logged into their own running `docker compose watch` instance and asked
+for a Chrome-verified pass, plus a genuine responsive layout (the first cut
+used a single narrow `max-w-2xl` column, which wasted most of the screen on
+anything wider than a phone).
+
+**Changed:** `ProvidersPage.tsx`'s provider list from one `divide-y` column to
+a `grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` card grid (`max-w-5xl`),
+each card independently bordered so it reflows cleanly instead of stretching
+edge-to-edge. Added a mobile-only sidebar-reopen button (`md:hidden`, calls
+`setIsSidebarOpen(true)`) in the page's own header — copied verbatim from
+`ChatPage.tsx`'s existing pattern. This was a real gap, not
+Providers-specific: `Sidebar.tsx`'s footer nav buttons call `onClose()` on
+navigate, so on a narrow screen the sidebar closes itself the moment you land
+on any of these self-contained pages, and only `ChatPage.tsx` had a way back.
+`ProjectsGalleryPage.tsx`/`SettingsPage.tsx` share the same latent gap —
+flagged, not fixed (out of scope for this ask).
+
+**Live-verified via Chrome, now that the user is logged in:**
+- Real data renders correctly end-to-end: 5M free tokens headline, Google/
+  HuggingFace correctly listed under "no published cap" instead of being
+  silently dropped or folded into the total, per-endpoint cards showing real
+  usage bars and request counts.
+- Grid genuinely reflows: confirmed 3 columns at a wide viewport and 2
+  columns at a narrower one across two live resizes (this sandbox's
+  `resize_window` tool proved unreliable for reaching true phone widths
+  consistently — `window.innerWidth` didn't always track the requested size —
+  but one capture did land at an extreme narrow width and showed the new
+  `md:hidden` hamburger button rendering correctly next to the header).
+- Nav wiring confirmed via direct DOM inspection: the Providers button's
+  `getBoundingClientRect()` sits immediately above Settings' in every
+  measurement, and a programmatic click on it navigated to `/providers`
+  correctly.
+- `npx tsc --noEmit` clean after the rewrite.
+**Not fully verified:** true sub-640px visual confirmation, due to the
+sandbox's window-resize limitation described above — the 1-column mobile
+fallback relies on Tailwind's mobile-first default (no breakpoint prefix),
+not a live screenshot at phone width.
+
+**Follow-up same session:** closed the identical gap on `ProjectsGalleryPage.tsx`
+(was genuinely stranded on mobile — no back button and no hamburger at all)
+and `SettingsPage.tsx` (had an indirect escape hatch via "Back to chat" →
+ChatPage's own hamburger, now also direct). `SettingsPageWrapper.tsx` threads
+`isSidebarOpen`/`setIsSidebarOpen` from `LayoutContext` into two new
+`SettingsPageComponent` props (`isSidebarOpen`, `onOpenSidebar`) since that
+component doesn't consume `useOutletContext` itself. `ProjectPage.tsx`
+(`/project/:id`) has the same latent gap but wasn't in scope — its own escape
+hatch ("All projects" back button → Projects gallery's now-direct hamburger)
+is one hop longer than ideal, flagged for a future pass. `tsc --noEmit`
+clean; both pages live-checked via Chrome post-fix.
+
+---
+
+### [2026-07-21] — R3: free-tier budget dashboard (backend + frontend)
+
+Built on R2's real per-user usage numbers — building this against the old
+call-count-only limiter would have shown a number that looked precise but
+wasn't tied to actual token consumption.
+
+**Backend:** `GET /dashboard/free-tiers` (`app/routes/dashboard.py`). Per-user,
+matching R2's per-user quota fix — a global dashboard would mix everyone's
+usage together. For each of the caller's own registry models/endpoints, skips
+anything they hold no key for, then reads `rate_limiter.snapshot()` for real
+usage. The one deliberate design rule carried through the whole feature:
+**never invent a number.** The headline total only ever sums endpoints with a
+*published* `tpd_limit`; anything uncapped is listed separately
+(`uncapped_providers`), and the headline itself is `None` — not `0` — when
+nothing capped is configured, so "no data yet" and "fully exhausted" never
+look the same. `key_source` defaults to `"byok"` explicitly on every row now,
+ahead of Phase 1b's pool keys, rather than leaving the field to imply BYOK by
+omission.
+
+**Frontend:** new `pages/ProvidersPage.tsx`, routed at `/providers` inside the
+same authed shell as `/settings`. Fetches on mount via a new
+`fetchFreeTiers()` in `client.ts` (same `authHeaders()`/`handle401()` pattern
+as every other typed wrapper there). Renders the headline card (handling the
+null-vs-zero distinction from the backend explicitly), a per-endpoint list
+with a usage bar, and the uncapped-providers line — styled entirely with
+PAWN's existing `theme-*` tokens, matching `SettingsPage.tsx`'s conventions
+rather than introducing anything new. Nav entry added to `Sidebar.tsx`'s
+footer, **placed directly above the Settings button** per the explicit
+instruction that Providers sits above Settings in the navbar — copied the
+Settings button's own bespoke markup (icon box + animating label) rather than
+the `SidebarTitleRow` component used in the main nav list, since the footer
+already has its own established pattern.
+
+Functionality intentionally mirrors OmniRoute's own free-tier dashboard (the
+original design inspiration for this whole workstream) — that credit lives
+only in `README.md`'s Acknowledgements section, never in-app or in code
+comments, per the standing instruction from earlier in this workstream.
+
+**Verified:** `npx tsc --noEmit` clean. Backend's 9 `test_dashboard.py`
+assertions re-implemented standalone against the real aggregation logic and
+registry data, all green. **Not yet verified:** real `docker compose exec
+backend pytest`, and no rendered-component test exists for `ProvidersPage.tsx`
+(this project has no `@testing-library/react`, a known pre-existing gap — see
+G1.2's entry above) — would need either that infra or a live Chrome check.
+
+---
+
+### [2026-07-21] — R2: token-accurate, persistent, per-user quota accounting
+
+Prerequisite for the planned self-hosted free pool (a per-user allowance is a
+security control, so it has to survive restarts to mean anything) and for R3's
+dashboard, which would otherwise report numbers built on call counts alone.
+
+**Three things were wrong before this.**
+
+1. `record_call()` accepted a `token_count` argument and threw it away. The
+   `tpm_limit`/`tpd_limit` values sitting in `endpoints.json` were therefore
+   registered but never enforced by anything.
+2. All state was in memory, so every restart silently zeroed every counter. A
+   daily limit that resets on restart is not a limit.
+3. **The limiter was keyed on `endpoint_id` alone, and there is exactly one
+   instance for the whole app.** PAWN is BYOK — each user calls the provider
+   with their own key and therefore has their own quota — so one busy user's
+   traffic counted against every other user's limit and throttled them
+   prematurely. This was pre-existing and unrelated to R2's goal, but R2 was the
+   right moment to fix it: persisting the wrong key shape would have baked the
+   bug into the database.
+
+**Now:** state is keyed `(user_id, endpoint_id)`, tokens are read from the
+provider's own usage block, and day/month windows are mirrored to a new
+`endpoint_usage` table and re-seeded at startup. Short rpm/tpm windows stay
+in-memory deliberately — they're ~60s wide, so losing them costs at most a
+minute of accuracy and isn't worth a database write per request.
+
+**Streaming forced a design split.** Usage only arrives in a final chunk, but
+the request has to be recorded at the *start* — that's what makes concurrent
+calls visible to the limiter at all. So `record_call` (request) and
+`record_tokens` (cost) are separate, rather than double-counting the request or
+losing the count. `stream_llm` gained an optional `on_usage` **callback**
+instead of changing what it yields: every caller iterates it expecting `str`,
+and altering that contract would ripple through every streaming path.
+
+**Real bug found while writing that.** The usage-only tail chunk carries an
+empty `choices` list, so it has to be handled *before* `chunk["choices"][0]` —
+otherwise it raises `IndexError` straight into the pre-existing
+`except (JSONDecodeError, KeyError, IndexError): continue` and the token count
+vanishes silently. Easy to get wrong precisely because the existing error
+handling hides it.
+
+**Day-rollover bug caught in self-review.** Having replaced the rolling-24h
+`rpd_timestamps` deque with a calendar-day counter, nothing reset it — so a
+process that survived midnight would carry yesterday's totals forever and lock
+every endpoint out. That is the exact failure persistence exists to prevent,
+reached from the opposite direction. `_prune()` now rolls the day. (`rpd` is
+consequently a calendar day rather than a rolling window now, which is both what
+providers actually do and what the persisted window means.)
+
+**Circuit-breaker on persistence.** Without one, a missing or misconfigured
+Postgres would make every single LLM call attempt and time out a fresh
+connection — turning a config problem into a serious latency regression on the
+request path, and making the test suite crawl. After 3 consecutive failures it
+disables itself and degrades to in-memory-only, which is exactly the pre-R2
+behaviour. `reset_failures()` re-arms it.
+
+**Also updated:** C3's `_best_headroom`/`_recent_failures` are now user-scoped —
+left global, they would have ranked models by *other users'* consumption. New
+`failure_count()`/`snapshot()` accessors so callers stop reaching into `_state`,
+which is now a two-part key and easy to index wrongly from outside. Four stub
+limiters gained `**kwargs` (same latent-`TypeError` class as C1–C5).
+
+**Verification.** Same gap as R1/C-series: no Docker or backend deps, so
+`docker compose exec backend pytest` has NOT run and R2 is `[~]`. What did run:
+16 limiter assertions and 8 store assertions re-implemented standalone and green
+against the real modules (including per-user isolation, day rollover, restart
+seeding, and the breaker); `pyflakes` clean; `tsc` clean. **Deploy needs the
+manual migration** `2026-07_R2_endpoint_usage.sql`.
+
+---
+
+### [2026-07-21] — C1–C5: capability-first model routing
+
+Route to a *capability* (level + task type), not to a model-on-a-provider.
+Provider identity, tier, and key source are now availability concerns only and
+appear nowhere in selection. Plan: `router_failover/plan_capability_routing.md`
+(local-only). User-locked: quality-first with live tiebreaks, Auto-by-default
+with manual override kept, `capability_tags` promoted to first-class input.
+
+**The defect this fixes.** `pick_model_by_capability()` was first-match-wins in
+`models.json` row order. At 22 models that was survivable; R1 took it to 31 and
+it became arbitrary — a research task could land on `hy3` or `laguna-xs`
+(experimental OpenRouter freebies) ahead of `gemini-2.5-pro` purely on file
+position. `capability_tags` existed on every model and were read by nothing.
+
+**Shipped.** `quality_rank` on every model (sparse, within-level, worst-by-
+default); `QUALITY_TIE_BAND` so near-equals go to a live tiebreak; a task-type
+axis wired from `classify()` through to selection; `rank_candidates()` returning
+all usable models best-first, with `pick_model_by_capability` reduced to
+`[0]` of it so all 8 call sites were untouched; `fallback_models` rebuilt on the
+same ranking; Auto in the UI.
+
+**F-6's Groq-priority hack deleted.** It hardcoded a provider name in the
+resolver — the exact coupling this work removes. Groq isn't disadvantaged: it
+holds the priority-1 endpoint of `llama-3.3-70b`, the rank-10 fast model, so it
+still wins fast-tier work, now on merit. The two tests pinning the old behaviour
+were rewritten to assert merit-based ordering and to document why, rather than
+being deleted quietly.
+
+**Design note worth keeping.** The tie band is not decoration: without it,
+curated ranks form a total order and the live signals (headroom, failures) could
+never fire at all, which would have made "quality-first with live tiebreaks"
+quality-first *only*. Conversely task-type is a preference, never a filter, so
+selection degrades to level-only instead of failing — while `require_vision`
+stays a HARD filter, because handing image content to a text-only model is a
+correctness bug (the Q3.1 failure class) rather than a quality regression. There
+is now an explicit regression test asserting exactly that asymmetry.
+
+**Registry bug found by the ranking harness, not by reading code.** All three
+Gemini models had `supports_vision: true` but no `"vision"` capability tag. Inert
+before C2; once tags became first-class it would have *deprioritised the best
+vision models for vision tasks*. Fixed, and `test_registry_integrity.py` now
+asserts consistency in both directions.
+
+**3 latent runtime breaks that `py_compile` reported clean.** It validates
+syntax, not names — installing `pyflakes` caught all three: `summarize.py`
+referencing `ROLE_TASK_TYPES` with no import (`NameError` on every history
+summarisation), and four stub resolvers (2 in `app/`, 2 in `tests/`) not
+accepting the new `task_type` kwarg — a `TypeError` that would have masked the
+genuine "no resolver configured" condition behind a confusing crash. Worth
+remembering: `py_compile` is not a substitute for a name check.
+
+**Also caught by building a standalone ranking harness before writing tests:**
+four of my initial test assumptions were simply wrong against the seed fixture —
+`qwen-3-32b` is unusable there (its sole endpoint is `active: false`), so the tie
+pair I'd planned didn't exist, and two other assertions expected models that
+never appear. Corrected by using the genuinely-usable pair
+(`gpt-oss-120b`/`llama-3.3-70b`, seed ranks tied at 20) rather than by editing
+fixtures to suit the tests.
+
+**Verification.** Same gap as R1: no Docker/deps in this session, so
+`docker compose exec backend pytest` has NOT run and C1–C5 is `[~]`, not `[x]`.
+What did run: all 16 ranking assertions re-implemented standalone and green
+against both the real registry and the seed fixture; `pyflakes` clean across
+`app/` and `tests/`; `tsc --noEmit` clean. Claude-in-Chrome was requested for
+live verification but the extension wasn't connected.
+
+---
+
+### [2026-07-21] — R1: free-tier provider expansion (registry 6 → 11 providers)
+
+New workstream, registered as R1–R3 in `build_tracker.md`. Plan and research
+live in `workspace/plan/router_failover/`, which is **gitignored on purpose** —
+local-only notes. Attribution for the inspiration (OmniRoute, MIT) went into
+`README.md`'s new Acknowledgements section only; deliberately not referenced
+anywhere in the app, the UI, or committed plan files.
+
+**Shipped:** 5 new OpenAI-compatible, permanently-free providers — mistral,
+nvidia (NIM), zhipu (GLM), sambanova, kluster. Registry grew 22 → 31 models and
+30 → 47 endpoints. Because `llm_core._provider_headers()` already emits plain
+`Authorization: Bearer` for everything non-Anthropic, this needed **no new
+provider request code at all** — it's registry data plus three small sync points
+(`EndpointEntry.provider` Literal, `key_store.VALID_PROVIDERS`,
+`resolver.PROVIDER_ALIASES`).
+
+**Research (live web search, 2026-07-21 — free tiers move constantly, so this
+was verified rather than recalled).** Full notes in `01_research_providers.md`.
+Rejected with reasons: Cohere and Cloudflare Workers AI (only *partial* OpenAI
+compatibility — would need provider-specific code); Pollinations (its selling
+point is keyless per-IP access, but `resolver.pick()` skips any endpoint the
+user holds no key for, so it's unreachable through PAWN's architecture);
+Together/Fireworks/DeepInfra (trial credits, not permanent free tiers);
+Bedrock/Vertex (SigV4 / OAuth service accounts, not plain bearer auth).
+
+**CRITICAL bug found and fixed mid-step.** `EndpointEntry.provider` is a
+`Literal` listing the original 6 providers, so all 17 new endpoint rows would
+have thrown a Pydantic `ValidationError` at registry load — taking the backend
+down at startup, not degrading gracefully. Nothing in the existing suite would
+have caught it: `tests/` runs against `app/registry/seed.py`'s INITIAL_MODELS /
+INITIAL_ENDPOINTS inside an isolated per-worker `PAWN_DATA_DIR`, and those
+fixtures have long-standing known drift from the real `data/registry/*.json`
+(already flagged back in A.1). So the shipped data files had, in effect, no test
+coverage. Closed with a new `tests/test_registry_integrity.py` (8 tests) that
+reads the shipped files directly from the source tree — the same static-bundled-
+data pattern `image_presets.json` uses — covering schema validation, orphan
+endpoints, duplicate ids, active-model-with-no-active-endpoint, non-positive
+limits, and a three-way provider sync check.
+
+**Refactor made to support that test:** `pick()`'s `provider_map` local became a
+module-level `resolver.PROVIDER_ALIASES`. The first draft of the test reached
+into `Resolver.pick.__code__.co_consts` to find the dict — that worked but was
+fragile, and promoting the constant is better code independent of the test.
+
+**False alarm, corrected:** flagged Groq's `rpd_limit: 14400` on
+`llama-3.1-8b-instant` as stale drift (siblings are 1000), then verified against
+Groq's current docs — the 2026 free tier is 1,000–14,400 RPD *depending on
+model*. The split is legitimate; left unchanged.
+
+**Plan scope correction:** dropped the plan's "add `secrets/*.example` per
+provider" step. PAWN has no provider-key secret files and `config.py` reads
+none — LLM keys are BYOK-only through encrypted Postgres. (This flips in Phase
+1b, where operator pool keys *do* belong in `/run/secrets/*`.)
+
+**Frontend:** 5 new provider rows behind a collapsed "Show 5 more free
+providers" disclosure with a "N configured" badge, so the common case stays a
+short list. The provider-row JSX had been copy-pasted three times; collapsed
+into one `renderKeyRow` helper (~90 lines removed). `tsc --noEmit` clean.
+
+**Verification gap — R1 is NOT marked `[x]`.** This session had no Docker and no
+backend Python deps available, so `docker compose exec backend pytest` could not
+be run. `tsc` passed, and all 8 integrity assertions were re-implemented
+standalone and run green against the real registry files, but the full backend
+suite still needs a real run before this can be called done.
+
+**Also decided this session (Phase 1b, not yet built):** PAWN gains a second key
+source alongside BYOK — a *self-hosted* free pool, where each deployer supplies
+pool keys via `/run/secrets/*`. Keeps free-tier usage personal, so no provider
+ToS is strained; that changes if PAWN ever goes public with one shared key
+serving strangers, and it's flagged in the plan. Model selection stays
+capability-level driven (existing `router.classify()` / `ROLE_LEVELS`
+machinery); key source layers underneath. Per-user pool quota is a **security
+control, not a display feature**, which promotes R2 (persistent, user-attributed
+token accounting) from optional follow-up to hard prerequisite — today's
+`EndpointRateLimiter` is per-endpoint, in-memory, and resets on restart.
+
+---
+
 ### [2026-07-17] — Deployed: FLUX warmup + Create Image mode fixes live on prod
 
 User confirmed all three chat modes generate images correctly and both Image

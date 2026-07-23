@@ -9,6 +9,7 @@ import ProjectPage from './pages/ProjectPage'
 import ProjectsGalleryPage from './pages/ProjectsGalleryPage'
 import SettingsPage from './pages/SettingsPageWrapper'
 import ImageLabPage from './pages/ImageLabPageWrapper'
+import ProvidersPage from './pages/ProvidersPage'
 
 /** Pathless guard route: everything nested under it requires auth. */
 function RequireAuth() {
@@ -45,6 +46,7 @@ function AppRoutes() {
           <Route path="/project/:projectId" element={<ProjectPage />} />
           <Route path="/project/:projectId/chat/:id" element={<ChatPage />} />
           <Route path="/imagelab" element={<ImageLabPage />} />
+          <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>

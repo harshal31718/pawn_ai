@@ -35,10 +35,17 @@ from app.agent.subagents import DELEGATE_PREFIX, delegate_tool_specs, run_subage
 from app.agent.tools.base import ToolContext
 from app.agent.tools.execute import run_tool
 from app.agent.tools.registry import get_tools
-from app.constants import AGENT_MAX_ITERATIONS, AGENT_MAX_TOKENS, ROLE_LEVELS, VERIFY_MAX_REVISIONS
+from app.constants import (
+    AGENT_MAX_ITERATIONS,
+    AGENT_MAX_TOKENS,
+    ROLE_LEVELS,
+    ROLE_TASK_TYPES,
+    VERIFY_MAX_REVISIONS,
+)
 from app.core import normalize
 from app.core.router import (
     _IMAGE_GEN_KEYWORDS,
+    _infer_task_type,
     _matches_any_keyword,
     _total_user_text,
     classify as router_classify,
@@ -50,20 +57,31 @@ from app.exceptions import NoEndpointError, ProviderError
 
 
 class DummyRateLimiter:
-    def can_use(self, endpoint) -> bool: return True
-    def record_call(self, endpoint_id, token_count=0): pass
-    def record_429(self, endpoint_id, retry_after=60): pass
-    def record_connect_failure(self, endpoint_id): pass
-    def record_success(self, endpoint_id): pass
+    # R2 added user_id/token kwargs plus record_tokens/failure_count. **kwargs
+    # absorbs them so this stub never has to track the real limiter's signature
+    # -- a TypeError here would surface on the no-limiter fallback path and mask
+    # the real "no rate limiter configured" condition.
+    def can_use(self, endpoint, **kwargs) -> bool: return True
+    def record_call(self, endpoint_id, token_count=0, **kwargs): pass
+    def record_tokens(self, endpoint_id, token_count=0, **kwargs): pass
+    def record_429(self, endpoint_id, retry_after=60, **kwargs): pass
+    def record_connect_failure(self, endpoint_id, **kwargs): pass
+    def record_success(self, endpoint_id, **kwargs): pass
+    def failure_count(self, endpoint_id, **kwargs) -> int: return 0
+    def usage_pct(self, endpoint, **kwargs) -> float: return 0.0
 
 class DummyResolver:
     def pick(self, model_id, user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
     def pick_by_capability(self, level, visibility="internal", user_id=None):
         return [("https://api.google.com", "gemini-2.5-flash", {}, "ep-dummy", "google")]
-    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False):
+    # C2/C3: **kwargs absorbs task_type (and any future selection hint) so this
+    # stub never has to track the real Resolver's signature -- it's only ever
+    # used on the no-resolver fallback path, where a TypeError here would mask
+    # the real "no resolver configured" condition with a confusing crash.
+    def pick_model_by_capability(self, level, visibility="internal", user_id=None, require_tools=False, **kwargs):
         return "gemini-2.5-flash"
-    def fallback_models(self, model_id, user_id=None):
+    def fallback_models(self, model_id, user_id=None, **kwargs):
         return [model_id]
 
 
@@ -97,6 +115,12 @@ class AgentState(TypedDict):
     # Router (A.5) output.
     difficulty: str
     needs_agent: bool
+    # C2: inferred task type ("general"/"coding"/"reasoning"/"vision"/
+    # "summarization"), threaded into capability selection so the chosen model
+    # suits the task, not just the difficulty tier. Every classify_node exit
+    # sets it -- including the mode_hint short-circuits, which bypass the
+    # router entirely but still need a task type for the final model pick.
+    task_type: str
     # Orchestration state.
     plan: List[str]
     tool_log: List[Dict[str, Any]]  # {name, args, observation, elapsed_ms, agent}
@@ -135,8 +159,14 @@ async def classify_node(
     # loop this pass, so there's no need to run the text-heuristic router at
     # all (it also assumes plain-string message content, which a multimodal
     # turn won't have once direct_answer_node builds it).
+    # C2: computed once here so EVERY exit below (including the mode_hint
+    # short-circuits, which never reach the router) carries a task type.
+    task_type = _infer_task_type(
+        _total_user_text(state["messages"]), has_image=bool(state.get("has_image"))
+    )
+
     if state.get("has_image"):
-        return {"difficulty": "light", "needs_agent": False}
+        return {"difficulty": "light", "needs_agent": False, "task_type": task_type}
 
     # Composer's mode picker: an explicit user choice always wins over the
     # heuristic/LLM router below. "pro" forces the full plan->execute agent
@@ -156,9 +186,9 @@ async def classify_node(
     # not a separate rule.
     mode_hint = state.get("mode_hint")
     if mode_hint == "pro":
-        return {"difficulty": "heavy", "needs_agent": True}
+        return {"difficulty": "heavy", "needs_agent": True, "task_type": task_type}
     if mode_hint == "image":
-        return {"difficulty": "light", "needs_agent": True}
+        return {"difficulty": "light", "needs_agent": True, "task_type": task_type}
     if mode_hint == "fast":
         user_id = state.get("user_id")
         has_kaggle_creds = False
@@ -166,8 +196,8 @@ async def classify_node(
             from app.core import key_store
             has_kaggle_creds = key_store.has_kaggle_creds(user_id)
         if has_kaggle_creds and _matches_any_keyword(_total_user_text(state["messages"]), _IMAGE_GEN_KEYWORDS):
-            return {"difficulty": "light", "needs_agent": True}
-        return {"difficulty": "light", "needs_agent": False}
+            return {"difficulty": "light", "needs_agent": True, "task_type": task_type}
+        return {"difficulty": "light", "needs_agent": False, "task_type": task_type}
 
     resolver, rate_limiter = _resolve_deps(resolver, rate_limiter)
     user_id = state.get("user_id")
@@ -191,7 +221,11 @@ async def classify_node(
         has_search_key=has_search_key,
         has_kaggle_creds=has_kaggle_creds,
     )
-    return {"difficulty": decision["difficulty"], "needs_agent": decision["needs_agent"]}
+    return {
+        "difficulty": decision["difficulty"],
+        "needs_agent": decision["needs_agent"],
+        "task_type": decision.get("task_type", task_type),
+    }
 
 
 def route_after_classify(state: AgentState) -> str:
@@ -318,7 +352,10 @@ async def plan_node(
     tool_specs = [to_oai_tool(t) for t in tools] + delegate_tool_specs()
 
     try:
-        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True)
+        model_id = resolver.pick_model_by_capability(
+            ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True,
+            task_type=state.get("task_type") or ROLE_TASK_TYPES["orchestrator"],
+        )
     except NoEndpointError:
         model_id = state["user_model_id"]
 
@@ -491,7 +528,10 @@ async def execute_node(
     )
 
     try:
-        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True)
+        model_id = resolver.pick_model_by_capability(
+            ROLE_LEVELS["orchestrator"], user_id=user_id, require_tools=True,
+            task_type=state.get("task_type") or ROLE_TASK_TYPES["orchestrator"],
+        )
     except NoEndpointError:
         model_id = state["user_model_id"]
 
@@ -790,7 +830,10 @@ async def execute_node(
         # text is the authoritative closing answer. tools=None so the model
         # can't extend the loop again.
         try:
-            final_model_id = resolve_final_model(state["difficulty"], state.get("user_model_id"), resolver, user_id)
+            final_model_id = resolve_final_model(
+                state["difficulty"], state.get("user_model_id"), resolver, user_id,
+                task_type=state.get("task_type"),
+            )
         except NoEndpointError:
             final_model_id = model_id
 
@@ -959,7 +1002,10 @@ async def verify_node(
     plan_text = "\n".join(state.get("plan") or [])
 
     try:
-        model_id = resolver.pick_model_by_capability(ROLE_LEVELS["final_heavy"], user_id=user_id, require_tools=False)
+        model_id = resolver.pick_model_by_capability(
+            ROLE_LEVELS["final_heavy"], user_id=user_id, require_tools=False,
+            task_type=state.get("task_type") or ROLE_TASK_TYPES["final_heavy"],
+        )
     except NoEndpointError:
         model_id = state["user_model_id"]
 

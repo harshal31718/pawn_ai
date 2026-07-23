@@ -1,5 +1,90 @@
 # PAWN — Current State
 
+Last updated: 2026-07-23
+
+**Model routing is capability-first (C1–C5) + free-tier registry expanded
+(R1) + token-accurate quota (R2) + free-tier dashboard (R3) + two-tier
+BYOK/pool keys (Phase 1b) — all `[x]` in `build_tracker.md`, real-pytest
+verified 2026-07-21.** The backend's actual dependencies were installed into
+the sandbox (not Docker, but the real packages) and `pytest` ran for real for
+the first time this session: 676 passed, 15 failed. All 15 share one root
+cause — an unpinned `langgraph>=0.3.0` floor let this sandbox install 1.2.9,
+which broke `adispatch_custom_event`'s stricter run-id requirement; confirmed
+via a deliberate downgrade attempt, not assumed. 14 other real, pre-existing
+bugs (stale test assertions from C2's task_type addition, a self-referential
+datetime monkeypatch, mock signature drift) were found and fixed along the
+way; none were caused by this session's changes.
+
+**2026-07-23 follow-up, closed:** the two items left open above are now done.
+`requirements.txt` pins `langgraph>=1.2.0,<2.0.0` /
+`langgraph-checkpoint-sqlite>=3.0.1,<4.0.0` (1.2.x is the confirmed-working
+version from the 2026-07-21 run; 0.6.x is the confirmed-broken one) —
+un-verified against a real `pip install` this session, next `docker compose
+build` is the real test. Pool secrets are now wired into
+`docker-compose.yml` (all 11 `pool_<provider>_api_key` entries, top-level +
+backend service) at the user's request ("wire structure only" — no real key
+files created). Confirmed live via a scratch `docker compose up` probe that
+this Compose version (`v5.0.0`) tolerates a missing secret source file
+(warning only, exit 0) — the earlier note that `required: false` was needed
+first was checked and found wrong (`required` isn't a valid field on a
+top-level secret at all in this version) and removed.
+
+- **R1:** 5 new OpenAI-compatible free providers (mistral, nvidia, zhipu,
+  sambanova, kluster). Registry 22 → 31 models, 30 → 47 endpoints, 6 → 11
+  providers. Needed no new provider request code — `_provider_headers()` already
+  emits plain bearer auth for everything non-Anthropic. Caught a CRITICAL:
+  `EndpointEntry.provider` is a `Literal`, so all 17 new rows would have failed
+  Pydantic validation at registry load and taken the backend down at startup.
+- **C1–C5:** selection now ranks on curated `quality_rank` within a capability
+  level, with a tie band handing near-equals to live signals (quota headroom,
+  recent failures), and `capability_tags` promoted to a first-class task-type
+  preference. `pick_model_by_capability` was first-match-wins in file order
+  before this. F-6's Groq-priority hack removed. "Auto" is now the default model
+  selection in the UI.
+- **Known gap:** `tests/` runs against `app/registry/seed.py` fixtures, which
+  have long-standing drift from the shipped `data/registry/*.json`. New
+  `test_registry_integrity.py` now covers the shipped files directly.
+- **R2 (done, code complete):** quota accounting is now token-accurate,
+  persisted across restarts (new `endpoint_usage` table), and **keyed per
+  user** — fixing a pre-existing bug where one BYOK user's traffic throttled
+  everyone else, since the single app-wide limiter keyed on `endpoint_id` alone.
+  `tpm_limit`/`tpd_limit` are enforced for the first time (`record_call`
+  previously discarded its `token_count` argument). Short rpm/tpm windows stay
+  in-memory by design; day/month persist. Persistence self-disables after
+  repeated failures so a missing Postgres degrades instead of stalling requests.
+  **Deploying this needs the manual migration
+  `postgres/migrations/2026-07_R2_endpoint_usage.sql`.**
+- **R3 (done):** `GET /dashboard/free-tiers` (per-user, honest math — headline
+  sums only capped endpoints, `None` not `0` when nothing's capped, uncapped
+  providers listed separately not folded in) + a responsive `/providers` page
+  (`pages/ProvidersPage.tsx`, card grid, PAWN's own `theme-*` tokens) with its
+  nav entry sitting **directly above Settings** in the sidebar footer, as
+  instructed. Live-verified in Chrome once the user logged in; also fixed a
+  mobile sidebar-reopen gap here and on `ProjectsGalleryPage.tsx`/
+  `SettingsPage.tsx` (nav auto-closes the sidebar on navigate, stranding phone
+  users with no way back — `ProjectPage.tsx` has the same latent gap, still
+  open).
+- **Phase 1b (done):** `EndpointEntry.key_source: "byok"|"pool"|"either"`
+  (default `"byok"`, zero behavior change for existing rows; all 47 shipped
+  endpoints + 15 seed fixtures set to `"either"`). `config.read_pool_key()`
+  reads the operator's shared key from `/run/secrets/pool_<provider>_api_key`.
+  `Resolver._resolve_key` now tries **pool first, BYOK fallback** for
+  `"either"` endpoints (the user's explicit precedence call — conserves each
+  user's own limits by spending the shared pool first) — `"pool"` endpoints
+  ignore the user's own key entirely (unused by any shipped endpoint yet, a
+  lever for later). Dashboard rows now report which source is ACTUALLY in
+  play, so a keyless user can still see pool-funded rows. **Docker secrets
+  now wired into `docker-compose.yml`** (2026-07-23) — see the follow-up note
+  above. `.example` templates + a documented manual enable-path (copy to a
+  real filename, add a real key, restart) still apply for actually turning a
+  provider's pool on.
+
+Plans and research for all of R1/C1-C5/R2/R3/Phase 1b live in
+`workspace/plan/router_failover/`, which is **gitignored on purpose**
+(local-only).
+
+---
+
 Last updated: 2026-07-17
 
 **DEPLOYED — FLUX warmup + Create Image mode fixes live on prod

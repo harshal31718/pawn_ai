@@ -12,7 +12,12 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, TypedDict
 
-from app.constants import ROLE_LEVELS, ROUTER_HEAVY_CHAR_THRESHOLD, ROUTER_LIGHT_CHAR_THRESHOLD
+from app.constants import (
+    ROLE_LEVELS,
+    ROLE_TASK_TYPES,
+    ROUTER_HEAVY_CHAR_THRESHOLD,
+    ROUTER_LIGHT_CHAR_THRESHOLD,
+)
 from app.core.normalize import chat_complete
 from app.core.rate_limiter import EndpointRateLimiter
 from app.resolver.resolver import Resolver
@@ -52,9 +57,50 @@ _MEMORY_RECALL_KEYWORDS = [
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
+# C2: task-type inference keywords. Purely heuristic and deliberately cheap --
+# task_type is a selection PREFERENCE, not a hard filter, so a miss costs a
+# slightly worse model pick, never a failure. That asymmetry is why this doesn't
+# get its own LLM tier: it isn't worth a round-trip.
+# Order matters in _infer_task_type: earlier entries win ties.
+_CODING_KEYWORDS = [
+    "code", "function", "bug", "debug", "refactor", "compile", "stack trace",
+    "traceback", "exception", "syntax", "api", "regex", "sql", "query",
+    "python", "javascript", "typescript", "rust", "golang", "java", "c++",
+    "class", "method", "variable", "import", "npm", "pip", "git",
+]
+_REASONING_KEYWORDS = [
+    "prove", "derive", "solve", "calculate", "analyze", "compare", "evaluate",
+    "why", "explain why", "reason", "logic", "math", "equation", "theorem",
+    "step by step", "trade-off", "tradeoff", "pros and cons",
+]
+_SUMMARIZATION_KEYWORDS = [
+    "summarize", "summarise", "summary", "tldr", "tl;dr", "recap",
+    "key points", "in short", "condense", "abstract",
+]
+
+
 class RouteDecision(TypedDict):
     difficulty: str  # "light" | "heavy"
     needs_agent: bool
+    task_type: str  # one of constants.TASK_TYPES
+
+
+def _infer_task_type(text: str, has_image: bool = False) -> str:
+    """Infer the task type from user text. Heuristic-only by design (see the
+    keyword-list comment above).
+
+    A fenced code block is treated as a strong coding signal on its own -- it's
+    far more reliable than any keyword, since prose about code rarely fences it.
+    """
+    if has_image:
+        return "vision"
+    if "```" in text or _matches_any_keyword(text, _CODING_KEYWORDS):
+        return "coding"
+    if _matches_any_keyword(text, _SUMMARIZATION_KEYWORDS):
+        return "summarization"
+    if _matches_any_keyword(text, _REASONING_KEYWORDS):
+        return "reasoning"
+    return "general"
 
 
 def _total_user_text(messages: List[Dict[str, Any]]) -> str:
@@ -80,7 +126,8 @@ def _needs_agent(difficulty: str, text: str, has_search_key: bool, has_kaggle_cr
 
 
 def _heuristic_classify(
-    text: str, has_doc: bool, has_tools_likely: bool, has_search_key: bool, has_kaggle_creds: bool = False
+    text: str, has_doc: bool, has_tools_likely: bool, has_search_key: bool, has_kaggle_creds: bool = False,
+    task_type: str = "general",
 ) -> Optional[RouteDecision]:
     """Returns a RouteDecision if the rule tier can decide, else None (defer
     to the LLM fallback tier)."""
@@ -98,7 +145,11 @@ def _heuristic_classify(
     else:
         return None  # ambiguous band — defer to the LLM fallback tier
 
-    return {"difficulty": difficulty, "needs_agent": _needs_agent(difficulty, text, has_search_key, has_kaggle_creds)}
+    return {
+        "difficulty": difficulty,
+        "needs_agent": _needs_agent(difficulty, text, has_search_key, has_kaggle_creds),
+        "task_type": task_type,
+    }
 
 
 _CLASSIFY_SYSTEM_PROMPT = (
@@ -116,6 +167,7 @@ async def _llm_fallback_classify(
     user_id: Optional[str],
     has_search_key: bool,
     has_kaggle_creds: bool = False,
+    task_type: str = "general",
 ) -> RouteDecision:
     """One chat_complete call on the 'fast' capability level. ANY failure
     (no available model, upstream error, unparseable response) defaults to
@@ -144,9 +196,13 @@ async def _llm_fallback_classify(
             raise ValueError(f"unparseable classification response: {content!r}")
     except Exception as e:
         print(f"Router LLM fallback tier failed, defaulting to heavy: {e}", file=sys.stderr)
-        return {"difficulty": "heavy", "needs_agent": True}
+        return {"difficulty": "heavy", "needs_agent": True, "task_type": task_type}
 
-    return {"difficulty": difficulty, "needs_agent": _needs_agent(difficulty, text, has_search_key, has_kaggle_creds)}
+    return {
+        "difficulty": difficulty,
+        "needs_agent": _needs_agent(difficulty, text, has_search_key, has_kaggle_creds),
+        "task_type": task_type,
+    }
 
 
 async def classify(
@@ -158,28 +214,40 @@ async def classify(
     user_id: Optional[str] = None,
     has_search_key: bool = False,
     has_kaggle_creds: bool = False,
+    has_image: bool = False,
 ) -> RouteDecision:
-    """Classify a message's difficulty ('light'/'heavy') and whether it needs
-    the full agent. `has_doc` (a doc is attached) and `has_tools_likely` (the
-    previous assistant turn used tools) are precomputed by the caller, same
-    as `has_search_key` (the user has a Tavily/Brave key configured) and
-    `has_kaggle_creds` (F-11: the user can actually use generate_image).
+    """Classify a message's difficulty ('light'/'heavy'), whether it needs
+    the full agent, and (C2) its task type. `has_doc` (a doc is attached) and
+    `has_tools_likely` (the previous assistant turn used tools) are precomputed
+    by the caller, same as `has_search_key` (the user has a Tavily/Brave key
+    configured) and `has_kaggle_creds` (F-11: the user can actually use
+    generate_image). `has_image` (C2) forces task_type='vision'.
 
     `resolver`/`rate_limiter` are only needed for the LLM fallback tier; if
     omitted (or the heuristic tier already decided), no model call is made.
     When the fallback tier would be needed but no resolver is available, this
     fails toward capability (heavy/needs_agent=True) rather than guessing.
+
+    task_type is computed ONCE here and threaded into whichever tier decides,
+    rather than at each of the four RouteDecision construction sites -- it
+    depends only on the user text, so recomputing it per tier would risk the
+    tiers disagreeing for no benefit.
     """
     text = _total_user_text(messages)
+    task_type = _infer_task_type(text, has_image=has_image)
 
-    decision = _heuristic_classify(text, has_doc, has_tools_likely, has_search_key, has_kaggle_creds)
+    decision = _heuristic_classify(
+        text, has_doc, has_tools_likely, has_search_key, has_kaggle_creds, task_type
+    )
     if decision is not None:
         return decision
 
     if resolver is None or rate_limiter is None:
-        return {"difficulty": "heavy", "needs_agent": True}
+        return {"difficulty": "heavy", "needs_agent": True, "task_type": task_type}
 
-    return await _llm_fallback_classify(text, resolver, rate_limiter, user_id, has_search_key, has_kaggle_creds)
+    return await _llm_fallback_classify(
+        text, resolver, rate_limiter, user_id, has_search_key, has_kaggle_creds, task_type
+    )
 
 
 def resolve_final_model(
@@ -187,6 +255,7 @@ def resolve_final_model(
     user_model_id: Optional[str],
     resolver: Resolver,
     user_id: Optional[str] = None,
+    task_type: Optional[str] = None,
 ) -> str:
     """Resolves which model serves the FINAL user-facing answer. The user's
     explicit model pick (ModelSwitcher) always wins here, regardless of
@@ -196,5 +265,13 @@ def resolve_final_model(
     """
     if user_model_id:
         return user_model_id
-    level = ROLE_LEVELS["final_heavy"] if difficulty == "heavy" else ROLE_LEVELS["final_light"]
-    return resolver.pick_model_by_capability(level, user_id=user_id)
+    role = "final_heavy" if difficulty == "heavy" else "final_light"
+    level = ROLE_LEVELS[role]
+    # C2/C3: prefer the caller's inferred task type; fall back to the role's own
+    # declared type. A role's declaration is the better default when no text was
+    # classified (e.g. the mode_hint short-circuits), and the inferred type is
+    # the better signal when there was.
+    effective_task_type = task_type or ROLE_TASK_TYPES.get(role)
+    return resolver.pick_model_by_capability(
+        level, user_id=user_id, task_type=effective_task_type
+    )

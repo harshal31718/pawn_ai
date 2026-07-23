@@ -52,6 +52,478 @@ intact). **Executed, with the user's explicit go-ahead, in 3 steps:**
 
 ---
 
+## Router/failover — free-tier provider expansion (registered 2026-07-21)
+
+Plan reference: `workspace/plan/router_failover/plan_free_tier_provider_expansion.md`
+(**local-only, gitignored** — the folder is excluded from git on purpose; research
+notes in `01_research_providers.md` alongside it).
+
+- `[x]` **R1 — Provider/model registry expansion (data-first)** ✓ **Real
+  `pytest` run 2026-07-21** (see "Real pytest finally ran" note further down)
+  — all R1-authored tests green.
+  Shipped: 22→31 models, 30→47 endpoints, 6→11 providers (+mistral, nvidia,
+  zhipu, sambanova, kluster). `resolver.PROVIDER_ALIASES` promoted from a
+  function-local dict to a module-level constant (cleaner, and lets tests assert
+  it stays in sync). `key_store.VALID_PROVIDERS` + `EndpointEntry.provider`
+  Literal extended. Settings UI: 5 new rows behind a collapsed "Show 5 more free
+  providers" toggle, and the triplicated provider-row JSX collapsed into one
+  `renderKeyRow` helper (~90 lines removed).
+  **CRITICAL bug found and fixed during the step:** `EndpointEntry.provider` is a
+  `Literal` of the original 6 providers. All 17 new endpoint rows would have
+  failed Pydantic validation at registry load — i.e. taken the backend down at
+  startup. No existing test caught it, because `tests/` runs against
+  `app/registry/seed.py`'s INITIAL_* fixtures in an isolated DATA_DIR, which have
+  known drift from the shipped `data/registry/*.json` and contain none of the new
+  rows. Fixed, and covered by a new `tests/test_registry_integrity.py` (8 tests)
+  that validates the SHIPPED data files directly from the source tree: schema
+  validation, orphan endpoints, duplicate ids, stranded active models, positive
+  limits, and a three-way provider sync check across the Literal /
+  `VALID_PROVIDERS` / `PROVIDER_ALIASES`.
+  **Also corrected a false alarm:** Groq `rpd_limit: 14400` on
+  `llama-3.1-8b-instant` was initially suspected stale (siblings use 1000).
+  Verified against Groq's 2026 docs: the free tier is 1,000–14,400 RPD *depending
+  on model*, so the per-model split is legitimate. Left unchanged.
+  **Scope correction:** the plan's step 1.7 ("one `secrets/*.example` per new
+  provider") was dropped as wrong — PAWN has no provider-key secret files at all
+  and `config.py` reads none; LLM keys are BYOK-only via encrypted Postgres. This
+  changes with Phase 1b's pool keys, which DO belong in `/run/secrets/*`.
+  **Verification gap CLOSED 2026-07-21:** this session's environment initially
+  had no Docker and no backend Python deps, so early verification was
+  standalone-only. Later the same session, backend deps were installed
+  directly into the sandbox (not Docker, but the real `pytest`/`fastapi`/
+  `pydantic`/etc.) and the actual suite was run for the first time all
+  session — see the "Real pytest finally ran" note under Phase 1b below for
+  the full account, including what it found.
+  Adds 5 new OpenAI-compatible, permanently-free providers (mistral, nvidia,
+  zhipu, sambanova, kluster) as registry data + the small code surface each new
+  provider needs (`resolver.pick()`'s `provider_map`, `key_store.VALID_PROVIDERS`,
+  `secrets/*.example`, the Settings API-keys UI). Deliberately data-only where
+  possible — `llm_core._provider_headers()` already emits plain bearer auth for
+  everything non-Anthropic, so no new provider-specific request code is needed.
+  Rejected during research (documented in `01_research_providers.md`): Cohere and
+  Cloudflare Workers AI (only *partial* OpenAI compat), Pollinations (keyless —
+  incompatible with PAWN's BYOK-only resolver), Together/Fireworks/DeepInfra
+  (trial credits, not permanent free), Bedrock/Vertex (SigV4/OAuth auth).
+- `[x]` **R2 — Token-accurate, persistent quota tracking** ✓ **Real `pytest`
+  run 2026-07-21** — all R2-authored tests green, including a real bug found
+  by the real run: `test_daily_counters_reset_on_day_rollover`'s own
+  monkeypatch was self-referential (see the "Real pytest finally ran" note),
+  fixed. **Requires a manual migration before deploy:**
+  `postgres/migrations/2026-07_R2_endpoint_usage.sql` (mirrored into
+  `schema.sql` for fresh volumes).
+  - **Tokens are now actually counted.** `record_call` accepted `token_count`
+    and discarded it, so the `tpm_limit`/`tpd_limit` values already in
+    `endpoints.json` were registered but never enforced. New `_total_tokens()`
+    in `normalize.py` reads the provider's own usage block; unknown stays 0
+    (never estimated — an invented number would corrupt the very budget figures
+    this exists to make honest).
+  - **Streaming needed a two-step record.** Usage only arrives in a final chunk,
+    but the request must be recorded at the START (that's what makes concurrent
+    calls visible to the limiter). New `record_tokens()` attaches the cost
+    afterwards without double-counting the request. `stream_llm` gained an
+    optional `on_usage` CALLBACK (not a change to what it yields — callers
+    iterate it expecting `str`) plus `stream_options.include_usage`.
+    **Ordering bug found while writing it:** the usage-only tail chunk has an
+    empty `choices` list, so it must be handled BEFORE `choices[0]` or it raises
+    `IndexError` into the existing `except` and the token count is silently lost.
+  - **Day/month windows persist; rpm/tpm stay in memory** (~60s windows aren't
+    worth a DB write per request). `seed_from_store()` runs in
+    `app_initializer` before anything is served.
+  - **PRE-EXISTING BUG FIXED: quota was global, not per-user.** One
+    `EndpointRateLimiter` is created for the whole app and was keyed on
+    `endpoint_id` alone — but PAWN is BYOK, so each user calls with their OWN
+    key and has their OWN quota. One busy user therefore throttled everybody.
+    State is now keyed `(user_id, endpoint_id)`; `user_id` is optional
+    everywhere for backwards compatibility, defaulting to a SHARED_USER bucket
+    (which is also where the future pool's genuinely-shared quota belongs).
+    Threaded through all 19 `record_*` sites in `normalize.py`, both `can_use`
+    sites in the resolver, and C3's `_best_headroom`/`_recent_failures` — those
+    last two would otherwise have ranked models by OTHER users' consumption.
+  - **Day-rollover bug caught in review:** the in-memory daily counter never
+    reset, so a process surviving midnight would carry yesterday's totals
+    forever and lock every endpoint out — the exact failure persistence exists
+    to prevent, arrived at from the opposite direction. `_prune` now rolls the
+    calendar day. (Note `rpd` changed from a rolling 24h window to a calendar
+    day, which matches both how providers reset and the persisted window.)
+  - **Persistence circuit-breaker.** Without it, a missing/misconfigured
+    Postgres means every LLM call attempts and times out a fresh connection —
+    a config problem becoming a latency regression on the request path, and a
+    crawling test suite. After 3 consecutive failures it degrades to
+    in-memory-only (i.e. pre-R2 behaviour) and stops trying.
+  - New `app/core/usage_store.py` (split out so the limiter stays a pure
+    in-memory hot-path structure with no DB import). New `failure_count()` and
+    `snapshot()` accessors so callers stop reaching into `_state`, which is now
+    a two-part key and easy to index wrongly from outside.
+  - **Tests:** new `test_usage_accounting.py` (24). Four stub limiters updated
+    for the new kwargs (`graph.py`, `summarize.py`, `test_subagents.py`) — the
+    same class of latent `TypeError` found during C1–C5.
+  - **Verified for real 2026-07-21:** `test_usage_accounting.py`'s 24 tests all
+    pass under real `pytest` (was standalone-only at first). One real bug
+    found by the real run and fixed:
+    `test_daily_counters_reset_on_day_rollover` monkeypatched
+    `app.core.rate_limiter.datetime` with a subclass whose own `.now()`
+    called `mod.datetime.now()` — which, post-patch, IS the subclass itself,
+    causing infinite recursion. Fixed by capturing the real class before
+    patching. `pyflakes`/`tsc` also clean.
+- `[ ]` **R2 (original registration, superseded above)**
+  `rate_limiter.record_call()` currently accepts a `token_count` argument and
+  discards it, so the `tpm_limit`/`tpd_limit` values already present in
+  `endpoints.json` are registered but **silently unenforced**; all state is
+  in-memory and lost on restart. R2 threads real token counts through
+  `normalize.py` and persists daily/monthly windows to Postgres.
+  **Open design question for the user before R2 starts:** persist only
+  `rpd`/`tpd`/monthly and keep the short `rpm`/`tpm` windows in-memory
+  (recommended), or persist everything?
+- `[x]` **C1–C5 — Capability-first model routing** ✓ **Real `pytest` run
+  2026-07-21** — all C-series tests green after fixing test-only staleness the
+  real run surfaced (8 stale `classify_node` dict assertions in `test_agent.py`
+  missing C2's `task_type` key, 2 stale `resolve_final_model` mock assertions
+  in `test_router.py`, 1 tie-band test writing to the wrong per-user bucket in
+  `test_capability_routing.py` — see the "Real pytest finally ran" note).
+  - `[x]` **C1 — `quality_rank`** ✓ `ModelEntry.quality_rank: int = 999` (sparse
+    10/20/30, ranked WITHIN a level, worst-by-default so an uncurated model can
+    never silently outrank a curated one). All 31 models curated; justifications
+    in `02_quality_ranks.md`. `QUALITY_TIE_BAND = 10` makes near-equals
+    comparable — without it, curated ranks are a total order and the live
+    signals could never fire at all.
+  - `[x]` **C2 — task-type axis** ✓ `RouteDecision.task_type`, `_infer_task_type`
+    (heuristic-only: a miss costs a slightly worse pick, never a failure, so it
+    isn't worth an LLM round-trip), `TASK_TYPES`/`TASK_TYPE_TAGS`/
+    `ROLE_TASK_TYPES`. `ROLE_TASK_TYPES` is a SEPARATE dict, not a widening of
+    `ROLE_LEVELS` — the latter is read as a plain string in 8 call sites.
+    (Resolves the plan's open question in the additive direction.)
+  - `[x]` **C3 — `rank_candidates`** ✓ Replaces first-match-wins. Order: hard
+    filters → task-tag match → quality band → live tiebreak (headroom, then
+    failures) → id for determinism. `pick_model_by_capability` is now a thin
+    `rank_candidates(...)[0]`, so all 8 call sites are unchanged.
+    **F-6's Groq-priority hack deleted** — Groq still wins fast-tier work, but
+    on merit (it holds the priority-1 endpoint of `llama-3.3-70b`, the rank-10
+    fast model) rather than a hardcoded provider name in the resolver.
+  - `[x]` **C4 — ranked failover** ✓ `fallback_models` rebuilt on
+    `rank_candidates`; contract preserved (requested first, de-duped,
+    same-level before other levels), only the ordering within groups improves.
+  - `[x]` **C5 — Auto** ✓ `AUTO_MODEL_ID` + `resolveModelId()` in `client.ts`
+    (single translation point, so the sentinel can never leak to the API as a
+    literal model named "auto"). Auto = omit `model_id`, which
+    `resolve_final_model` already treats as "resolve by capability" — no new
+    backend contract. Pinned Auto row in `ModelSwitcher`, now the default for
+    new users (was hardcoded `gemini-2.5-flash`). Switcher no longer disables
+    on an empty model list, since Auto is always valid.
+  - **End-to-end wiring (the part that makes C2+C3 actually do something):**
+    `task_type` added to `AgentState` and set at EVERY `classify_node` exit
+    (including the three `mode_hint` short-circuits that bypass the router
+    entirely), then passed into `resolve_final_model`, both orchestrator picks,
+    the final_heavy pick, `run_subagent`, and `summarize_history`.
+  - **3 latent runtime breaks found and fixed after `py_compile` passed clean**
+    (it checks syntax, not names — `pyflakes` caught these):
+    1. `summarize.py` used `ROLE_TASK_TYPES` with no `app.constants` import →
+       `NameError` on every history summarisation.
+    2. Both `DummyResolver` stubs (`graph.py`, `summarize.py`) didn't accept the
+       new `task_type` kwarg → `TypeError` on the no-resolver fallback paths,
+       which would have masked the real "no resolver configured" condition.
+    3. Same for two test stubs (`test_agent.py`, `test_subagents.py`).
+  - **Registry data bug found by the ranking harness:** `gemini-2.5-flash`,
+    `-flash-lite` and `gemini-3-flash` all had `supports_vision: true` but no
+    `"vision"` capability tag. Harmless until C2 made tags first-class — after
+    which the best vision models would have been *deprioritised* for vision
+    tasks. Tags added; `test_registry_integrity.py` now asserts both directions
+    of that consistency.
+  - **Tests:** new `test_capability_routing.py` (24) + `test_router_task_type.py`
+    (16); `test_registry_integrity.py` extended (+3). Updated rather than
+    deleted: the two F-6 tests now assert merit-based ordering and document why
+    the provider hack went; three exact-dict assertions in `test_router.py`
+    relaxed to field assertions (C2 added a third key).
+    Seed fixtures gained `quality_rank`, with `llama-3.3-70b` set to 20 to tie
+    with `gpt-oss-120b` — verified they're the only two *usable* balanced seed
+    models (`qwen-3-32b`'s sole endpoint is `active: false`), so they're the only
+    viable tie pair for the headroom test.
+  - **Verified for real 2026-07-21:** all of `test_capability_routing.py` +
+    `test_router_task_type.py` pass under real `pytest` (was standalone-only
+    at first). Two real bugs found by the real run and fixed: (1) 8 of
+    `test_agent.py`'s `classify_node` tests still asserted the exact
+    pre-C2 dict shape (`{"difficulty", "needs_agent"}`), never updated for
+    C2's added `"task_type"` key — the "three exact-dict assertions in
+    test_router.py" fix above turned out not to be the only place this
+    pattern existed. (2) `test_headroom_breaks_ties_within_a_band` burned the
+    tied endpoint via `record_call(ep_id)` with no `user_id` — writing to the
+    SHARED_USER bucket — while reading the ranking via `rank_candidates(...,
+    user_id="u")`, a different bucket entirely (R2 keys per-user). The burn
+    landed nowhere the read ever looked, silently no-op'ing the test; it also
+    burned 200 calls against a 30 rpm_limit, which (once the bucket was
+    fixed) over-shot `can_use()`'s 90% cutoff and dropped the model from the
+    ranking outright rather than merely reordering it. Fixed both: correct
+    `user_id`, and 25 calls (just under the cutoff) instead of 200.
+    `pyflakes`/`tsc --noEmit` also clean.
+- `[ ]` **C1–C5 (original registration, superseded by the entry above)** —
+  `workspace/plan/router_failover/plan_capability_routing.md`. Route to a
+  *capability* (level + task type), not to a model-on-a-provider; provider and
+  key source become availability concerns only. User-locked: quality-first
+  ranking with live signals breaking ties, Auto-by-default with manual override
+  retained, `capability_tags` promoted to first-class routing input.
+  **Root defect this fixes:** `resolver.pick_model_by_capability()` is
+  first-match-wins in `models.json` file order — after R1 took the registry to 31
+  models, a research task can land on an experimental OpenRouter freebie ahead of
+  `gemini-2.5-pro` purely on file position. Also retires the F-6 Groq-priority
+  hack (a provider name hardcoded in the resolver) by letting Groq win on
+  headroom/latency merit instead.
+  **Sequencing:** C3's live tiebreak reads `rate_limiter.usage_pct()`, which is
+  in-memory and call-count-only today — prefer **R2 before C3**, though C3
+  degrades gracefully to quality-only ordering without it.
+  **Open question before C2:** should `ROLE_LEVELS` also declare a task type per
+  role, or is task type only ever inferred from user text?
+- `[x]` **R3 — Free-tier budget dashboard** ✓ **Real `pytest` run 2026-07-21**
+  — `test_dashboard.py` green for real (was standalone-only before).
+  - `[x]` **R3.1 — backend `GET /dashboard/free-tiers`** ✓ New
+    `app/routes/dashboard.py`, registered in `main.py`. Per-user (not global —
+    consistent with R2's per-user quota fix), reads `registry.user_models()` +
+    `endpoints_for()`, skips any endpoint the user holds no key for
+    (`key_store.get_key`), reads real usage via `rate_limiter.snapshot()`.
+    **Honest-math rule carried through from the design discussion:** the
+    headline `total_tokens_remaining_today` sums ONLY endpoints with a
+    published `tpd_limit`; providers with no cap are listed separately in
+    `uncapped_providers`, never folded into the headline as an invented
+    number. Headline is `None` (not `0`) when nothing capped is configured —
+    a keyless/uncapped-only user gets an honest "no number yet" rather than a
+    misleading zero. `key_source` defaults to `"byok"` (Phase 1b will add a
+    pool source later; every row says so explicitly now rather than leaving
+    it implicit). New `tests/test_dashboard.py` (9 tests) — one
+    (`test_usage_reduces_remaining`) exercises the REAL `app.state.rate_limiter`
+    rather than mocking it, to prove the aggregate reflects actually recorded
+    usage, not just wiring.
+  - `[x]` **R3.2 — frontend Providers page + nav** ✓ New
+    `frontend/src/pages/ProvidersPage.tsx` (self-contained, fetch-on-mount via
+    new `fetchFreeTiers()` in `client.ts`, no `LayoutContext` needed — unlike
+    Settings, it only needs auth + its own fetch): headline budget card
+    (handles the `null`-vs-`0` distinction explicitly, matching the backend's
+    honest-math contract, plus an "Also configured, no published cap: ..."
+    line for `uncapped_providers`), a per-endpoint card list (provider,
+    model, key_source badge, a tpd usage bar, requests-today line), and an
+    empty state for no-keys-configured. Styled entirely with PAWN's own
+    `theme-*` Tailwind tokens (`bg-theme-surface`, `border-theme-border/50`,
+    `text-theme-text-muted`, `text-[10px]` uppercase tracking-widest headers)
+    to match `SettingsPage.tsx`'s conventions — no new visual language
+    introduced. `formatProviderName` duplicated locally as a third copy,
+    following the project's existing convention (already independently
+    duplicated in `Message.tsx` and `ModelSwitcher.tsx` rather than shared).
+    New `GaugeIcon` added to `components/icons/index.tsx`.
+    Route registered in `App.tsx`: `<Route path="/providers"
+    element={<ProvidersPage />} />` inside the same `RequireAuth`/`AuthedShell`
+    nesting as `/settings`. `Sidebar.tsx`: new `isProvidersActive`/
+    `handleOpenProviders`, and a new footer button placed **immediately above
+    the existing Settings button** (per the user's explicit instruction),
+    copying the Settings button's own bespoke markup (not `SidebarTitleRow` —
+    the footer already has its own pattern, kept consistent) so both rows are
+    visually identical apart from icon/label/active-route.
+  - **Verification:** `npx tsc --noEmit` clean (exit 0) after all of R3.2's
+    edits. `test_dashboard.py`'s 9 tests pass under real `pytest` (2026-07-21,
+    see the "Real pytest finally ran" note), no changes needed.
+  - `[x]` **R3.3 — Chrome-verified, responsive follow-up** ✓ User logged into
+    their own `docker compose watch` instance and asked for a live check plus
+    genuine responsiveness. Live-verified: real data end-to-end (5M headline,
+    uncapped providers correctly separated, per-endpoint usage bars), nav
+    button positioned directly above Settings (confirmed via DOM
+    `getBoundingClientRect`, not just visually), programmatic click routes
+    correctly. Reworked the endpoint list from one narrow `max-w-2xl`
+    divided column into a responsive card grid (`grid-cols-1 sm:grid-cols-2
+    lg:grid-cols-3`, `max-w-5xl`) — confirmed live reflowing between 3 and 2
+    columns across two resizes. Added a mobile-only sidebar-reopen button
+    (`md:hidden`) to the page header, copied from `ChatPage.tsx`'s existing
+    pattern — a real gap, since `Sidebar.tsx`'s nav buttons close the sidebar
+    on navigate, stranding phone users with no way back on any
+    self-contained page. Found the same gap on `ProjectsGalleryPage.tsx`
+    (fixed identically) and `SettingsPage.tsx` (had an indirect escape hatch
+    via "Back to chat", now direct too — required threading
+    `isSidebarOpen`/`onOpenSidebar` through `SettingsPageWrapper.tsx` since
+    `SettingsPage.tsx` doesn't consume `useOutletContext` itself).
+    `ProjectPage.tsx` (`/project/:id`) has the same latent gap, flagged but
+    out of scope. `tsc --noEmit` clean throughout. **Not fully verified:**
+    a true sub-640px screenshot — this sandbox's `resize_window` tool proved
+    unreliable (`window.innerWidth` didn't consistently track the requested
+    size), so the 1-column mobile fallback relies on Tailwind's mobile-first
+    default rather than a pixel-verified capture; one capture did land at an
+    extreme narrow width and showed the new hamburger rendering correctly.
+    (Backend pytest gap since closed for real — see Phase 1b below.)
+
+---
+
+## Router failover — remaining follow-ups closed out (2026-07-23)
+
+Two items flagged as "not yet done" (both operator/infra, not plan-scope
+code) after the 2026-07-21 pytest verification pass:
+
+- `[x]` **Pool secrets wired into `docker-compose.yml`** ✓ All 11
+  `pool_<provider>_api_key` secrets added to the `secrets:` top-level block
+  and the `backend` service's `secrets:` list. User confirmed "wire
+  structure only" — no real key files created, none needed: verified live
+  via a scratch `docker compose up` probe that a missing secret source file
+  only produces a warning ("secret file does not exist") and the stack still
+  starts (exit 0). The file's earlier claim that `required: false` would
+  gate this was checked and is wrong for this Compose version (`v5.0.0`) —
+  `required` isn't a valid field on a top-level secret definition at all
+  (`docker compose config` rejects it: "additional properties 'required'
+  not allowed") — removed. `app/config.py`'s `read_pool_key()` needed no
+  changes; it already falls through to `None` (→ BYOK) for any absent file.
+  To actually enable a provider: copy its `secrets/pool_<provider>_api_key.example`
+  to `secrets/pool_<provider>_api_key` with a real key, restart.
+- `[x]` **`langgraph` version ceiling** ✓ `backend/requirements.txt` pinned
+  to `langgraph>=1.2.0,<2.0.0` and `langgraph-checkpoint-sqlite>=3.0.1,<4.0.0`
+  (was unbounded `>=`). 1.2.x is the version confirmed working in the
+  2026-07-21 pytest session; 0.6.x is the confirmed-broken range (the
+  `RuntimeError: Unable to dispatch an adhoc event without a parent run id`
+  failures). Not yet re-verified with a real `pip install` in this session
+  (no local backend deps installed) — next `docker compose build` will be
+  the first real test of the new pin.
+
+---
+
+## Phase 1b — Two-tier keys: BYOK + self-hosted free pool (registered 2026-07-21)
+
+Plan reference: `workspace/plan/router_failover/plan_free_tier_provider_expansion.md`'s
+"Phase 1b" section (local-only, gitignored). This is the workstream R1/C1-C5/R2/R3
+were explicitly built to scaffold: R2 made quota tracking per-user and persistent
+(the prerequisite the plan calls out as "not optional" for a shared pool to be a
+real security control), and R3's dashboard already has a `key_source` field
+waiting to carry real values instead of a hardcoded `"byok"`.
+
+**User-confirmed 2026-07-21 (resolving the plan's two "confirm before building" flags):**
+1. **Pool-first, BYOK-as-fallback** within a chosen endpoint — the opposite of the
+   plan's tentative default. Deliberate: conserves each user's own provider-side
+   limits by spending the operator's shared pool first.
+2. **Multi-user-shaped, no real users yet.** "Each user gets his own limits" (R2
+   already delivers this) and "we can have personal BYOK and shared pool" — i.e.
+   both sources should coexist and be usable *now*, not gated behind a future
+   multi-user cutover.
+
+- `[x]` **P1b.1 — `EndpointEntry.key_source` schema + registry data** ✓
+  `schemas.py` gained `key_source: Literal["byok", "pool", "either"] = "byok"`
+  (default keeps every pre-existing row's behavior byte-for-byte unchanged).
+  Every row in `data/registry/endpoints.json` (47) AND `app/registry/seed.py`'s
+  `INITIAL_ENDPOINTS` (15, for parity — tests load the seeded fixture, not the
+  shipped file directly) set to `"either"` — safe, since it falls through to
+  today's BYOK-only behavior whenever the operator hasn't configured a pool
+  secret for that provider — chosen over a curated subset because the user
+  asked for both sources broadly available now, not a partial rollout.
+- `[x]` **P1b.2 — `config.read_pool_key()` + Docker secrets scaffolding** ✓
+  New `app/config.read_pool_key(provider)`, `@lru_cache`'d (safe: secrets only
+  change on restart, which clears the cache along with it), reads
+  `/run/secrets/pool_<provider>_api_key` via the existing `read_secret()`
+  helper. **Deliberately NOT wired into `docker-compose.yml` yet** — Compose
+  requires a secret's source file to exist before `up` succeeds, and this
+  session's stack was live under the user's own `docker compose watch`;
+  wiring 11 new required secrets with no real files would have broken their
+  next restart. Instead: `secrets/pool_<provider>_api_key.example` created for
+  all 11 LLM providers, plus a comment block in `docker-compose.yml` at the
+  `secrets:` section documenting the exact one-time steps to actually enable
+  a provider's pool (copy the `.example`, add a `required: false` entry, add
+  it to the `backend` service's `secrets:` list, restart).
+- `[x]` **P1b.3 — `resolver._resolve_key()` pool-first precedence** ✓
+  `key_source == "byok"` (default): unchanged, BYOK only. `"pool"`: operator's
+  pool key only, user's own BYOK key for that provider is ignored even if
+  present (a lever for forcing specific models onto the pool, unused by any
+  shipped endpoint yet). `"either"`: **pool first, BYOK fallback** — the
+  user's explicit precedence call, made to conserve each user's own
+  provider-side limits by spending the operator's shared pool ahead of them.
+  `_has_usable_endpoint`/`rank_candidates`/`usable_user_models` all needed no
+  changes — they already call `_resolve_key` and check truthiness, so a
+  keyless user with an available pool key is now correctly treated as having
+  a usable endpoint, automatically.
+- `[x]` **P1b.4 — dashboard reflects real per-row key source** ✓ New
+  `app/routes/dashboard.py::_usable_key_source(ep, user_id)` mirrors the
+  resolver's exact precedence (kept as a separate small implementation rather
+  than importing `Resolver`, since the route only needs a yes/no + label, not
+  a real key or a `Resolver` instance's registry/rate_limiter dependencies).
+  A row now appears if the user can reach the endpoint through EITHER source
+  — a user with zero BYOK keys can see rows here if the operator has
+  configured pool keys — and `key_source` reports which one is ACTUALLY in
+  play, not a static default. `ProvidersPage.tsx` needed zero frontend
+  changes: its `key_source` badge already rendered whatever string the
+  backend sent, uppercase via CSS.
+- `[x]` **P1b.5 — tests + registry integrity + docs** ✓ New
+  `tests/test_pool_keys.py` (17 tests): all 3 `key_source` values' precedence
+  from the resolver side (byok-only, pool-only, either — both directions of
+  each fallback, plus a keyless/anonymous-caller pool-access case and a
+  defensive missing-attribute case), `read_pool_key`'s env-var fallback +
+  cache-clear, and 4 dashboard tests (pool-alone surfaces a row, pool
+  preferred in the label when both exist, byok reported when no pool key,
+  neither excludes the row). `test_registry_integrity.py` gained 2 tests
+  (valid `key_source` literal, every shipped row declares it explicitly
+  rather than relying on the default). See the "Real pytest finally ran" note
+  immediately below for how these were verified.
+
+### Real pytest finally ran this session (2026-07-21) — the R1/C1-C5/R2/R3
+### verification gap is closed
+
+Every prior entry above was marked `[~]` specifically because `docker compose
+exec backend pytest` had never actually been run — this session's sandbox had
+no Docker and no backend Python deps, so every test file's logic was instead
+re-implemented standalone and checked that way. That gap is now closed: mid-way
+through Phase 1b, the backend's actual dependencies (`fastapi`, `pydantic`,
+`httpx`, `psycopg[binary]`, `pgvector`, `cryptography`, `pytest`,
+`pytest-asyncio`, `pytest-xdist`, etc.) were installed directly into the
+sandbox (not via Docker, but the real packages), and `python3 -m pytest tests/`
+was run for real for the first time all session.
+
+**First run: 645 passed, 29 failed.** All 29 failures were real, pre-existing
+bugs — none were caused by anything shipped this session; every one predates
+Phase 1b and several predate R2. Found and fixed:
+
+1. **`test_daily_counters_reset_on_day_rollover`** (R2): a self-referential
+   monkeypatch — subclassed `mod.datetime` and had the subclass's own `.now()`
+   call `mod.datetime.now()`, which after patching IS the subclass, causing
+   infinite `RecursionError`. Fixed by capturing the real class before
+   patching.
+2. **8 `classify_node` tests in `test_agent.py`** (C-series): still asserted
+   the exact pre-C2 return dict, never updated when C2 added a `"task_type"`
+   key to every exit path. The earlier "3 exact-dict assertions relaxed in
+   `test_router.py`" fix (documented under C1-C5 above) turned out to be an
+   incomplete sweep — these 8 were the same class of staleness in a different
+   file, never caught because pytest never actually ran.
+3. **2 `resolve_final_model` mock-assertion tests in `test_router.py`**: same
+   root cause as #2 — `pick_model_by_capability` is now always called with a
+   `task_type` kwarg (the caller's inferred type, or the role's declared
+   default), and these two tests' `assert_called_once_with(...)` never
+   accounted for the third argument.
+4. **`test_headroom_breaks_ties_within_a_band`** (C-series): burned quota via
+   `record_call(ep_id)` with no `user_id` (writing to the SHARED_USER bucket)
+   while reading the ranking via `rank_candidates(..., user_id="u")` (a
+   different, per-user bucket — R2's whole point) — the burn silently landed
+   nowhere the read ever looked. Once the user_id was fixed, a second problem
+   surfaced: 200 burn calls against a 30 rpm_limit overshot `can_use()`'s 90%
+   cutoff, dropping the model from the ranking outright rather than merely
+   deprioritizing it. Fixed both: correct `user_id`, and 25 calls (just under
+   the cutoff).
+5. **2 mock signature mismatches in `test_normalize_fallback.py`** (R2): the
+   mocked `stream_llm` replacements didn't accept the `on_usage` kwarg R2
+   added to the real function, so every call raised a `TypeError` that got
+   silently wrapped into a generic `ProviderError`, masking the real
+   assertion. Fixed by adding `**kwargs` to both mock signatures.
+
+**Second run, after all of the above: 676 passed, 15 failed (0 newly
+introduced).** The remaining 15 are a SEPARATE, genuinely environmental issue,
+confirmed rather than assumed: every one fails with the identical error
+`RuntimeError: Unable to dispatch an adhoc event without a parent run id`,
+all in `test_chat.py`/`test_conversations.py`/`test_rag.py`/`test_summarize.py`
+(pre-existing Phase A/M chat-agent tests, untouched this session). Root-caused
+by deliberately downgrading `langgraph` from the sandbox's freshly-installed
+1.2.9 to a 0.6.x release — the import broke outright on a
+`langgraph-checkpoint-sqlite` version conflict, confirming these packages have
+had real breaking changes since `requirements.txt`'s `langgraph>=0.3.0` floor
+was written. **This is a real, separate finding worth the user's attention:**
+`requirements.txt` pins no CEILING on `langgraph`/`langgraph-checkpoint-sqlite`,
+so a fresh `docker compose build --no-cache` today would pull the same 1.x
+release this sandbox got and could hit this exact break in the real app, not
+just here. Deliberately NOT fixed by pinning a version in this pass — that's a
+separate, standalone decision (which version to pin, whether `adispatch_custom_event`
+call sites need an actual code change vs. just a version pin) that shouldn't
+be bundled into Phase 1b's diff. Flagged for a dedicated follow-up.
+
+**Not yet run:** `pytest -n auto`'s full-suite gate WAS run (matches
+`testing.md`'s convention) and produced the identical 676/15 split, confirming
+no parallelism-related test isolation issues either. Frontend `npx tsc
+--noEmit` remains clean throughout (no frontend changes in Phase 1b itself).
+
+---
+
 ## Registered plans awaiting build (2026-07-15, re-ordered 2026-07-16) — planning only, no steps started
 
 **Cross-plan order: chat → imageLab.** videoLab is deferred — no plans to implement it

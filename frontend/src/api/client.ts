@@ -400,7 +400,7 @@ export async function streamChat(
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         messages,
-        ...(modelId ? { model_id: modelId } : {}),
+        ...(resolveModelId(modelId) ? { model_id: resolveModelId(modelId) } : {}),
         ...(docId ? { doc_id: docId } : {}),
         ...(conversationId ? { conversation_id: conversationId } : {}),
         ...(image ? { image_b64: image.b64, image_mime: image.mime } : {}),
@@ -572,6 +572,20 @@ export async function fetchConversations(): Promise<ConversationMeta[]> {
   return res.json()
 }
 
+/**
+ * C5: sentinel for "let the backend pick the best model for this task".
+ * Auto is expressed by simply OMITTING model_id from the request -- the
+ * backend's router.resolve_final_model() already treats a missing user pick as
+ * "resolve by capability", so Auto needs no new backend contract.
+ * resolveModelId() is the single place the sentinel is translated, so it can
+ * never leak to the API as a literal model named "auto".
+ */
+export const AUTO_MODEL_ID = 'auto'
+
+export function resolveModelId(modelId?: string): string | undefined {
+  return !modelId || modelId === AUTO_MODEL_ID ? undefined : modelId
+}
+
 export async function createConversation(title?: string, modelId?: string, id?: string): Promise<ConversationMeta> {
   const res = await fetch(`${BASE_URL}/conversations`, {
     method: 'POST',
@@ -579,7 +593,7 @@ export async function createConversation(title?: string, modelId?: string, id?: 
     body: JSON.stringify({
       ...(id ? { id } : {}),
       ...(title ? { title } : {}),
-      ...(modelId ? { model_id: modelId } : {}),
+      ...(resolveModelId(modelId) ? { model_id: resolveModelId(modelId) } : {}),
     }),
   })
   if (handle401(res)) throw new Error('Session expired')
@@ -749,6 +763,34 @@ export interface RegistryModel {
 
 export async function fetchRegistryModels(): Promise<RegistryModel[]> {
   const res = await fetch(`${BASE_URL}/registry/models`, { headers: authHeaders() })
+  if (handle401(res)) throw new Error('Session expired')
+  if (!res.ok) throw new Error(await errorDetail(res))
+  return res.json()
+}
+
+// R3: Providers page (free-tier budget dashboard)
+export interface ProviderUsageRow {
+  endpoint_id: string
+  model_id: string
+  display_name: string
+  provider: string
+  key_source: string
+  rpd_limit: number | null
+  rpd_used: number
+  tpd_limit: number | null
+  tpd_used: number
+  tpd_remaining: number | null
+  has_published_cap: boolean
+}
+
+export interface FreeTiersResponse {
+  total_tokens_remaining_today: number | null
+  rows: ProviderUsageRow[]
+  uncapped_providers: string[]
+}
+
+export async function fetchFreeTiers(): Promise<FreeTiersResponse> {
+  const res = await fetch(`${BASE_URL}/dashboard/free-tiers`, { headers: authHeaders() })
   if (handle401(res)) throw new Error('Session expired')
   if (!res.ok) throw new Error(await errorDetail(res))
   return res.json()

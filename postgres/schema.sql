@@ -204,6 +204,29 @@ create index if not exists image_jobs_session_status_idx
 create index if not exists image_jobs_queue_pos_idx
   on image_jobs (session_id, queue_pos);
 
+-- R2: persistent, token-accurate endpoint quota accounting. Mirrors
+-- postgres/migrations/2026-07_R2_endpoint_usage.sql -- see that file for the
+-- full rationale (in-memory counters reset on restart; tpm/tpd limits were
+-- registered but unenforced; per-user grain because BYOK means per-user quota).
+-- Only day/month windows are persisted; rpm/tpm stay in memory.
+create table if not exists endpoint_usage (
+  user_id      text not null default '',   -- '' = unattributed / shared pool
+  endpoint_id  text not null,
+  window_kind  text not null,              -- 'day' | 'month'
+  window_start date not null,
+  requests     bigint not null default 0,
+  tokens       bigint not null default 0,
+  updated_at   timestamptz not null default now(),
+  primary key (user_id, endpoint_id, window_kind, window_start),
+  constraint endpoint_usage_window_kind_chk check (window_kind in ('day', 'month')),
+  constraint endpoint_usage_nonneg_chk check (requests >= 0 and tokens >= 0)
+);
+
+create index if not exists endpoint_usage_window_idx
+  on endpoint_usage (window_kind, window_start);
+create index if not exists endpoint_usage_user_idx
+  on endpoint_usage (user_id, window_kind, window_start);
+
 -- pawn_anon role (D.4) — replaces Supabase's built-in `anon` role. NOLOGIN here;
 -- a companion init script (postgres/init_pawn_anon.sh, run right after this
 -- file by docker-entrypoint-initdb.d) sets its password from the

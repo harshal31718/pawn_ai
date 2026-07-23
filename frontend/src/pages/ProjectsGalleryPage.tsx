@@ -20,7 +20,7 @@ const SORT_LABELS: Record<SortKey, string> = {
  *  ProjectPage (/project/:id) unchanged. */
 export default function ProjectsGalleryPage() {
   const navigate = useNavigate()
-  const { store } = useOutletContext<LayoutContext>()
+  const { store, isSidebarOpen, setIsSidebarOpen } = useOutletContext<LayoutContext>()
   const { projects, createProject, updateProjectDescription, deleteProject, draftProjectId } = store
 
   const [query, setQuery] = useState('')
@@ -67,7 +67,25 @@ export default function ProjectsGalleryPage() {
       <div className="w-full max-w-4xl mx-auto px-6 pt-16 pb-12">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-semibold text-theme-text">Projects</h1>
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Mobile-only reopen affordance -- this page has no other way
+                back to the sidebar once it auto-closes on navigation (see
+                Sidebar.tsx's handleOpenProject/nav handlers). Mirrors
+                ChatPage.tsx's / ProvidersPage.tsx's header toggle. */}
+            {!isSidebarOpen && (
+              <button
+                type="button"
+                onClick={() => setIsSidebarOpen(true)}
+                className="md:hidden -ml-1 p-2 rounded-lg text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text focus:outline-none transition-colors shrink-0"
+                title="Open sidebar"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                </svg>
+              </button>
+            )}
+            <h1 className="text-2xl font-semibold text-theme-text truncate">Projects</h1>
+          </div>
           <div className="flex items-center gap-2">
             <div className="relative">
               <button

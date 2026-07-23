@@ -7,7 +7,7 @@ import KebabMenu from './KebabMenu'
 import ProjectSection from './ProjectSection'
 import SearchResults from './SearchResults'
 import SidebarTitleRow from './SidebarTitleRow'
-import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon } from './icons'
+import { SidebarLayoutIcon, PencilIcon, BeakerIcon, MagnifierIcon, SettingsGearIcon, ChatBubbleIcon, GaugeIcon } from './icons'
 
 interface Props {
   conversations: CachedConversation[]
@@ -75,6 +75,7 @@ export default function Sidebar({
   const isImageLabActive = location.pathname === '/imagelab'
   const isProjectsActive = location.pathname.startsWith('/project')
   const isSettingsActive = location.pathname === '/settings'
+  const isProvidersActive = location.pathname === '/providers'
 
   // P.3: search spans everything (standalone + project-scoped chats, and
   // project names themselves) -- it used to only filter standaloneConversations,
@@ -170,6 +171,11 @@ export default function Sidebar({
 
   const handleOpenSettings = () => {
     navigate('/settings')
+    onClose()
+  }
+
+  const handleOpenProviders = () => {
+    navigate('/providers')
     onClose()
   }
 
@@ -481,6 +487,36 @@ export default function Sidebar({
             as the nav rows above); only the "Settings" label and the name/
             email column animate width+opacity. */}
         <div className="border-t border-theme-border/40 pt-2 pb-2 shrink-0 select-none">
+          <button
+            type="button"
+            onClick={handleOpenProviders}
+            title={!isOpen ? 'Providers' : undefined}
+            className="
+              group relative z-0 w-full h-7 flex items-center px-2 rounded-xl text-theme-text-muted hover:text-theme-text
+              transition-all active:scale-95 cursor-pointer overflow-hidden
+            "
+          >
+            {/* Same boxed hover as the nav rows -- always a tight w-7 box,
+                in both expanded and collapsed states. */}
+            <span
+              className={`
+                absolute -z-10 inset-y-0 left-2 w-7 rounded-xl
+                ${isProvidersActive ? 'bg-black/25 dark:bg-black/40' : 'group-hover:bg-theme-surface-hover'}
+              `}
+            />
+            <span className="w-7 h-7 shrink-0 flex items-center justify-center">
+              <GaugeIcon className={`w-4 h-4 transition-colors ${isProvidersActive ? 'text-theme-text' : 'group-hover:text-theme-text'}`} />
+            </span>
+            <span
+              className={`
+                text-xs font-semibold text-theme-text text-left truncate transition-all duration-300 ease-in-out
+                ${isOpen ? 'opacity-100 max-w-[10rem] ml-1' : 'opacity-0 max-w-0 ml-0'}
+              `}
+            >
+              Providers
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={handleOpenSettings}
