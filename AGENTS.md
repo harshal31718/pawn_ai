@@ -17,6 +17,8 @@ This is the root-level pointer file for external agents (non-Claude Code). The f
 | Frontend rules | `.claude/rules/frontend.md` |
 | Security rules | `.claude/rules/security.md` |
 | Testing rules | `.claude/rules/testing.md` |
+| Architecture rules | `.claude/rules/architecture.md` |
+| Git workflow rules | `.claude/rules/git-workflow.md` |
 
 ## Required Reading Before Any Work
 
@@ -34,6 +36,14 @@ SSE streaming, transparent rate-limit failover across providers, and persistent 
 - All LLM calls go through `backend/app/core/normalize.py` — never call providers directly.
 - Secrets come from Docker secret files at `/run/secrets/*` via `app/config.py`.
 - Model registry lives in JSON files at `data/registry/` — data, not code.
+
+## Agent Orchestration
+
+Use the `build-step` skill for implementing any numbered step. It automatically runs
+code-reviewer, test-runner, security-auditor (if touching secrets), and build-validator.
+Never manually chain agents — the skill handles it.
+
+Use parallel execution for independent operations — launch multiple agents simultaneously.
 
 ## Output Format
 

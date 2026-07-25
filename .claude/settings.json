@@ -4,8 +4,10 @@
       "Bash(docker compose *)",
       "Bash(docker build *)",
       "Bash(pytest *)",
+      "Bash(python -m pytest *)",
       "Bash(npm run *)",
       "Bash(npm install *)",
+      "Bash(npx *)",
       "Bash(git status)",
       "Bash(git log *)",
       "Bash(git diff *)",
@@ -13,9 +15,11 @@
       "Bash(git commit *)",
       "Bash(git checkout *)",
       "Bash(git branch *)",
+      "Bash(git worktree *)",
       "Bash(uvicorn *)",
-      "Bash(python -m pytest *)",
-      "Bash(npx *)"
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(pwd)"
     ]
   },
   "hooks": {
@@ -25,7 +29,25 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -Command \"\\$p=\\$input|Out-String|ConvertFrom-Json; if(\\$p.tool_input.command -match 'secrets/[^.\\n]*[\\r\\n]|\\.env[^.]|git +push +.*--force'){Write-Error 'BLOCKED: touches secrets or force-push'; exit 2} else {exit 0}\""
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; if($p.tool_input.command -match 'secrets/[^.\\n]*[\\r\\n]|\\.env[^.]|git +push +.*--force'){Write-Error 'BLOCKED: touches secrets or force-push'; exit 2} else {exit 0}\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; if($p.tool_input.command -match 'os\\.(getenv|environ)\\([\\x27\\x22](GEMINI|OPENAI|ANTHROPIC|GROQ|CEREBRAS|HUGGING|GITHUB_TOKEN)[_A-Z]*[\\x27\\x22]'){Write-Error 'BLOCKED: use read_secret() not os.getenv for API keys'; exit 2} else {exit 0}\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; if($p.tool_input.command -match 'docker compose (up|down|restart)'){Write-Host '[Hook] Remember: docker compose up is the canonical way to run the stack' -ForegroundColor Yellow} exit 0\""
           }
         ]
       }
@@ -36,7 +58,25 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -Command \"\\$p=\\$input|Out-String|ConvertFrom-Json; \\$f=\\$p.tool_input.file_path; if(\\$f -match 'secrets/' -and \\$f -notmatch '\\.example$' -and \\$f -notmatch '\\.gitkeep$'){Write-Error 'BLOCKED: writing to secrets/'; exit 2} else {exit 0}\""
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; $f=$p.tool_input.file_path; if($f -match 'secrets/' -and $f -notmatch '\\.example$' -and $f -notmatch '\\.gitkeep$'){Write-Error 'BLOCKED: writing to secrets/'; exit 2} else {exit 0}\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; $f=$p.tool_input.file_path; if($f -match '\\.py$'){Write-Host '[Hook] Python file modified — remember: all LLM calls go through normalize.py' -ForegroundColor Yellow} exit 0\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"$p=$input|Out-String|ConvertFrom-Json; $f=$p.tool_input.file_path; if($f -match '(llm_core|resolver)\\.py' -and $f -notmatch 'normalize\\.py'){Write-Error 'BLOCKED: routes must not modify llm_core.py or resolver.py directly — use normalize.py'; exit 2} else {exit 0}\""
           }
         ]
       }

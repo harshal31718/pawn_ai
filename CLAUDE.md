@@ -11,6 +11,8 @@ This is the root-level pointer file for Claude Code. The full configuration live
 | Frontend rules | `.claude/rules/frontend.md` |
 | Security rules | `.claude/rules/security.md` |
 | Testing rules | `.claude/rules/testing.md` |
+| Architecture rules | `.claude/rules/architecture.md` |
+| Git workflow rules | `.claude/rules/git-workflow.md` |
 | Agent definitions | `.claude/agents/` |
 | Skills (build-step, etc.) | `.claude/skills/` |
 | Build tracker | `workspace/status/build_tracker.md` |
@@ -33,3 +35,16 @@ This is the root-level pointer file for Claude Code. The full configuration live
 - Tests must pass before marking a step done.
 - Never commit real files from `secrets/`.
 - Update `workspace/current_state.md` and `workspace/status/dev_log.md` after every step.
+- Use `app/events.py` SSE builders — never raw `f"data: ..."` in routes.
+
+## Skills
+
+Use the following skills when working on related tasks:
+
+| Task | Skill |
+|---|---|
+| Implementing a build step | `build-step` |
+| Refreshing model registry | `registry-refresh` |
+| Security review | `security-review` |
+
+When spawning subagents, always pass conventions from the respective skill into the agent's prompt.
