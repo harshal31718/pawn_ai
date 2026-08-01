@@ -84,9 +84,20 @@ def _client(username: str, api_token: str) -> httpx.Client:
 
 
 def _raise_for_status(resp: httpx.Response, op: str) -> None:
-    if resp.status_code in (401, 403):
-        # Read endpoints accept any verified account; push requires phone verification.
-        # 401 here usually means the account isn't in state to push kernels.
+    if resp.status_code == 401:
+        # A bare 401 ("Unauthenticated") means Kaggle didn't accept the
+        # credentials at all — the token is missing, malformed, expired, or
+        # revoked. Distinct from 403, which means the token authenticated
+        # fine but the account isn't allowed to do this specific thing.
+        raise KaggleError(
+            "Kaggle rejected your API token as invalid or expired. Generate a "
+            "new token at kaggle.com → Settings → API, then re-save it in "
+            "Image Lab → Kaggle Credentials."
+        )
+    if resp.status_code == 403:
+        # Push requires phone verification; read endpoints accept any
+        # verified account, so a 403 here (token was valid) usually means
+        # the account hasn't completed phone verification.
         raise KaggleError(
             "Kaggle rejected the request. For kernels/push this usually means "
             "the account hasn't completed phone verification — check "
