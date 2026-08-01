@@ -10,17 +10,18 @@ Built solo. No starter templates, no AI backend services — auth, streaming, GP
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 18, Vite 8, TypeScript, Tailwind v4 |
+| Frontend | React 19, Vite 8, TypeScript, Tailwind v4 |
 | Routing | react-router-dom |
 | Markdown | react-markdown |
 | Backend | FastAPI (Python 3.12), Pydantic v2, fully async |
 | Streaming | Server-Sent Events (SSE) via `StreamingResponse` |
-| Auth | Google OAuth2 (confidential client), PyJWT (HS256, 7-day sessions) |
+| Auth | Google OAuth2 (confidential client) + email/password (Argon2id), PyJWT (HS256, 7-day sessions) |
 | Encryption | AES-256-GCM via Python `cryptography` (BYOK keys + Drive tokens at rest) |
 | Agent | LangGraph `StateGraph` (5 nodes, `AsyncSqliteSaver` checkpointer) |
-| Memory retrieval | Supabase pgvector + PostgreSQL FTS, RRF fusion |
+| Memory retrieval | pgvector + PostgreSQL FTS, RRF fusion |
 | Text embeddings | Google `text-embedding-004` |
-| Database | Supabase — pgvector, BYOK key store, image job queue |
+| Database | Self-hosted PostgreSQL (`psycopg3`) + pgvector — BYOK/pool key store, image job queue |
+| API layer | Self-hosted PostgREST (rendezvous for the Kaggle image-gen loop) |
 | File storage | Google Drive API (per-user, `drive.file` scope) |
 | Image generation | Kaggle Kernels API — SDXL + FLUX.1-schnell on T4 / dual-T4 GPU |
 | Infrastructure | Docker, Docker Compose, secrets-as-files |
@@ -34,7 +35,7 @@ Built solo. No starter templates, no AI backend services — auth, streaming, GP
 
 All LLM calls go through `backend/app/core/normalize.py` → `llm_core.py`. Routes and agents never call providers directly.
 
-All 6 providers (Gemini, Groq, Cerebras, HuggingFace, GitHub Models, OpenRouter) use the OpenAI-compatible chat completions wire format. `llm_core.py` speaks one protocol; `normalize.py` swaps the base URL, auth header, and model name per provider. No provider SDKs — no vendor lock-in.
+11 providers (Google, Groq, Cerebras, HuggingFace, GitHub Models, OpenRouter, Mistral, NVIDIA, SambaNova, Kluster, Zhipu) across 47 endpoints use the OpenAI-compatible chat completions wire format. `llm_core.py` speaks one protocol; `normalize.py` swaps the base URL, auth header, and model name per provider. No provider SDKs — no vendor lock-in.
 
 The model registry lives in `data/registry/models.json` and `endpoints.json` — JSON files, not code. Adding a provider means editing JSON.
 
@@ -45,9 +46,10 @@ The model registry lives in `data/registry/models.json` and `endpoints.json` —
 - Cross-model fallback: if the selected model is rate-limited before the first token, `chat_stream` iterates `fallback_models` (same capability level, user-keyed) and switches transparently — emitting a `provider_switch` SSE event rendered as an inline notice in the chat.
 
 **BYOK (Bring Your Own Key):**
-- Users configure keys in Settings → API Keys. Keys are AES-256-GCM encrypted and stored in Supabase, scoped by `user_id`. Key values are never returned by any API endpoint.
+- Users configure keys in Settings → API Keys. Keys are AES-256-GCM encrypted and stored in self-hosted Postgres, scoped by `user_id`. Key values are never returned by any API endpoint.
 - `resolver.pick(model_id, user_id)` resolves only endpoints the user holds a key for. No key → clear error: *"Add your provider key in Settings."*
 - Keys are decrypted once per request window via a short-TTL cache (`core/key_store.py`).
+- **Operator pool keys**: an admin role (`core/admin.py`, `routes/admin.py`) can configure shared, DB-backed provider keys (`core/pool_key_store.py`) that users draw from a shared quota (`core/quota_share.py`) when they haven't configured their own — surfaced on a `/providers` dashboard (`routes/dashboard.py`).
 
 ---
 
@@ -89,16 +91,16 @@ A 5-node `StateGraph` replaces a single LLM call: `load_context → agent → se
 ### Memory and RAG
 
 1. Every conversation that reaches a 20-turn threshold is summarized by the fastest available LLM in a background task → `summary.md` written to Google Drive.
-2. Summaries are chunked, embedded via `text-embedding-004`, and stored in Supabase `memory_chunks` (pgvector).
+2. Summaries are chunked, embedded via `text-embedding-004`, and stored in self-hosted Postgres `memory_chunks` (pgvector).
 3. On each request the `search_memory` node retrieves via:
-   - **Vector search**: `match_memory_chunks` Supabase RPC (cosine similarity).
-   - **Full-text search**: `search_memory_chunks` Supabase RPC (PostgreSQL FTS).
+   - **Vector search**: `match_memory_chunks` Postgres function (cosine similarity).
+   - **Full-text search**: `search_memory_chunks` Postgres function (PostgreSQL FTS).
    - **RRF fusion**: both ranked lists merged in Python via Reciprocal Rank Fusion.
 4. Retrieved chunks are injected as a system message; surfaced in the UI as `memory_hit` events.
 
 All `memory_chunks` rows are scoped by `user_id`. Active conversation is excluded from retrieval to avoid circular recall.
 
-**Graceful degradation**: Supabase down → `retrieve()` returns `[]`. Embedding fails (no BYOK Google key) → FTS-only. Agent still answers.
+**Graceful degradation**: Postgres down → `retrieve()` returns `[]`. Embedding fails (no BYOK Google key) → FTS-only. Agent still answers.
 
 ---
 
@@ -106,11 +108,15 @@ All `memory_chunks` rows are scoped by `user_id`. Active conversation is exclude
 
 **OAuth2 flow:**
 - `GET /auth/login` → Google OAuth2 (confidential client, PKCE disabled — stateless flow, can't share verifier across requests).
-- `GET /auth/callback` → exchanges code, upserts user in Supabase, AES-GCM encrypts Drive tokens, redirects with JWT.
+- `GET /auth/callback` → exchanges code, upserts user in Postgres, AES-GCM encrypts Drive tokens, redirects with JWT.
 - `middleware/auth.py`: Bearer JWT → `request.state.user_id` on every request (public: `/health`, `/auth/*`).
 - Frontend: `AuthContext` injects `Authorization: Bearer <jwt>` on all requests. 401 auto-reloads.
 
 **Scope relaxation**: `OAUTHLIB_RELAX_TOKEN_SCOPE=1` — Google reorders/drops scopes under granular consent; without this the token exchange errors. Missing `drive.file` → falls back to local filesystem storage.
+
+**Email/password auth:**
+- `routes/account.py` implements split sign-in/sign-up plus change-password, hashed with Argon2id (`core/password_utils.py`) — no OAuth dependency for users who prefer a local account.
+- `core/login_rate_limiter.py` throttles repeated failed logins per account/IP.
 
 ---
 
@@ -127,10 +133,10 @@ PAWN/
   uploads/{doc_id}.txt
 ```
 
-`core/drive_factory.py` `get_drive_for_user(user_id)` → decrypts tokens from Supabase → builds `DriveStorage` → or `None` on any failure. Every route that calls it falls back to local filesystem on `None`. Tests always hit local fallback (no real Supabase/Drive in CI).
+`core/drive_factory.py` `get_drive_for_user(user_id)` → decrypts tokens from Postgres → builds `DriveStorage` → or `None` on any failure. Every route that calls it falls back to local filesystem on `None`. Tests always hit local fallback (no real Drive in CI).
 
 **Performance hardening:**
-- `googleapiclient` and `supabase-py` are synchronous. Every Drive/Supabase call is moved off the async event loop via `run_in_threadpool` / `asyncio.to_thread`.
+- `googleapiclient` is synchronous. Every Drive call is moved off the async event loop via `run_in_threadpool` / `asyncio.to_thread`.
 - `DriveStorage` caches file IDs — reads go by ID via `files.get_media` (strongly consistent) instead of eventually-consistent name queries.
 - Per-user `DriveStorage` instances cached with TTL (10 min live / 30 s not-linked). Re-entrant lock guards the shared instance (httplib2 is not thread-safe across threadpool workers).
 - 20s socket timeout on all Drive HTTP calls.
@@ -162,12 +168,12 @@ Two models running on the user's own Kaggle account:
 | FLUX.1-schnell (`black-forest-labs/FLUX.1-schnell`) | Dual T4, bf16, `device_map="balanced"`, VAE tiling | ~10 min | seconds |
 
 **Warm session architecture:**
-Instead of spinning a new Kaggle container per image, a persistent kernel loads the model once and polls Supabase for jobs.
+Instead of spinning a new Kaggle container per image, a persistent kernel loads the model once and polls the self-hosted PostgREST API for jobs.
 
 - `image_sessions` table: one row per live session (status, heartbeat, expiry).
 - `image_jobs` table: one row per generation (status: queued/running/done/error, prompt, params, result PNG as base64).
 - Kaggle notebook: loads model once → PATCHes `installing → loading_model → ready` at phase boundaries → serve loop (heartbeat, pick next queued job, run inference, PATCH done + PNG, honor stop/timer).
-- Only the **public Supabase anon key** is injected into the notebook payload (base64-encoded). Service key never leaves the backend.
+- Only the **public PostgREST anon role credential** is injected into the notebook payload (base64-encoded). The main Postgres password never leaves the backend.
 
 **Durable cold jobs:**
 `POST /generate` is non-blocking — creates a `queued` row, fires a GC-safe background worker (strong `asyncio.Task` reference via `_spawn_bg` — `create_task` alone keeps only a weak ref), returns `{job_id}`. Frontend polls `GET /generate/job/{id}` at 3s intervals. Results survive refresh and tab switches.
@@ -216,15 +222,18 @@ Backend: `http://localhost:8001` · Frontend: `http://localhost:5174`
 
 | File | What |
 |---|---|
-| `secrets/supabase_url` | Supabase project URL |
-| `secrets/supabase_service_key` | Supabase service role key (`sb_secret_...`) |
+| `secrets/postgres_dsn` | App DB connection string (backend → Postgres) |
+| `secrets/postgres_password` | Postgres superuser/app password |
+| `secrets/postgrest_db_uri` | DB URI PostgREST connects with (scoped `pawn_anon` role) |
+| `secrets/postgrest_anon_password` | Password for the `pawn_anon` role exposed to the Kaggle notebook |
+| `secrets/shared_db_dsn` | DSN for the shared/pool-key tables |
 | `secrets/google_client_id` | Google OAuth2 Web client ID |
 | `secrets/google_client_secret` | Google OAuth2 Web client secret |
 | `secrets/encryption_secret` | Random 32-byte hex (pre-generated at setup) |
 | `secrets/jwt_secret` | Random 32-byte hex (pre-generated at setup) |
-| `secrets/supabase_anon_key` | Supabase public anon key (for Kaggle notebook) |
+| `secrets/pool_<provider>_api_key` | Optional shared provider keys for the operator pool-key system |
 
-**One-time Supabase setup:** run `supabase/schema.sql` in your Supabase project (creates `memory_chunks`, `image_sessions`, `image_jobs` tables + pgvector RPCs).
+**One-time database setup:** run `postgres/schema.sql` (plus files in `postgres/migrations/`) against your Postgres instance — creates `users`, `user_api_keys`, `user_drive_tokens`, `memory_chunks`, `image_sessions`, `image_jobs`, etc., with `pgvector`/`pgcrypto` extensions and the `match_memory_chunks`/`search_memory_chunks` functions. `postgres/init_pawn_anon.sh` sets up the restricted `pawn_anon` role PostgREST uses.
 
 ---
 
@@ -238,7 +247,7 @@ docker compose exec backend pytest
 cd frontend && npm run build
 ```
 
-139 backend tests at time of writing. One test file per route module. Provider calls always mocked. `conftest.py` `bypass_auth` fixture injects `user_id="test-user-id"`. `stub_byok_key` autouse fixture patches `key_store.get_key` so resolver doesn't raise during tests.
+700+ backend tests at time of writing. One test file per route module. Provider calls always mocked. `conftest.py` `bypass_auth` fixture injects `user_id="test-user-id"`. `stub_byok_key` autouse fixture patches `key_store.get_key` so resolver doesn't raise during tests.
 
 ---
 
@@ -247,20 +256,25 @@ cd frontend && npm run build
 ```
 backend/
   app/
-    core/          # normalize.py, llm_core.py, resolver.py, crypto.py, key_store.py
-    db/            # supabase_client.py
+    core/          # normalize.py, llm_core.py, resolver.py, crypto.py, key_store.py,
+                   # admin.py, pool_key_store.py, quota_share.py, password_utils.py,
+                   # login_rate_limiter.py, image_models.py, image_presets.py, image_session.py,
+                   # kaggle.py, drive_factory.py, jwt_utils.py, generate.py, title.py,
+                   # usage_store.py, vision_enhance.py, router.py, rate_limiter.py
+    db/            # postgres_client.py
     memory/        # embed.py, index.py, retrieve.py, summarize.py
     middleware/    # auth.py, security.py, timeout.py
-    routes/        # chat.py, conversations.py, upload.py, keys.py, auth.py, generate.py
+    routes/        # chat.py, conversations.py, upload.py, keys.py, auth.py, generate.py,
+                   # account.py, admin.py, dashboard.py, memory.py, projects.py, registry.py, crypto.py
     storage/       # conversations.py, documents.py, drive.py, conversations_drive.py, documents_drive.py
     events.py      # SSE builder functions
     constants.py   # all file paths
     config.py      # read_secret()
+  data/
+    registry/      # models.json, endpoints.json
   tests/
-data/
-  registry/        # models.json, endpoints.json
 kaggle_templates/  # image_flux_session/, image_sdxl_session/, image_gen/
-supabase/          # schema.sql
+postgres/          # schema.sql, migrations/, init_pawn_anon.sh
 frontend/
   src/
     api/           # client.ts
@@ -284,7 +298,7 @@ workspace/
 
 **BYOK-only in production:** Shared Docker-secret provider keys are retained for dev/test but unused in production once BYOK is configured. Every LLM and embedding call resolves through the user's own key. A user without a key gets a clear actionable error, not a silent failure.
 
-**Kaggle as compute, Supabase as rendezvous:** Kaggle provides free GPU quota (T4, dual-T4). The warm-session design uses Supabase as a message queue — the notebook polls for jobs, the backend polls for results. No persistent connection, no webhook surface, no custom infrastructure.
+**Kaggle as compute, self-hosted PostgREST as rendezvous:** Kaggle provides free GPU quota (T4, dual-T4). The warm-session design uses PostgREST as a message queue — the notebook polls for jobs, the backend polls for results. No persistent connection, no webhook surface; a small SSH tunnel exposes PostgREST publicly (this used to be free with hosted Supabase, and is the one piece of extra infrastructure the self-hosted migration required).
 
 **Optimistic UI with a persisted sync queue:** Drive latency (200–800ms per call) makes server-round-trip UI unusable. Client-owned UUIDs + localStorage cache make every conversation action instant. The sync queue handles retries, ordering, and offline survival so Drive stays consistent without the user ever waiting on it.
 
