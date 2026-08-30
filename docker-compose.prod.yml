@@ -69,14 +69,13 @@ services:
       PGRST_DB_SCHEMA: public
       PGRST_DB_ANON_ROLE: pawn_anon
     secrets:
-      # Long syntax + explicit mode: postgrest's official image runs as a
-      # non-root user, and Compose's default secret mount mode can leave
-      # the file unreadable to it. Force world-readable inside the
-      # container (the mount is tmpfs, root-owned host-side either way —
-      # this doesn't loosen host filesystem perms).
-      - source: postgrest_db_uri
-        target: postgrest_db_uri
-        mode: 0444
+      - postgrest_db_uri
+    # This Compose version doesn't support secret uid/gid/mode (silently
+    # ignored) — Compose (non-Swarm) bind-mounts the secret file directly,
+    # so it keeps its host-side ownership/permissions inside the container.
+    # postgrest's image runs as UID 1000; the host file at
+    # ./secrets/postgrest_db_uri must be chown 1000:1000, mode 400 (not
+    # world-readable) for postgrest to read it. See deployment.md.
     # No local `postgres` dependency — `postgrest_db_uri` points at
     # Supabase's pooler (role `pawn_anon`), same as `backend.postgres_dsn`.
     mem_limit: 128m
