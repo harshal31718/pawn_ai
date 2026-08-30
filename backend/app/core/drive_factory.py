@@ -27,7 +27,7 @@ from app.db.postgres_client import execute, fetchone
 from app.exceptions import NotConfiguredError
 from app.storage.drive import DriveStorage
 
-_DRIVE_REQUIRED_MSG = "Connect your Google Drive in Settings to use PAWN."
+_DRIVE_REQUIRED_MSG = "Connect your Google Drive in Providers to use PAWN."
 
 # Cache DriveStorage instances per user so we don't refetch tokens from Postgres
 # and rebuild the Drive service (plus its folder/file-ID caches) on every request.
