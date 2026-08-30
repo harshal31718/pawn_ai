@@ -26,7 +26,8 @@ This is the root-level pointer file for Claude Code. The full configuration live
 1. Read `.claude/CLAUDE.md` — full rules and constraints.
 2. Read `workspace/status/build_tracker.md` — current active step.
 3. Read `workspace/current_state.md` — what is already built.
-4. Then implement.
+4. **Check what's changed on `main`** (`git log main -10 --oneline`, `git diff dev...main`) before making changes here — `main` has received direct infra hotfixes (deployment/compose/backend fixes made straight on `main` during the 2026-08-30 GCP+Supabase migration) that haven't been merged back to `dev` yet.
+5. Then implement.
 
 ## Key Rules (short form — full rules in `.claude/CLAUDE.md`)
 

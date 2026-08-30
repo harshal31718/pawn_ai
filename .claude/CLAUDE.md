@@ -41,7 +41,8 @@ failover, persistent memory. Full project plan in `workspace/plan/` and decision
 2. Read the relevant phase plan (e.g., `workspace/implemented_phases/phase_1_0_foundation.md` or `workspace/plan/plan_3_encryption.md`).
 3. Read `workspace/current_state.md` — understand what already exists.
 4. Read `.claude/rules/` files relevant to your task.
-5. Then implement.
+5. **Check what's changed on `main`** (`git log main -10 --oneline`, `git diff dev...main`) before making changes here — `main` has received direct infra hotfixes (deployment/compose/backend fixes made straight on `main` during the 2026-08-30 GCP+Supabase migration) that haven't been merged back to `dev` yet.
+6. Then implement.
 
 ## Architecture
 
