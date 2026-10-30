@@ -7,5 +7,5 @@ See `.claude/CLAUDE.md` for the update protocol.
 
 | Branch | Commit ID | Timestamp | Message |
 |---|---|---|---|
-| `main` | `4e93afbc1af6d9279c0c9e05d05e17a3c4944ca2` | 2026-07-23 22:18:47 +0530 | promote: dev -> main (docs stripped) — deploy #2 (post-deploy fixes), live-verified |
-| `dev` | `63099013ac6cfde37dea917c420933565db6525a` | 2026-07-23 20:35:39 +0530 | feat: Models tab Source column — show pool-available models to users |
+| `main` | `4b97c2a2ef29352ee24e75a0b9e842257cf972b9` | 2026-10-30 09:52:43 +0530 | feat(deploy): add nightly pg_dump backup script and docs — local Postgres, Supabase dropped; live login verified 2026-10-30 |
+| `dev` | `65b20eacb92dee21e8ede37c8a43f9fba6821384` | 2026-08-30 18:37:07 +0530 | docs: rewrite deployment.md for GCP + Supabase migration — deploy files identical to main 4b97c2a |

@@ -5449,3 +5449,24 @@ Not done in this pass, deliberately: `routes/generate.py` wiring (calling
 `enhance_with_vision` before building `params_dict`, storing both
 `original_prompt`/`enhanced_prompt` on the job) and the frontend composer's
 Auto/Always/Off 3-state toggle -- both are pass 2, not yet started.
+
+## 2026-10-30 — Prod login outage: Supabase dropped, local Postgres restored
+
+Symptom: `/auth/callback` returned `{"detail":"Token exchange failed"}`, then a
+500. Two separate causes. (1) One-off `SSLEOFError` from the VM to
+`oauth2.googleapis.com` (did not recur in 64 test calls; the failed attempt
+burned the single-use code, so retries gave `invalid_grant`). (2) The Supabase
+project the prod DSNs pointed at no longer existed (`FATAL: (ENOTFOUND)
+tenant/user ... not found`), so every DB call failed.
+
+Fix: Postgres runs locally again on the e2-micro (`pgvector/pgvector:pg16`,
+`shared_buffers=32MB`, `mem_limit: 200m`, ~85MB in practice) in
+`docker-compose.prod.yml`; fresh `postgres_password` / `postgrest_anon_password`
+secrets generated on the VM, DSNs now `postgres:5432`. DB started empty (users
+re-register, re-add keys). Added `scripts/backup-db.sh` + nightly cron
+(03:30 UTC, keep 7) on the VM. `deployment.md` section 4 rewritten.
+Shipped on `main` as `59622bc` + `4b97c2a` (fast-forward); synced to `dev` by
+checking out the three files (deployment.md, docker-compose.prod.yml,
+scripts/backup-db.sh) rather than a merge, because `main` has docs stripped by
+`promote-to-main.sh` and a real merge would delete them on `dev`. Verified with
+a live Google login; logs clean.

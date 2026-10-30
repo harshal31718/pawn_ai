@@ -1,8 +1,9 @@
 # PAWN — Deployment Runbook
 
 Deploys PAWN to a Google Cloud **`e2-micro`** VM (Always Free tier,
-x86_64, 1 shared vCPU / 1GB RAM), with Postgres+pgvector hosted on
-**Supabase's free tier** instead of self-hosted. **Single environment:
+x86_64, 1 shared vCPU / 1GB RAM), with Postgres+pgvector running as a
+**local, memory-capped container** on the same VM (Supabase was dropped on
+2026-10-30, see the history note below). **Single environment:
 `main` → prod only.** `dev` is never deployed here — it stays local-only on
 your own machine (its own local Postgres, its own secrets), used to test
 changes before promoting.
@@ -18,13 +19,17 @@ changes before promoting.
 > the most durable "always free" VM offer among major clouds (unchanged
 > since ~2017) — still not a contractual guarantee, just the best
 > available track record after Oracle proved free tiers can be revoked.
-> Supabase was chosen because self-hosting Postgres alongside
-> backend+postgrest doesn't fit in 1GB RAM (see §0 resource notes).
+> Supabase was first used because it seemed Postgres wouldn't fit in 1GB
+> RAM. On 2026-10-30 the Supabase project (`mhrlwflwbhpkbqmmyuus`)
+> disappeared (`FATAL: (ENOTFOUND) tenant/user ... not found`), which broke
+> login with a 500 on `/auth/callback`. Postgres now runs locally again
+> (`pgvector/pgvector:pg16`, `shared_buffers=32MB`, `mem_limit: 200m`, ~85MB
+> in practice) — it fits fine alongside backend (500m cap) and postgrest.
 
 | Env | Branch | Domain | Dir | Project | Backend | PostgREST | DB |
 |---|---|---|---|---|---|---|---|
 | local dev | `dev` | `localhost` | your machine | `docker-compose.yml` (dev) | `127.0.0.1:8001` | n/a | local Postgres |
-| **prod** | `main` | `pawnai.duckdns.org` | `/opt/pawn` | GCP `pawn-501409` | `127.0.0.1:8001` | `127.0.0.1:3001` | Supabase `mhrlwflwbhpkbqmmyuus` |
+| **prod** | `main` | `pawnai.duckdns.org` | `/opt/pawn` | GCP `pawn-501409` | `127.0.0.1:8001` | `127.0.0.1:3001` | local `postgres` container (`postgres_data` volume) |
 
 Flow: **verify locally (pytest + build) → `scripts/promote-to-main.sh`
 (`dev`→`main`) → SSH to VM → `git pull` → rebuild → `docker compose up` →
@@ -46,10 +51,9 @@ validate.**
    publishes 80/443 directly.
 2. **Never publish a container port without `127.0.0.1:`**. PAWN's ports:
    `8001` (backend) / `3001` (postgrest). Both loopback-only.
-3. **Never `docker compose down -v`**. There's no local Postgres volume to
-   destroy anymore (DB is Supabase-hosted), but keep this habit if a local
-   debug Postgres is ever added back temporarily.
-4. **Prod's DB credentials are Supabase-managed, not shared with dev.**
+3. **Never `docker compose down -v`**. It deletes the `pawn_postgres_data`
+   volume, i.e. the whole prod database.
+4. **Prod's DB credentials are its own, not shared with dev.**
    Local dev keeps its own local Postgres entirely. `encryption_secret`,
    `jwt_secret` must each be a fresh, independent value on the VM, never
    copied from your local dev machine. (The Google OAuth *client* is the
@@ -238,89 +242,51 @@ git clone -b main git@github.com:harshal31718/pawn_ai.git /opt/pawn
 
 ---
 
-## 4. Supabase setup (one-time, or when re-provisioning the DB)
+## 4. Postgres (local container)
 
-1. Create a **free-tier** Supabase project. **Pick a US region** (e.g.
-   East US/North Virginia) matching the GCP VM's `us-central1` — the
-   region selector can silently default to a different continent even
-   after you think you've changed it; double-check the pooler hostname
-   shown in step 4 actually says `us-east-1` (or whichever US region)
-   before proceeding, since Supabase doesn't support changing a project's
-   region after creation and cross-continent DB latency is a real,
-   permanent cost if missed.
-2. **Enable pgvector**: Database → Extensions → search "vector" → toggle
-   on. Also confirm `pgcrypto` (used for `gen_random_uuid()`) — usually
-   enabled by default.
-3. **Apply the schema** — no Docker init-script mechanism exists on a
-   managed DB, so this is a manual one-time step:
-   ```bash
-   export PGPASSWORD='<supabase-postgres-superuser-password>'
-   psql "postgresql://postgres.<project-ref>@<pooler-host>:5432/postgres?sslmode=require" \
-     -f postgres/schema.sql
-   ```
-4. **Create the app's two roles** (previously bootstrapped automatically
-   by the local Postgres container's env vars / init script — no
-   equivalent hook on Supabase):
-   ```sql
-   -- pawn_anon already created by schema.sql; just set its login password:
-   alter role pawn_anon with login password '<generated>';
+`docker-compose.prod.yml` defines a `postgres` service (`pgvector/pgvector:pg16`,
+`mem_limit: 200m`, tuned small for 1GB RAM). On the FIRST start with an empty
+`postgres_data` volume, the image runs `postgres/schema.sql` and
+`postgres/init_pawn_anon.sh` from `docker-entrypoint-initdb.d`, which create
+the schema, the pgvector extension and the `pawn_anon` role (given LOGIN +
+password from the `postgrest_anon_password` secret). These scripts do NOT
+re-run on later starts.
 
-   -- pawn (full-access role the backend connects as) doesn't exist yet:
-   create role pawn with login password '<generated>';
-   grant all on schema public to pawn;
-   grant all on all tables in schema public to pawn;
-   grant all on all sequences in schema public to pawn;
-   alter default privileges in schema public grant all on tables to pawn;
-   alter default privileges in schema public grant all on sequences to pawn;
-   ```
-5. **Grant both roles USAGE on the `extensions` schema.** Supabase installs
-   pgvector into a dedicated `extensions` schema, not `public` (unlike a
-   plain self-hosted Postgres, which is what `schema.sql` was originally
-   written against). Two separate things are required for the `vector`
-   type to actually resolve for these roles — missing either one
-   surfaces as `psycopg.ProgrammingError: vector type not found in the
-   database`, non-fatal at backend startup but **fatal on every OAuth
-   callback** (breaks login with a 500), found live on the first
-   post-migration deploy:
-   ```sql
-   grant usage on schema extensions to pawn;
-   grant usage on schema extensions to pawn_anon;
-   ```
-   ```bash
-   # and put extensions on the search_path via the connection string itself
-   # (see §5 -- ALTER ROLE ... SET search_path alone is not reliably
-   # honored through Supabase's Supavisor session pooler, which appears to
-   # reuse pooled backend connections without re-applying role-level
-   # session defaults; the DSN-level `options` startup parameter works
-   # regardless of pooler internals)
-   ```
-6. **Connection strings** — use the **Session pooler** (port 5432,
-   IPv4-compatible). Supabase's **direct** connection (also port 5432, a
-   different host) is **IPv6-only by default**, which a stock GCP VPC
-   cannot reach — the **Transaction pooler** (port 6543) can break
-   psycopg's session-level assumptions, so Session mode is the correct
-   choice, not either alternative. Get the exact pooler hostname from
-   Supabase dashboard → Connect → Direct tab → select "Session pooler"
-   (this is one of the least discoverable parts of Supabase's UI — the
-   default "Connect" panel doesn't show it, and the "Server" tab shows
-   JS-SDK setup instructions instead of a raw connection string; you want
-   Project Settings-adjacent "Direct" tab's mode selector specifically).
+Secrets (all on the VM under `/opt/pawn/secrets/`, never committed):
 
-   ```
-   # secrets/postgres_dsn (role `pawn`)
-   postgresql://pawn.<project-ref>:<pawn-password>@<pooler-host>:5432/postgres?sslmode=require&options=-c%20search_path%3Dpublic%2Cextensions
+```bash
+cd /opt/pawn/secrets
+PGPW=$(openssl rand -hex 24); ANON=$(openssl rand -hex 24)
+umask 077
+printf %s "$PGPW" > postgres_password
+# 644: the init script runs as the `postgres` user inside the container
+printf %s "$ANON" > postgrest_anon_password; chmod 644 postgrest_anon_password
+printf %s "postgresql://pawn:${PGPW}@postgres:5432/pawn"    > postgres_dsn
+printf %s "postgres://pawn_anon:${ANON}@postgres:5432/pawn" > postgrest_db_uri
+sudo chown 1000:1000 postgrest_db_uri && sudo chmod 400 postgrest_db_uri
+```
 
-   # secrets/postgrest_db_uri (role `pawn_anon`)
-   postgres://pawn_anon.<project-ref>:<anon-password>@<pooler-host>:5432/postgres?sslmode=require&options=-c%20search_path%3Dpublic%2Cextensions
-   ```
-   Database name is Supabase's default `postgres` (no separate `pawn`
-   database — `schema.sql` doesn't care about the DB name, and creating
-   one adds nothing).
+Both DSNs use host `postgres` (the compose service name) — no port is
+published to the host.
 
-No backend code changes were needed for any of this — `config.py` and
-`postgres_client.py` read `postgres_dsn` from a Docker secret and pass it
-straight to `psycopg.connect()`, so the entire DB swap from self-hosted
-to Supabase was a secret-file content change, not application code.
+**Changing a password later:** the init script only runs on an empty volume,
+so also `ALTER ROLE` inside the running DB (`docker exec pawn-postgres-1 psql
+-U pawn -d pawn`), then update the secret files and
+`docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --force-recreate backend postgrest`.
+
+**NEVER** run `docker compose down -v` — it deletes `pawn_postgres_data`
+(all accounts, BYOK keys, embeddings).
+
+**Backups:** `scripts/backup-db.sh` dumps to `/opt/pawn/backups` (keeps 7).
+Cron for `pawndeploy` (`crontab -e`), 03:30 UTC nightly:
+`30 3 * * * /opt/pawn/scripts/backup-db.sh >> /opt/pawn/backups/backup.log 2>&1`
+Restore: `gunzip -c <file> | docker exec -i pawn-postgres-1 psql -U pawn -d pawn`
+(into an empty DB). Copy dumps off the VM occasionally; they die with it.
+
+**Memory behaviour:** each container is capped, so a runaway container is
+OOM-killed and restarted by `restart: unless-stopped` without taking the VM
+down; committed Postgres data survives (WAL replay). Watch `docker ps` for
+frequent recent restarts — that is the signal to move to `e2-small`.
 
 ---
 
@@ -333,7 +299,7 @@ also gitignored). Generate:
 cd /opt/pawn/secrets
 openssl rand -hex 32 > encryption_secret
 openssl rand -hex 32 > jwt_secret
-# postgres_dsn / postgrest_db_uri: paste the Supabase connection strings from §4.6
+# postgres_password / postgrest_anon_password / postgres_dsn / postgrest_db_uri: see §4
 # google_client_id / google_client_secret: from the OAuth client in §1
 chmod 600 encryption_secret jwt_secret postgres_dsn google_client_id google_client_secret
 ```
@@ -354,7 +320,7 @@ Found live on the first post-migration deploy: `postgrest` crash-looped
 with `openFile: permission denied` until this was applied — a plain
 `chmod 644` (world-readable) would also fix the symptom but was
 deliberately avoided (flagged by this session's own safety tooling) since
-it exposes a live Supabase credential to every local user on the box; the
+it exposes a live DB credential to every local user on the box; the
 UID-1000-owned, mode-400 file is readable only by the exact process that
 needs it.
 
@@ -391,9 +357,9 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 docker compose --env-file .env.prod -f docker-compose.prod.yml ps
 curl -fsS http://127.0.0.1:8001/health        # {"status":"ok"}
 ```
-Expect exactly two containers: `backend` and `postgrest` — no local
-`postgres` (Supabase-hosted, see §4). Schema is pre-applied to Supabase;
-there's no "first boot runs schema.sql" step to wait for.
+Expect three containers: `backend`, `postgrest` and `postgres` (healthy).
+On first start with an empty volume, `postgres` runs `schema.sql` (see §4);
+`backend`/`postgrest` wait for its healthcheck.
 
 ### 6.4 Nginx server block
 
@@ -527,10 +493,10 @@ needed.
 |---|---|---|
 | 80/443 | public | System Nginx |
 | 8001 / 3001 | `127.0.0.1` | PAWN backend / postgrest |
-| 5432 | none (external, Supabase-hosted) | DB reached only via the pooler over the internet, not locally |
+| 5432 | none (internal compose network only) | Local `postgres` container, reached as `postgres:5432` |
 
 Only 80/443 are internet-facing on the VM itself. Everything else is
-loopback or an outbound connection to Supabase's pooler.
+loopback or the internal compose network.
 
 **What could actually trigger GCP billing** (the free tier does not
 auto-charge for normal usage, but these would):
@@ -568,11 +534,8 @@ The $1 budget alert from §3.1 is the safety net for all of these.
   screen situation above gets any worse (it already violates the
   original "do this before going public" ordering — see history note at
   the top of this file).
-- **Supabase free-tier auto-pause**: the project pauses after 7 days with
-  zero API/DB activity; the owner must manually un-pause via the Supabase
-  dashboard. A real user hitting the app resets the clock, so this only
-  bites during a genuinely idle stretch. Not automated — just know it
-  can happen.
+- **RAM pressure**: 1GB host, all containers capped (see §4). Frequent
+  container restarts mean it's time for `e2-small`.
 
 ---
 
@@ -604,12 +567,12 @@ during the 2026-08-30 migration.
 ## 10. Data safety & rollback
 
 - **User conversations/uploads** live in each user's own Google Drive,
-  not on the VM or in Supabase — Supabase holds accounts, BYOK keys
+  not on the VM's DB — Postgres holds accounts, BYOK keys
   (encrypted), memory embeddings, Drive tokens (encrypted), and
   image-job state.
-- **Backup** the Supabase DB before risky schema changes: use Supabase's
-  own dashboard backup/export, or `pg_dump` against the pooler connection
-  string.
+- **Backup** the DB before risky schema changes and periodically:
+  `docker exec pawn-postgres-1 pg_dump -U pawn pawn | gzip > ~/pawn_$(date +%F).sql.gz`
+  (no managed backups exist; a nightly cron of this is recommended).
 - **Rollback a release**: `git checkout <previous-sha>` in `/opt/pawn`,
   rebuild frontend, `up -d --build`. Since there's no local DB volume,
   code rollbacks never touch data.
@@ -626,9 +589,8 @@ during the 2026-08-30 migration.
 ```bash
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
-Schema changes against Supabase: apply SQL manually via `psql` against
-the Session pooler connection string (§4.6) or the Supabase SQL editor —
-there's no init-script mechanism to run it automatically on a managed DB.
+Schema changes: init scripts only run on an empty volume, so apply new SQL
+manually: `docker exec -i pawn-postgres-1 psql -U pawn -d pawn < postgres/migrations/<file>.sql`.
 
 ---
 

@@ -1,3 +1,5 @@
+**PROD DB (2026-10-30):** Supabase is gone; prod runs a local, memory-capped `postgres` container (see `deployment.md` section 4). Nightly `pg_dump` cron on the VM (`scripts/backup-db.sh`). Prod DB was recreated empty.
+
 # PAWN — Current State
 
 Last updated: 2026-07-23
