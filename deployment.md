@@ -277,6 +277,12 @@ so also `ALTER ROLE` inside the running DB (`docker exec pawn-postgres-1 psql
 **NEVER** run `docker compose down -v` — it deletes `pawn_postgres_data`
 (all accounts, BYOK keys, embeddings).
 
+**Backups:** `scripts/backup-db.sh` dumps to `/opt/pawn/backups` (keeps 7).
+Cron for `pawndeploy` (`crontab -e`), 03:30 UTC nightly:
+`30 3 * * * /opt/pawn/scripts/backup-db.sh >> /opt/pawn/backups/backup.log 2>&1`
+Restore: `gunzip -c <file> | docker exec -i pawn-postgres-1 psql -U pawn -d pawn`
+(into an empty DB). Copy dumps off the VM occasionally; they die with it.
+
 **Memory behaviour:** each container is capped, so a runaway container is
 OOM-killed and restarted by `restart: unless-stopped` without taking the VM
 down; committed Postgres data survives (WAL replay). Watch `docker ps` for
