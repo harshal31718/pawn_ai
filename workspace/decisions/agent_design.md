@@ -1,4 +1,7 @@
 # Agent Design
+
+> **SUPERSEDED IN PART (2026-11-01).** This is the ORIGINAL design record. The as-built system differs: RAG is Postgres+pgvector (not sqlite-vec), the agent is classify/plan/execute/verify with native tool calling (not JSON/ReAct), embeddings are `gemini-embedding-2` (not `text-embedding-004`), user data is in Google Drive, prod DB is a local Postgres container. Use `workspace/CODEBASE_MAP.md` for what exists and `workspace/decisions/change_log_2026.md` for why it changed. Keep this file only for the original reasoning.
+
 ## LangGraph Graph, JSON/ReAct Protocol, Capability Routing
 
 ---

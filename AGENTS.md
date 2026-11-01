@@ -11,8 +11,10 @@ This is the root-level pointer file for external agents (non-Claude Code). The f
 | Current project state | `workspace/current_state.md` |
 | Dev log | `workspace/status/dev_log.md` |
 | Phase plans | `workspace/plan/` and `workspace/implemented_phases/` |
-| Architecture & decisions | `workspace/decisions/` |
-| API reference | `workspace/api_reference.md` |
+| Architecture & decisions | `workspace/decisions/` (original design docs are partly superseded) |
+| Module map + API reference | `workspace/CODEBASE_MAP.md` |
+| Why decisions were made | `workspace/decisions/change_log_2026.md` |
+| Docs index | `workspace/README.md` |
 | Backend rules | `.claude/rules/backend.md` |
 | Frontend rules | `.claude/rules/frontend.md` |
 | Security rules | `.claude/rules/security.md` |
@@ -26,6 +28,7 @@ This is the root-level pointer file for external agents (non-Claude Code). The f
 2. Read `workspace/status/build_tracker.md` — the current active step and its status.
 3. Read the relevant plan file for the active phase (path listed in build_tracker.md).
 4. Read `.claude/rules/` files relevant to your task.
+5. Skim `workspace/decisions/change_log_2026.md` before touching infra, auth, keys/pool, or deployment.
 
 ## Project Summary
 
@@ -35,7 +38,8 @@ SSE streaming, transparent rate-limit failover across providers, and persistent 
 - Providers are URL-routed via `_detect_provider(url)` in `backend/app/core/llm_core.py`.
 - All LLM calls go through `backend/app/core/normalize.py` — never call providers directly.
 - Secrets come from Docker secret files at `/run/secrets/*` via `app/config.py`.
-- Model registry lives in JSON files at `data/registry/` — data, not code.
+- Model registry lives in JSON files at `backend/data/registry/` — data, not code.
+- Prod: one GCP `e2-micro` VM, local Postgres container (Supabase dropped 2026-10-30). `main` is deploy-only (docs stripped); promote only via `scripts/promote-to-main.sh`. Runbook: `deployment.md`.
 
 ## Agent Orchestration
 

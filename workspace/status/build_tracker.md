@@ -11,6 +11,17 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done & verified
 
 ---
 
+## CURRENT STATUS (reconciled 2026-11-01) — read this first
+
+- **No step is in flight.** Everything registered below is either `[x]` done or an explicitly deferred plan.
+- Prod: GCP `e2-micro`, `pawnai.duckdns.org`, local Postgres container (Supabase dropped 2026-10-30). Live truth: `workspace/current_state.md`. Reasons/decisions: `workspace/decisions/change_log_2026.md`. Module map + API: `workspace/CODEBASE_MAP.md`.
+- Infra work since the last numbered phase (not tracked as steps): Oracle -> GCP migration (2026-08-30), Supabase -> local Postgres (2026-10-30), nightly `pg_dump` backup. Recorded in `dev_log.md` (10-30 entry) and the change log, not as `[x]` rows below.
+- Unpromoted code on `dev`: `81e52ad` (kaggle 401 vs 403 messages).
+- Next planned work, in order: `workspace/plan/README.md` (imageLab Q2 / Q3.4 / open items, providers NIM refresh). Phase 3 WebCrypto wiring and PostgREST per-session JWT remain deliberately deferred.
+- The sections below are a chronological ledger and contain stale statements by design (Oracle IPs, Supabase, "Current Status" as of 2026-07-05). Do not treat them as current; use the files above.
+
+---
+
 ## Login change — split Sign In/Sign Up + email-password + change password + nudge (registered 2026-07-23)
 
 Plan: `workspace/plan/architecture_2.0/login_change.md` (gitignored, local-only —
@@ -1272,7 +1283,7 @@ section 6) needs a real login -- not yet done this session.
 
 ---
 
-## Current Status
+## Historical Status (as of 2026-07-05; SUPERSEDED, see CURRENT STATUS at the top)
 
 **Active phases (merged track):** Phase A — Chat Agent Refinement (tools, router, orchestrator, subagents) — **A.1–A.9 fully complete including live verification, 2026-07-14** — + Phase M — Memory Scoping (**M.1–M.7 fully complete including live verification, 2026-07-14** — see `gap_audit_2026-07-14.md` §L for the full record) + Phase D — Production Deployment (D.8 fully complete, migrated to the permanent free-tier instance, `pawn-temp` terminated) + Plan: Drive-Mandatory Storage (Phases 1-4 all DONE) + imageLab perf/quality follow-ups (2026-07-05) + Phase 3 — WebCrypto Encryption (not started, deliberately deferred)
 **Active step:** **Phase A — Chat Agent Refinement is code-complete (A.1–A.9), 2026-07-13.** Plan refined and re-verified against as-built Phase M code 2026-07-13 (`workspace/plan/plan_chat_agent_refinement.md`), registered in this tracker, work started and finished same day across two sessions. A.8 (trace persistence + `TraceView.tsx`) and A.9 (full test/review pass) done this session — see the A.8/A.9 entries below for the persisted-trace shape, the mandatory security-auditor PASS on the full A.1-A.8 stack, and the code-reviewer CRITICAL (elapsed_ms/elapsedMs mismatch) that was found and fixed. **A.9's live verification checklist (plan §A.9, 8 items — needs the user's own BYOK/search keys and a browser) is the only open Phase A item; it is NOT marked `[x]` until the user confirms it live.** Phase M done (2026-07-13) — memory scoping (standalone chats + projects + scoped RAG) shipped on `dev`; swapped the dead `text-embedding-004` embedding model for `gemini-embedding-2` (768-dim) while wrapping up M.6. M.7's live checklist (real Drive-linked stack + user) is the only open Phase M item — see the M.7 entry below. Prior: D.8 fully complete (2026-07-05). The retry loop succeeded 2026-07-04 (attempt 183); PAWN migrated data-preserving onto the new free-tier `pawn` instance (`144.24.119.184`), DuckDNS repointed, fresh TLS cert issued, `pawn-temp` (the paid bridge) terminated after user sign-off. One real bug found+fixed: `docker-compose.prod.yml`'s CPU limits assumed 2 vCPUs (true of `pawn-temp`'s x86 hyperthreaded core), broke on Ampere A1's 1 real vCPU — rescaled `1.5/1.0/0.5` → `0.6/0.3/0.1`. Full migration record in `workspace/status/dev_log.md`'s 2026-07-05 entry.

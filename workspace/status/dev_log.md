@@ -5470,3 +5470,12 @@ checking out the three files (deployment.md, docker-compose.prod.yml,
 scripts/backup-db.sh) rather than a merge, because `main` has docs stripped by
 `promote-to-main.sh` and a real merge would delete them on `dev`. Verified with
 a live Google login; logs clean.
+
+## 2026-11-01 — Docs reconciliation (no code changes)
+
+Docs had drifted behind the Oracle->GCP move, the Supabase drop and PAWN 2.0. Split by audience (index: `workspace/README.md`).
+- Agent-facing: new `workspace/CODEBASE_MAP.md` (corrected former `PAWN_PROJECT_OUTLINE.md`, also the API reference), new `workspace/decisions/change_log_2026.md` (decision/action/why), rewritten short `workspace/current_state.md` (old 1300-line narrative moved to `workspace/archive/`), CURRENT STATUS block added at top of `build_tracker.md`, `.claude/CLAUDE.md`, `.claude/AGENTS.md`, root `CLAUDE.md`/`AGENTS.md`, `.gemini/GEMINI.md` updated (obsolete "main has hotfixes not in dev" warning removed: closed by the 2026-10-30 sync), superseded banners on three original design docs.
+- Human-facing: new `workspace/OVERVIEW.md`; `README.md` and `deployment.md` corrected (agent graph, memory, Drive-mandatory, embeddings model, local Postgres, backups, test counts).
+- Deleted/merged: `RULES.md` (into `.claude/AGENTS.md`), `pawn_context.md` (into change log/CLAUDE.md), `workspace/api_reference.md`, `decisions/claude_setup_guide.md`, `decisions/project_overview.md`, duplicated `.gemini/skills/*`.
+- Not touched on purpose: `workspace/stable_commits.md` (only on explicit request; its `dev` row lags), `implemented_phases/*` (history), `plan/*`.
+- Tests not run (docs only). Nothing committed.

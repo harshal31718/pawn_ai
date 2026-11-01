@@ -1,6 +1,6 @@
 # PAWN — Personal AI Workspace
 
-Multi-model, multi-user BYOK AI chat application. One interface, multiple LLM providers, transparent rate-limit failover, persistent memory, LangGraph agent, and on-demand GPU image generation via Kaggle — all with user data stored on the user's own Google Drive.
+Multi-model, multi-user BYOK AI chat application. One interface, multiple LLM providers, transparent rate-limit failover, persistent scoped memory, a LangGraph tool-using agent, an optional operator-funded shared key pool, and on-demand GPU image generation via Kaggle — all with user content stored on the user's own Google Drive.
 
 Built solo. No starter templates, no AI backend services — auth, streaming, GPU orchestration, and storage implemented directly.
 
@@ -17,15 +17,15 @@ Built solo. No starter templates, no AI backend services — auth, streaming, GP
 | Streaming | Server-Sent Events (SSE) via `StreamingResponse` |
 | Auth | Google OAuth2 (confidential client) + email/password (Argon2id), PyJWT (HS256, 7-day sessions) |
 | Encryption | AES-256-GCM via Python `cryptography` (BYOK keys + Drive tokens at rest) |
-| Agent | LangGraph `StateGraph` (5 nodes, `AsyncSqliteSaver` checkpointer) |
+| Agent | LangGraph `StateGraph` (classify, plan, execute, verify; native tool calling; `AsyncSqliteSaver` checkpointer) |
 | Memory retrieval | pgvector + PostgreSQL FTS, RRF fusion |
-| Text embeddings | Google `text-embedding-004` |
-| Database | Self-hosted PostgreSQL (`psycopg3`) + pgvector — BYOK/pool key store, image job queue |
+| Text embeddings | Google `gemini-embedding-2` (768-dim) |
+| Database | PostgreSQL + pgvector (`psycopg3`), a local container on the same VM: accounts, encrypted keys, embeddings, usage, image jobs |
 | API layer | Self-hosted PostgREST (rendezvous for the Kaggle image-gen loop) |
 | File storage | Google Drive API (per-user, `drive.file` scope) |
 | Image generation | Kaggle Kernels API — SDXL + FLUX.1-schnell on T4 / dual-T4 GPU |
-| Infrastructure | Docker, Docker Compose, secrets-as-files |
-| Testing | pytest, httpx.AsyncClient, FastAPI TestClient |
+| Infrastructure | Docker Compose, secrets-as-files, host Nginx + certbot on a single GCP `e2-micro` VM |
+| Testing | pytest (800+ backend tests), Vitest, `tsc` + `vite build` as the frontend gate |
 
 ---
 
@@ -37,7 +37,7 @@ All LLM calls go through `backend/app/core/normalize.py` → `llm_core.py`. Rout
 
 11 providers (Google, Groq, Cerebras, HuggingFace, GitHub Models, OpenRouter, Mistral, NVIDIA, SambaNova, Kluster, Zhipu) across 47 endpoints use the OpenAI-compatible chat completions wire format. `llm_core.py` speaks one protocol; `normalize.py` swaps the base URL, auth header, and model name per provider. No provider SDKs — no vendor lock-in.
 
-The model registry lives in `data/registry/models.json` and `endpoints.json` — JSON files, not code. Adding a provider means editing JSON.
+The model registry lives in `backend/data/registry/` (`models.json`, `endpoints.json`, `providers.json`): JSON files, not code. Adding a provider means editing JSON.
 
 **Rate-limit resilience (`backend/app/core/resolver.py`, `rate_limiter.py`):**
 - `EndpointRateLimiter` tracks rolling RPM and TPM per endpoint.
@@ -46,8 +46,8 @@ The model registry lives in `data/registry/models.json` and `endpoints.json` —
 - Cross-model fallback: if the selected model is rate-limited before the first token, `chat_stream` iterates `fallback_models` (same capability level, user-keyed) and switches transparently — emitting a `provider_switch` SSE event rendered as an inline notice in the chat.
 
 **BYOK (Bring Your Own Key):**
-- Users configure keys in Settings → API Keys. Keys are AES-256-GCM encrypted and stored in self-hosted Postgres, scoped by `user_id`. Key values are never returned by any API endpoint.
-- `resolver.pick(model_id, user_id)` resolves only endpoints the user holds a key for. No key → clear error: *"Add your provider key in Settings."*
+- Users configure keys on the Providers page. Keys are AES-256-GCM encrypted and stored in Postgres, scoped by `user_id`. Key values are never returned by any API endpoint.
+- `resolver.pick(model_id, user_id)` prefers the user's own key, then falls back to the operator pool key (if the endpoint allows it and fair-share quota permits). No usable key → clear error: *"Add your provider key in Settings."*
 - Keys are decrypted once per request window via a short-TTL cache (`core/key_store.py`).
 - **Operator pool keys**: an admin role (`core/admin.py`, `routes/admin.py`) can configure shared, DB-backed provider keys (`core/pool_key_store.py`) that users draw from a shared quota (`core/quota_share.py`) when they haven't configured their own — surfaced on a `/providers` dashboard (`routes/dashboard.py`).
 
@@ -57,7 +57,7 @@ The model registry lives in `data/registry/models.json` and `endpoints.json` —
 
 Backend: `StreamingResponse` with `text/event-stream`. Every response is a stream of **typed JSON events** — never raw strings.
 
-7 event types defined in `backend/app/events.py`:
+Typed events defined in `backend/app/events.py` (core ones shown):
 
 | Type | Carries |
 |---|---|
@@ -66,6 +66,8 @@ Backend: `StreamingResponse` with `text/event-stream`. Every response is a strea
 | `error` | sanitized error message + optional code |
 | `provider_switch` | failover notice |
 | `step` | LangGraph agent step |
+| `tool_result` | a tool call's observation |
+| `citation` | source cited by a search/fetch tool |
 | `memory_hit` | retrieved memory chunk |
 | `model_call` | secondary model invocation |
 
@@ -77,30 +79,29 @@ Frontend (`frontend/src/api/client.ts`): `streamChat()` opens a `fetch` + `Reada
 
 ### LangGraph Agent
 
-A 5-node `StateGraph` replaces a single LLM call: `load_context → agent → search_memory → ask_model → final`.
+A `StateGraph` replaces a single LLM call: `classify -> direct_answer` (simple turns) or `classify -> plan -> execute -> verify` (heavier turns).
 
-- **`agent` node**: parses a ReAct-style JSON action — decides whether to call `search_memory`, `ask_model`, or go to `final`.
-- **`search_memory` node**: hybrid vector + FTS retrieval (see Memory section).
-- **`ask_model` node**: secondary LLM call for a focused sub-question, routed by capability level.
-- **`final` node**: synthesizes and streams the answer.
-- **Checkpointer**: `AsyncSqliteSaver` persists state by `{user_id}:{conv_id}` thread ID — reasoning survives restarts.
-- Custom events from nodes (`adispatch_custom_event`) flow into `astream_events` and are emitted as `step` / `memory_hit` / `model_call` SSE events, displayed in a collapsible inline trace panel per message.
+- **`classify`**: a heuristic router (with an LLM fallback) sets difficulty, task type and whether tools are needed; the composer's Fast / Pro / Image hint can override it.
+- **`execute`**: a streaming tool loop using native OpenAI-style tool calling (iteration and token budgets). Tools: calculator, datetime, `fetch_url` (SSRF-guarded), `web_search` (Tavily/Brave via the user's own key), `search_memory`, `doc_search`, `generate_image`. Three preset subagents (researcher, summarizer, coder) can be delegated to, one level deep.
+- **`verify`**: for research-style heavy turns, a research-tier model checks the buffered draft against the request and can send the loop back for up to two revisions.
+- **Model choice**: the user's explicit pick wins for the final answer; helper steps are chosen by capability level (fast / balanced / research) from the registry.
+- **Checkpointer**: `AsyncSqliteSaver` persists state by `{user_id}:{conv_id}`.
+- Events from nodes flow through `astream_events` and are emitted as `step` / `tool_result` / `citation` / `memory_hit` / `model_call` SSE events, shown in a collapsible inline trace per message.
 
 ---
 
 ### Memory and RAG
 
-1. Every conversation that reaches a 20-turn threshold is summarized by the fastest available LLM in a background task → `summary.md` written to Google Drive.
-2. Summaries are chunked, embedded via `text-embedding-004`, and stored in self-hosted Postgres `memory_chunks` (pgvector).
-3. On each request the `search_memory` node retrieves via:
-   - **Vector search**: `match_memory_chunks` Postgres function (cosine similarity).
-   - **Full-text search**: `search_memory_chunks` Postgres function (PostgreSQL FTS).
-   - **RRF fusion**: both ranked lists merged in Python via Reciprocal Rank Fusion.
-4. Retrieved chunks are injected as a system message; surfaced in the UI as `memory_hit` events.
+Memory is scoped: each standalone chat has its own memory, and each project has a shared memory for the chats inside it. Folder placement in Drive decides the scope.
 
-All `memory_chunks` rows are scoped by `user_id`. Active conversation is excluded from retrieval to avoid circular recall.
+1. Messages and uploaded documents are chunked and written to the chat's `rag_chunks.jsonl` on Google Drive first, then embedded (`gemini-embedding-2`, 768-dim) and indexed in Postgres `memory_chunks` (pgvector). Postgres is a rebuildable index; "Rebuild memory" re-derives it from Drive.
+2. Every 20 messages a fast-tier model writes a bullet summary to `summary.md`, which is re-indexed.
+3. The `search_memory` / `doc_search` tools retrieve via vector search (`match_scoped_chunks`) and full-text search (`search_scoped_chunks`), fused with Reciprocal Rank Fusion.
+4. Hits are surfaced in the UI as `memory_hit` events with provenance.
 
-**Graceful degradation**: Postgres down → `retrieve()` returns `[]`. Embedding fails (no BYOK Google key) → FTS-only. Agent still answers.
+All rows are scoped by `user_id` and scope; a chat only sees its own chunks and a project only its project's.
+
+**Graceful degradation**: Postgres down -> retrieval returns `[]`. Embedding fails (no Google key from the user or pool) -> full-text only. The agent still answers.
 
 ---
 
@@ -112,7 +113,7 @@ All `memory_chunks` rows are scoped by `user_id`. Active conversation is exclude
 - `middleware/auth.py`: Bearer JWT → `request.state.user_id` on every request (public: `/health`, `/auth/*`).
 - Frontend: `AuthContext` injects `Authorization: Bearer <jwt>` on all requests. 401 auto-reloads.
 
-**Scope relaxation**: `OAUTHLIB_RELAX_TOKEN_SCOPE=1` — Google reorders/drops scopes under granular consent; without this the token exchange errors. Missing `drive.file` → falls back to local filesystem storage.
+**Scope relaxation**: `OAUTHLIB_RELAX_TOKEN_SCOPE=1` — Google reorders/drops scopes under granular consent; without this the token exchange errors. Drive is mandatory for anything that stores data: without a working `drive.file` grant, storage routes return HTTP 412 `not_configured` and the UI points the user to Providers.
 
 **Email/password auth:**
 - `routes/account.py` implements split sign-in/sign-up plus change-password, hashed with Argon2id (`core/password_utils.py`) — no OAuth dependency for users who prefer a local account.
@@ -122,18 +123,17 @@ All `memory_chunks` rows are scoped by `user_id`. Active conversation is exclude
 
 ### Google Drive Storage
 
-User data lives on the user's own Google Drive (`PAWN/`). PAWN holds no user content.
+User content lives on the user's own Google Drive (`PAWN/` in prod, `PAWN-dev/` locally). PAWN's database holds no conversations.
 
 ```
 PAWN/
-  conversations/{conv_id}/
-    meta.json
-    messages.jsonl
-    summary.md
+  conversations/
+    chats/{conv_id}/          meta.json, messages.jsonl, summary.md, rag_chunks.jsonl
+    projects/{project_id}/    project.json, {conv_id}/ (same shape as a chat)
   uploads/{doc_id}.txt
 ```
 
-`core/drive_factory.py` `get_drive_for_user(user_id)` → decrypts tokens from Postgres → builds `DriveStorage` → or `None` on any failure. Every route that calls it falls back to local filesystem on `None`. Tests always hit local fallback (no real Drive in CI).
+`core/drive_factory.py` `get_drive_for_user(user_id)` → decrypts tokens from Postgres → builds `DriveStorage` . `require_drive_for_user` raises a 412 when Drive is not linked (stateless chat without a conversation or document still works). Tests use an in-memory `FakeDriveStorage`.
 
 **Performance hardening:**
 - `googleapiclient` is synchronous. Every Drive call is moved off the async event loop via `run_in_threadpool` / `asyncio.to_thread`.
@@ -202,7 +202,7 @@ Fails cold jobs stuck past 20 min wall-clock. Fails session jobs whose session i
 1. GZip
 2. Timeout (45s, SSE exempt)
 3. Security headers (X-Frame-Options, CSP, X-Content-Type-Options, Referrer-Policy)
-4. CORS (restricted to `localhost:5174`)
+4. CORS (env-driven allow-list; `*` is rejected at startup)
 5. Auth (JWT Bearer → `request.state.user_id`)
 
 **Secrets pattern:** Docker secret files at `/run/secrets/<name>`. `config.py` `read_secret()` checks that path first, then env var fallback for local runs. API keys never touch the codebase or environment dumps.
@@ -217,6 +217,8 @@ docker compose up
 ```
 
 Backend: `http://localhost:8001` · Frontend: `http://localhost:5174`
+
+**Production** runs on a single GCP `e2-micro` VM (backend + local Postgres + PostgREST in Docker, static frontend and TLS via host Nginx). See `deployment.md`.
 
 **Required secrets before first run:**
 
@@ -233,7 +235,7 @@ Backend: `http://localhost:8001` · Frontend: `http://localhost:5174`
 | `secrets/jwt_secret` | Random 32-byte hex (pre-generated at setup) |
 | `secrets/pool_<provider>_api_key` | Optional shared provider keys for the operator pool-key system |
 
-**One-time database setup:** run `postgres/schema.sql` (plus files in `postgres/migrations/`) against your Postgres instance — creates `users`, `user_api_keys`, `user_drive_tokens`, `memory_chunks`, `image_sessions`, `image_jobs`, etc., with `pgvector`/`pgcrypto` extensions and the `match_memory_chunks`/`search_memory_chunks` functions. `postgres/init_pawn_anon.sh` sets up the restricted `pawn_anon` role PostgREST uses.
+**Database setup:** on an empty Postgres volume, `postgres/schema.sql` runs automatically (compose mounts it into `docker-entrypoint-initdb.d`) and creates `users`, `user_api_keys`, `pool_api_keys`, `user_drive_tokens`, `memory_chunks`, `image_sessions`, `image_jobs`, `endpoint_usage`, etc., with `pgvector`/`pgcrypto` and the `match_scoped_chunks`/`search_scoped_chunks` functions. Later schema changes are applied by hand from `postgres/migrations/`. `postgres/init_pawn_anon.sh` sets up the restricted `pawn_anon` role PostgREST uses.
 
 ---
 
@@ -243,11 +245,11 @@ Backend: `http://localhost:8001` · Frontend: `http://localhost:5174`
 # Backend
 docker compose exec backend pytest
 
-# Frontend (build gate — no unit tests)
+# Frontend (type-check + build gate; a few Vitest unit tests)
 cd frontend && npm run build
 ```
 
-700+ backend tests at time of writing. One test file per route module. Provider calls always mocked. `conftest.py` `bypass_auth` fixture injects `user_id="test-user-id"`. `stub_byok_key` autouse fixture patches `key_store.get_key` so resolver doesn't raise during tests.
+800+ backend tests. One test file per route module. Provider calls always mocked. `conftest.py` `bypass_auth` fixture injects `user_id="test-user-id"`. `stub_byok_key` autouse fixture patches `key_store.get_key` so resolver doesn't raise during tests.
 
 ---
 
@@ -256,38 +258,34 @@ cd frontend && npm run build
 ```
 backend/
   app/
-    core/          # normalize.py, llm_core.py, resolver.py, crypto.py, key_store.py,
-                   # admin.py, pool_key_store.py, quota_share.py, password_utils.py,
-                   # login_rate_limiter.py, image_models.py, image_presets.py, image_session.py,
-                   # kaggle.py, drive_factory.py, jwt_utils.py, generate.py, title.py,
-                   # usage_store.py, vision_enhance.py, router.py, rate_limiter.py
+    agent/         # graph.py, subagents.py, tools/
+    core/          # normalize.py, llm_core.py, router.py, rate_limiter.py, usage_store.py, quota_share.py,
+                   # key_store.py, pool_key_store.py, crypto.py, kaggle.py, image_session.py, image_models.py,
+                   # drive_factory.py, jwt_utils.py, password_utils.py, vision_enhance.py, ...
+    resolver/      # resolver.py (endpoint picking, capability ranking, fallbacks)
+    memory/        # chunker, embed, index, indexer, retrieve, summarize
+    storage/       # drive.py, conversations_drive.py, projects_drive.py, documents_drive.py
     db/            # postgres_client.py
-    memory/        # embed.py, index.py, retrieve.py, summarize.py
     middleware/    # auth.py, security.py, timeout.py
-    routes/        # chat.py, conversations.py, upload.py, keys.py, auth.py, generate.py,
-                   # account.py, admin.py, dashboard.py, memory.py, projects.py, registry.py, crypto.py
-    storage/       # conversations.py, documents.py, drive.py, conversations_drive.py, documents_drive.py
-    events.py      # SSE builder functions
-    constants.py   # all file paths
+    registry/      # loader, schemas, providers
+    routes/        # chat, conversations, upload, keys, auth, account, admin, dashboard, generate, memory, projects, registry, crypto
+    kaggle_templates/  # session + cold notebooks (SDXL, FLUX)
+    events.py      # SSE builders
+    constants.py   # paths and tunables
     config.py      # read_secret()
-  data/
-    registry/      # models.json, endpoints.json
+  data/registry/   # models.json, endpoints.json, providers.json, image_presets.json
   tests/
-kaggle_templates/  # image_flux_session/, image_sdxl_session/, image_gen/
 postgres/          # schema.sql, migrations/, init_pawn_anon.sh
+scripts/           # promote-to-main.sh, backup-db.sh
 frontend/
   src/
-    api/           # client.ts
-    components/    # ImageLabPage, GenerationsPanel, SessionBar, ModelSwitcher, ApiKeysSection, ...
+    api/           # client.ts (all API/SSE calls)
+    components/    # chat, sidebar, Image Lab, Providers, settings, dialogs
     contexts/      # AuthContext.tsx, AppContext.tsx
-    pages/         # Layout.tsx, ChatPage.tsx, SettingsPageWrapper.tsx, ImageLabPageWrapper.tsx
+    pages/         # Layout, ChatPage, ProjectPage, ProvidersPage, SettingsPageWrapper, ImageLabPageWrapper, ...
     store/         # useConversationStore.ts, conversationCache.ts, syncQueue.ts
     types.ts
-workspace/
-  plan/            # phase plans
-  implemented_phases/
-  status/          # build_tracker.md, dev_log.md
-  decisions/       # architecture decision records
+workspace/         # dev-only docs (stripped from main); OVERVIEW.md is the plain-language current picture
 ```
 
 ---
@@ -296,9 +294,9 @@ workspace/
 
 **Google Drive as user storage (not a shared database):** Each user's data is isolated in their own Drive. PAWN acts as a proxy — it never holds user content at rest. The tradeoff is Drive latency and eventual consistency, both addressed by the file-ID cache and threadpool offloading.
 
-**BYOK-only in production:** Shared Docker-secret provider keys are retained for dev/test but unused in production once BYOK is configured. Every LLM and embedding call resolves through the user's own key. A user without a key gets a clear actionable error, not a silent failure.
+**BYOK-first with an optional operator pool:** every LLM and embedding call prefers the user's own key. If the operator (admin) has configured a shared pool key for that provider, a keyless user falls back to it under a fair-share quota. A user with neither gets a clear actionable error, not a silent failure.
 
-**Kaggle as compute, self-hosted PostgREST as rendezvous:** Kaggle provides free GPU quota (T4, dual-T4). The warm-session design uses PostgREST as a message queue — the notebook polls for jobs, the backend polls for results. No persistent connection, no webhook surface; a small SSH tunnel exposes PostgREST publicly (this used to be free with hosted Supabase, and is the one piece of extra infrastructure the self-hosted migration required).
+**Kaggle as compute, self-hosted PostgREST as rendezvous:** Kaggle provides free GPU quota (T4, dual-T4). The warm-session design uses PostgREST as a message queue — the notebook polls for jobs, the backend polls for results. No persistent connection, no webhook surface; in production Nginx exposes PostgREST at `/pgrst/`, and access is limited by a restricted database role plus per-session-token row-level security.
 
 **Optimistic UI with a persisted sync queue:** Drive latency (200–800ms per call) makes server-round-trip UI unusable. Client-owned UUIDs + localStorage cache make every conversation action instant. The sync queue handles retries, ordering, and offline survival so Drive stays consistent without the user ever waiting on it.
 

@@ -112,12 +112,40 @@ TDD workflow (mandatory where practical):
 
 **PR workflow:** Analyze full commit history → draft comprehensive summary → include test plan → push with `-u` flag.
 
+## Must Never (merged from the former RULES.md)
+
+- Include sensitive data (API keys, tokens, secrets) or absolute/system file paths in output.
+- Call `llm_core.py` directly from routes, or use `os.getenv()` for raw key names.
+- Ship untested changes, or bypass security checks/validation hooks.
+- Duplicate existing functionality without a clear reason; follow established repository patterns first.
+- Use `allow_origins=["*"]`, or remove `SecurityHeadersMiddleware`.
+- Commit files in `secrets/` (except `.gitkeep` and `*.example`).
+- `git merge dev` into `main` directly (docs would leak onto `main`); use `scripts/promote-to-main.sh`.
+- Run `docker compose down -v` on the prod VM (deletes the Postgres volume).
+
+## File Formats
+
+- Agents: `.claude/agents/<name>.md`, YAML frontmatter with `name`, `description`, `tools`, `model`; lowercase-hyphen file name matching the agent name; description says when to invoke.
+- Skills: `.claude/skills/<name>/SKILL.md`, frontmatter `name`, `description`; body has practical guidance and a "When to Use" section.
+- Hooks (`.claude/settings.json`): matcher-driven, specific matchers, exit `1` only when blocking is intentional, actionable messages.
+
+## Deployment Facts Agents Get Wrong
+
+- Prod = one GCP `e2-micro` (1 GB RAM) at `pawnai.duckdns.org`; backend + postgres + postgrest in `docker-compose.prod.yml`, host Nginx serves the static frontend. Postgres is a LOCAL container (Supabase was dropped 2026-10-30). Details and reasons: `deployment.md`, `workspace/decisions/change_log_2026.md`.
+- Adding a backend router prefix requires adding it to the VM's Nginx prefix allowlist (`deployment.md` section 6.4) or the SPA will swallow its calls.
+- Postgres init scripts run only on an empty volume; schema changes are applied by hand from `postgres/migrations/`.
+- Docs: see `workspace/README.md` for which file is for agents vs the human owner.
+
 ## Project Structure
 
 ```
 backend/
   app/
-    core/           — llm_core.py, normalize.py, resolver.py
+    core/           — llm_core.py, normalize.py, rate_limiter.py, key_store.py, pool_key_store.py, quota_share.py, kaggle.py, image_session.py, ...
+    resolver/       — resolver.py (endpoint picking, capability ranking)
+    agent/          — LangGraph graph, tools/, subagents.py
+    memory/, storage/ — scoped RAG; Google Drive storage
+    db/             — postgres_client.py (psycopg3)
     routes/         — FastAPI route modules
     registry/       — Model registry schemas and loader
     events.py       — SSE event builders
@@ -130,7 +158,9 @@ frontend/
     api/            — client.ts (all API/SSE calls)
     components/     — React components
     types.ts        — Shared TypeScript types
-data/registry/      — models.json, endpoints.json (data, not code)
+backend/data/registry/ — models/endpoints/providers/image_presets JSON (data, not code)
+postgres/           — schema.sql, init_pawn_anon.sh, migrations/
+scripts/            — promote-to-main.sh, backup-db.sh
 workspace/          — Build plans, state, decisions, logs
 .claude/
   agents/           — Agent definitions (YAML frontmatter)

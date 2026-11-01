@@ -7,6 +7,9 @@ This is the root-level pointer file for Claude Code. The full configuration live
 | What | Where |
 |---|---|
 | Full Claude Code instructions | `.claude/CLAUDE.md` |
+| Docs index (who reads what) | `workspace/README.md` |
+| Module map + API reference | `workspace/CODEBASE_MAP.md` |
+| Why decisions were made | `workspace/decisions/change_log_2026.md` |
 | Backend rules | `.claude/rules/backend.md` |
 | Frontend rules | `.claude/rules/frontend.md` |
 | Security rules | `.claude/rules/security.md` |
@@ -16,7 +19,7 @@ This is the root-level pointer file for Claude Code. The full configuration live
 | Agent definitions | `.claude/agents/` |
 | Skills (build-step, etc.) | `.claude/skills/` |
 | Build tracker | `workspace/status/build_tracker.md` |
-| Current project state | `workspace/current_state.md` |
+| Current project state | `workspace/current_state.md` (short, kept current) |
 | Dev log | `workspace/status/dev_log.md` |
 | Phase plans | `workspace/plan/` and `workspace/implemented_phases/` |
 | Architecture decisions | `workspace/decisions/` |
@@ -26,8 +29,9 @@ This is the root-level pointer file for Claude Code. The full configuration live
 1. Read `.claude/CLAUDE.md` — full rules and constraints.
 2. Read `workspace/status/build_tracker.md` — current active step.
 3. Read `workspace/current_state.md` — what is already built.
-4. **Check what's changed on `main`** (`git log main -10 --oneline`, `git diff dev...main`) before making changes here — `main` has received direct infra hotfixes (deployment/compose/backend fixes made straight on `main` during the 2026-08-30 GCP+Supabase migration) that haven't been merged back to `dev` yet.
-5. Then implement.
+4. Skim `workspace/decisions/change_log_2026.md` (why things are the way they are).
+5. Branch check: `git log dev..main --oneline`. Empty as of 2026-11-01 (the old "main hotfixes not in dev" warning is closed). If non-empty, sync those files into `dev` with `git checkout main -- <files>`, never a real merge (`main` has docs stripped).
+6. Then implement.
 
 ## Key Rules (short form — full rules in `.claude/CLAUDE.md`)
 

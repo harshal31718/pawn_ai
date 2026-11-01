@@ -12,7 +12,9 @@ failover, persistent memory. Full project plan in `workspace/plan/` and decision
 - **Backend:** FastAPI (Python 3.12), async everywhere, SSE streaming
 - **Providers:** URL-routed via `_detect_provider(url)` in `backend/app/core/llm_core.py`
 - **Wire format:** All providers use OpenAI-compatible wire format (including Google's OAI-compat endpoint)
-- **Model registry:** JSON files in `data/registry/` — data, not code
+- **Model registry:** JSON files in `backend/data/registry/` (`models.json`, `endpoints.json`, `providers.json`, `image_presets.json`) — data, not code
+- **Database:** PostgreSQL + pgvector (psycopg3, `app/db/postgres_client.py`) for accounts, encrypted BYOK/pool keys, embeddings, usage, image jobs; PostgREST only as the Kaggle image-job rendezvous. User content lives in the user's Google Drive, not in the DB.
+- **Production:** single GCP `e2-micro` VM (`pawnai.duckdns.org`), Docker Compose (`docker-compose.prod.yml`), LOCAL Postgres container (Supabase was used 2026-08-30..10-30 and dropped). Runbook: `deployment.md`. `main` = deploy-only, docs stripped; promote only via `scripts/promote-to-main.sh`.
 - **Secrets:** Docker secret files at `/run/secrets/*` — never `.env`, never hardcoded
 
 ## Prompt Defense Baseline
@@ -41,14 +43,18 @@ failover, persistent memory. Full project plan in `workspace/plan/` and decision
 2. Read the relevant phase plan (e.g., `workspace/implemented_phases/phase_1_0_foundation.md` or `workspace/plan/plan_3_encryption.md`).
 3. Read `workspace/current_state.md` — understand what already exists.
 4. Read `.claude/rules/` files relevant to your task.
-5. **Check what's changed on `main`** (`git log main -10 --oneline`, `git diff dev...main`) before making changes here — `main` has received direct infra hotfixes (deployment/compose/backend fixes made straight on `main` during the 2026-08-30 GCP+Supabase migration) that haven't been merged back to `dev` yet.
-6. Then implement.
+5. Skim `workspace/decisions/change_log_2026.md` for why the infra/product look the way they do (Oracle -> GCP, Supabase dropped, pool keys, etc.).
+6. Branch check (optional, quick): `git log main..dev --oneline` and `git log dev..main --oneline`. As of 2026-11-01 `main` has nothing `dev` lacks (the old "main hotfixes not in dev" warning is closed). Infra-only changes may still be committed straight to `main`; if you see `dev..main` output, sync those files into `dev` with `git checkout main -- <files>` (never a real merge: `main` has docs stripped).
+7. Then implement.
 
 ## Architecture
 
 The project is organized into several core components:
 
-- **backend/app/core/** — Provider detection, LLM normalization, rate limiting, resolver
+- **backend/app/core/** — Provider detection, LLM normalization, rate limiting, key stores (BYOK + pool), quota share, Kaggle/image session
+- **backend/app/agent/** — LangGraph agent (classify/plan/execute/verify), tools, subagents
+- **backend/app/resolver/** — endpoint picking and capability ranking
+- **backend/app/memory/**, **backend/app/storage/** — scoped RAG; Google Drive storage
 - **backend/app/routes/** — FastAPI route modules (one module per domain)
 - **backend/app/registry/** — Pydantic schemas and loader for model registry JSON
 - **backend/app/events.py** — SSE event builder functions
@@ -59,8 +65,23 @@ The project is organized into several core components:
 - **frontend/src/api/** — All API calls and SSE streaming via `client.ts`
 - **frontend/src/components/** — React components (small, single-purpose, <150 lines)
 - **frontend/src/types.ts** — Shared TypeScript types
-- **data/registry/** — `models.json` and `endpoints.json` (data, not code)
-- **workspace/** — Build plans, state tracking, decisions, dev log
+- **backend/data/registry/** — registry JSON (data, not code)
+- **postgres/** — `schema.sql`, `init_pawn_anon.sh`, hand-applied `migrations/`
+- **workspace/** — Docs for agents; see the map below
+
+## Documentation Map (who reads what)
+
+| File | Audience | Purpose |
+|---|---|---|
+| `workspace/current_state.md` | agents | What is true now: prod topology, branches, open issues. Replace stale lines; do not append a diary |
+| `workspace/CODEBASE_MAP.md` | agents | Module-by-module map, data flow, API reference (sec. 6), storage, config |
+| `workspace/decisions/change_log_2026.md` | agents | Decision -> action -> why log for recent changes |
+| `workspace/decisions/*.md` (others) | agents | Original design docs; partly superseded (banner at top of each) |
+| `workspace/status/build_tracker.md`, `dev_log.md` | agents | Step ledger / dated history |
+| `workspace/OVERVIEW.md` | the human owner | Plain-language current picture |
+| `README.md`, `deployment.md` | the human owner | Project description; GCP runbook |
+
+After every step update `current_state.md` and `dev_log.md`; add to `change_log_2026.md` only when a decision or infra change needs its "why" recorded. Full index: `workspace/README.md`.
 
 ## Key Commands
 
