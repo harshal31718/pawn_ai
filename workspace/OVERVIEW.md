@@ -59,12 +59,9 @@ Full step-by-step, Nginx config and secrets: `deployment.md`.
 
 ## State of the code
 
-- Branches: `main` is what is deployed; `dev` equals `main` plus docs plus **one small unreleased fix**
-  (clearer Kaggle error messages for 401 vs 403). Nothing is half-built.
-- Tests: 801 backend tests passed at the last full run (2026-07-23). They were not re-run for this docs-only
-  cleanup.
-- Uncommitted on your machine right now: `.gitignore`, `docker-compose.yml` (a dev reload tweak), and this
-  documentation cleanup. Nothing has been committed.
+- Branches: `main` is what is deployed (commit `a04b2ea`, deployed 2026-11-01). `dev` has identical code plus the docs. Nothing is half-built or unreleased.
+- Tests: 801 backend tests passed at the last full run (2026-07-23). They were not re-run for the 2026-11-01 docs-only changes plus one small Kaggle error-message fix.
+- After a backend restart on the VM, give it about 1.5 minutes before judging health; a 502 in that window is normal.
 
 ## Open risks and chores (yours to decide)
 

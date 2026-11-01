@@ -5479,3 +5479,10 @@ Docs had drifted behind the Oracle->GCP move, the Supabase drop and PAWN 2.0. Sp
 - Deleted/merged: `RULES.md` (into `.claude/AGENTS.md`), `pawn_context.md` (into change log/CLAUDE.md), `workspace/api_reference.md`, `decisions/claude_setup_guide.md`, `decisions/project_overview.md`, duplicated `.gemini/skills/*`.
 - Not touched on purpose: `workspace/stable_commits.md` (only on explicit request; its `dev` row lags), `implemented_phases/*` (history), `plan/*`.
 - Tests not run (docs only). Nothing committed.
+
+## 2026-11-01 — Docs promoted, deployed to prod, promote script fixed
+
+- Docs reconciliation committed on `dev` (`2771d18`), promoted to `main` (`a04b2ea`, docs stripped; one `deployment.md` conflict resolved by taking the `dev` version), both pushed.
+- Deployed to the VM: `git pull origin main` + `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build` (backend only; frontend unchanged). Backend takes about 1.5 min to accept connections after a restart on 0.5 CPU, so `/health` returns 502 / connection reset during that window; it resolved without intervention. Verified: 3 containers up, internal and HTTPS `/health` ok, landing page loads with no console errors, unauthenticated API returns 401. No login or chat was exercised. Only code change shipped: kaggle 401 vs 403 messages (`81e52ad`).
+- **Incident:** `scripts/promote-to-main.sh` ran `rm -rf workspace .claude`, which also deleted gitignored local-only files (`workspace/learn/` booklet files; possibly `workspace/reference/`, `workspace/plan/architecture_2.0/`, `.claude/settings.local.json`). Not recoverable from git. **Fix:** the script now removes only tracked paths via `git rm -f`; verified in a throwaway clone that ignored files survive and `main` stays doc-free.
+- VM has a harmless local mode change on `scripts/backup-db.sh` (644 -> 755).

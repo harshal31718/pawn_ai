@@ -6,7 +6,7 @@
 - Day-by-day history: `workspace/status/dev_log.md`; step ledger: `workspace/status/build_tracker.md`
 - Old narrative version of this file (through 2026-07-23): `workspace/archive/current_state_history_to_2026-07-23.md`
 
-Last reconciled: **2026-11-01**. Update this file (replace stale lines, do not append a diary) after every step.
+Last reconciled: **2026-11-01** (after deploy of `a04b2ea`). Update this file (replace stale lines, do not append a diary) after every step.
 
 ---
 
@@ -19,7 +19,7 @@ Last reconciled: **2026-11-01**. Update this file (replace stale lines, do not a
 | Stack | host Nginx + certbot -> `backend` (127.0.0.1:8001, 500m) + `postgrest` (127.0.0.1:3001, 128m) + local `postgres` (`pgvector/pgvector:pg16`, 200m, no published port). Frontend is a static build in `frontend/dist` served by Nginx |
 | DB | LOCAL Postgres container since 2026-10-30. **Supabase is gone** (project deleted). DB was recreated empty that day |
 | Backups | `scripts/backup-db.sh`, cron 03:30 UTC, keeps 7 in `/opt/pawn/backups`; dumps die with the VM |
-| Last stable `main` | `4b97c2a` (2026-10-30), live Google login verified |
+| Deployed `main` | `a04b2ea` (2026-11-01; code identical to `dev`, docs stripped). Previous verified-stable: `4b97c2a` (2026-10-30, live Google login verified) |
 | History | Oracle Cloud VM terminated by Oracle 2026-08-30 -> GCP same day (see change log) |
 
 Runbook: `deployment.md` (root). Do not run `docker compose down -v` on the VM.
@@ -28,8 +28,8 @@ Runbook: `deployment.md` (root). Do not run `docker compose down -v` on the VM.
 
 - `dev` = working branch, has all docs. `main` = deploy-only, docs stripped by `scripts/promote-to-main.sh`.
 - Deploy files (`docker-compose.prod.yml`, `deployment.md`, `scripts/backup-db.sh`) are identical on both.
-- **Unpromoted on `dev`:** `81e52ad` (kaggle 401 vs 403 messages, `backend/app/core/kaggle.py`). Everything else on `dev` since is docs/plans.
-- Uncommitted working tree at this snapshot: `.gitignore` (+`workspace/learn/`), `docker-compose.yml` (dev `--reload-dir /app/app`), plus this docs reconciliation.
+- `main` and `dev` have identical non-doc content as of 2026-11-01; `dev` additionally holds the docs. Nothing is unpromoted.
+- Backend restarts take ~1.5 min to accept connections on the VM (0.5 CPU); a 502 during that window is normal.
 - `workspace/stable_commits.md` lags (its `dev` row predates the 10-30 sync); only update it when the user says so.
 
 ## What exists (feature level)

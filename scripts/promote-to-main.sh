@@ -49,17 +49,18 @@ git checkout -q "$DST"
 git merge --no-commit --no-ff "$SRC" || true
 
 # Strip doc directories (also resolves any doc modify/delete conflicts as "delete").
-git rm -r --cached --ignore-unmatch "${DOC_DIRS[@]}" >/dev/null 2>&1 || true
-rm -rf "${DOC_DIRS[@]}" 2>/dev/null || true
+# Only TRACKED files are removed (index + worktree). Never `rm -rf` the directories:
+# that also wiped gitignored local-only files (workspace/learn, workspace/reference, ...)
+# that git cannot restore.
+git rm -r -q -f --ignore-unmatch "${DOC_DIRS[@]}" >/dev/null 2>&1 || true
 
-# Strip CLAUDE.md / AGENTS.md at any depth (tracked + any left in the worktree).
+# Strip CLAUDE.md / AGENTS.md at any depth (tracked files only).
 # NOTE: `while read` reading from a pipe always exits 1 on EOF (a classic bash
 # gotcha) regardless of how many lines it processed — under `set -e` that was
 # silently killing the script here on every run, right before the final commit,
 # with no error message. The trailing `|| true` is REQUIRED, not decorative.
-{ git ls-files; git ls-files --others --exclude-standard; } | grep -Ei "$DOC_FILE_RE" | sort -u | while read -r f; do
-  git rm --cached --ignore-unmatch "$f" >/dev/null 2>&1 || true
-  rm -f "$f" 2>/dev/null || true
+git ls-files | grep -Ei "$DOC_FILE_RE" | sort -u | while read -r f; do
+  git rm -q -f --ignore-unmatch "$f" >/dev/null 2>&1 || true
 done || true
 
 # Bail on any real (non-doc) conflicts.
