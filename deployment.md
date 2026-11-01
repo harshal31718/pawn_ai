@@ -63,8 +63,8 @@ validate.**
 6. **Resource-cap PAWN's containers** (already set in
    `docker-compose.prod.yml`) — the box is genuinely small (1 shared
    vCPU / 1GB RAM, `e2-micro`). Current caps: `backend` 500m/0.5cpu,
-   `postgrest` 128m/0.1cpu — no local `postgres` container anymore. A
-   1GB swapfile (§3.6) absorbs transient spikes; validate with
+   `postgres` 200m/0.3cpu, `postgrest` 128m/0.1cpu (sum ~828MB). A
+   1GB swapfile (§3.3) absorbs transient spikes; validate with
    `docker stats` after any change to these caps.
 
 ---
@@ -120,7 +120,7 @@ validate.**
 ## 2. Verify locally, then promote `dev` → `main`
 
 Before touching the VM, confirm the pre-deploy gate passes on your own
-machine: `python -m pytest backend/tests/` (369+ green), `npm run build`
+machine: `python -m pytest backend/tests/` (800+ green), `npm run build`
 clean in `frontend/`, `docker compose config` valid.
 
 From any clean checkout that has both branches (your dev machine):
@@ -325,10 +325,12 @@ UID-1000-owned, mode-400 file is readable only by the exact process that
 needs it.
 
 > No trailing newline matters: `config.py` strips whitespace. Never commit
-> these. **Note:** PAWN is BYOK-only — every LLM/search provider key comes
-> from each user's own Settings/Providers page (encrypted per-user in
-> Supabase), never from a Docker secret. There is no shared/fallback
-> provider key file to generate here.
+> these. **Provider keys:** PAWN is BYOK-first — every LLM/search provider
+> key normally comes from each user's own Providers page (encrypted
+> per-user in the local Postgres). Prod has no `pool_<provider>_api_key`
+> Docker secrets: the optional operator pool is managed entirely through
+> the admin tab (stored encrypted in the `pool_api_keys` table). A keyless
+> user with no pool key for a provider simply gets "add your key".
 
 ---
 
@@ -525,7 +527,7 @@ The $1 budget alert from §3.1 is the safety net for all of these.
   personal testing — this combination (public login + unscoped REST
   endpoint) is the actual live risk, not either one alone.
 - Client-side encryption of stored data is foundation-only and unwired
-  (see `implemented_phases/phase_8_encryption.md` on `dev`).
+  (see `implemented_phases/phase_08_encryption.md` on `dev`).
 - **Private/public repo mirror**: if this repo is ever made public, don't
   just flip GitHub visibility on the existing `origin` — rename it to
   `private`, add a separate `public` remote, and only ever
@@ -544,8 +546,8 @@ The $1 budget alert from §3.1 is the safety net for all of these.
 Against `https://pawnai.duckdns.org`:
 - [ ] `GET /health` → `{"status":"ok"}` over HTTPS, valid cert.
 - [ ] App loads; browser console shows **no CSP violations**.
-- [ ] `docker compose ps` shows exactly `backend` + `postgrest` (no local
-      `postgres`).
+- [ ] `docker compose ps` shows exactly `backend`, `postgres` (healthy) and
+      `postgrest`.
 - [ ] Full Google OAuth round-trip (login → callback → logged in).
 - [ ] Link Google Drive (Providers page → Google Drive → Connect) →
       `/conversations` and `/projects` return 200, not 412. If they
@@ -559,8 +561,9 @@ Against `https://pawnai.duckdns.org`:
 - [ ] `docker stats` + `free -h` / `swapon --show` under light real use —
       caps not OOM-killing, swap not under constant heavy use.
 
-All of the above except the Kaggle image-gen job were verified live
-during the 2026-08-30 migration.
+Verified live: everything above except the Kaggle image-gen job was
+checked during the 2026-08-30 migration, and the Google login round-trip
+was re-verified on 2026-10-30 after the local-Postgres switch.
 
 ---
 
@@ -570,14 +573,16 @@ during the 2026-08-30 migration.
   not on the VM's DB — Postgres holds accounts, BYOK keys
   (encrypted), memory embeddings, Drive tokens (encrypted), and
   image-job state.
-- **Backup** the DB before risky schema changes and periodically:
-  `docker exec pawn-postgres-1 pg_dump -U pawn pawn | gzip > ~/pawn_$(date +%F).sql.gz`
-  (no managed backups exist; a nightly cron of this is recommended).
+- **Backups:** nightly `scripts/backup-db.sh` cron (§4). Take an extra manual
+  dump before risky schema changes:
+  `docker exec pawn-postgres-1 pg_dump -U pawn pawn | gzip > ~/pawn_$(date +%F).sql.gz`.
+  There are no managed backups; dumps live on the same disk as the DB, so
+  copy them off the VM occasionally.
 - **Rollback a release**: `git checkout <previous-sha>` in `/opt/pawn`,
-  rebuild frontend, `up -d --build`. Since there's no local DB volume,
-  code rollbacks never touch data.
-- **Never** `docker compose down -v` (moot today with no local volume,
-  but keep the habit).
+  rebuild frontend, `up -d --build`. The `postgres_data` volume is
+  untouched by a code rollback, but a schema migration is NOT auto-reverted:
+  restore from a dump if a migration has to be undone.
+- **Never** `docker compose down -v` (it deletes `pawn_postgres_data`).
 
 ---
 

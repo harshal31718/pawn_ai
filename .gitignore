@@ -49,6 +49,7 @@ workspace/plan/architecture_2.0/
 # local-only reference clones (e.g. OmniRoute, for porting quota-share) —
 # third-party code, never committed
 workspace/reference/
+workspace/learn/
 
 # os
 .DS_Store
